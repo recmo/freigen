@@ -1,0 +1,14 @@
+name = "zk-lean"
+version = "0.1.0"
+defaultTargets = ["zk-lean"]
+
+[[lean_lib]]
+name = "ZkLean"
+
+[[require]]
+name = "mathlib"
+scope = "leanprover-community"
+
+[[lean_exe]]
+name = "zk-lean"
+root = "Main"
