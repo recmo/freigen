@@ -9,32 +9,24 @@ loops, monomorphised definitions, multi-argument functions, and hints.
 
 namespace Freigen
 
-/-! ## A concrete signature
-
-The single source of truth — note `CircOp.assertNZ`'s input is a `nat`, which in a
-program will be supplied as an *atom* (often a variable). -/
+/-! ## A concrete signature -/
 
 inductive CircOp : Type → Type → Type 1
   /-- A hint (advice): evaluate `f` on the seed `a`, returning the result `β`.  Its input
       packages both into a pair `α × (α → β)`, so this is a special "eval" operator. -/
   | hint {α β : Type} : CircOp (α × (α → β)) β
-  /-- Assert the input `Nat` is nonzero; returns the `Bool` result of the check. -/
-  | assertNZ : CircOp Nat Bool
   /-- Assert the input `Bool` holds; returns it. -/
   | assert   : CircOp Bool Bool
 
 /-- Operation names, for the pretty-printer. -/
 def CircOp.name : {I R : Type} → CircOp I R → String
   | _, _, .hint     => "hint"
-  | _, _, .assertNZ => "assertNZ"
   | _, _, .assert   => "assert"
 
 /-- Runtime smart constructors, living in the ordinary `Free (Effect CircOp)`.  `CircOp` is
     fully `Tp`-agnostic, so these are plain Lean-typed. -/
 def hintF {α β : Type} (a : α) (f : α → β) : Free (Effect CircOp) β :=
   Free.Impure (Effect.mk CircOp.hint (a, f)) Free.Pure
-def assertNZ (x : Nat) : Free (Effect CircOp) Bool :=
-  Free.Impure (Effect.mk CircOp.assertNZ x) Free.Pure
 def assert (b : Bool) : Free (Effect CircOp) Bool :=
   Free.Impure (Effect.mk CircOp.assert b) Free.Pure
 
@@ -49,7 +41,6 @@ variable {V : Tp → Type} {α : Tp}
     result threads `n` rather than computing on it. -/
 def hostExample (k : Nat) : Free (Effect CircOp) Nat := do
   let n ← hintF k (fun s => s)
-  let _ ← assertNZ n
   pure n
 
 
@@ -75,7 +66,6 @@ example : denoteProg ((reflect% (hostExample 7)).1 (KleisliF CircOp) Tp.denote) 
 --       x1
 --     let v3 := (x0, v2)
 --     let v4 ← hint(v3)
---     let v5 ← assertNZ(v4)
 --     v4
 #eval IO.println (pp CircOp.name (reflectedExample.1 PpF PpV))
 
