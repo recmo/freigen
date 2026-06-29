@@ -1,14 +1,14 @@
-name = "zk-lean"
+name = "freigen"
 version = "0.1.0"
-defaultTargets = ["zk-lean"]
+defaultTargets = ["freigen"]
 
 [[lean_lib]]
-name = "ZkLean"
+name = "Freigen"
 
 [[require]]
 name = "mathlib"
 scope = "leanprover-community"
 
 [[lean_exe]]
-name = "zk-lean"
+name = "freigen"
 root = "Main"
