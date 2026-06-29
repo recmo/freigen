@@ -38,10 +38,9 @@ def getS (addr : Nat) : Free (Effect StoreOp) Nat :=
 /-! ## An operational denotation: the stateful handler
 
 `Free (Effect StoreOp)` is given meaning by *running* it against a concrete `Store` (a map from
-address to value, absent cells reading `0`).  `runStore` is the standard state-threading
-interpreter: `Pure` returns, `set` updates the store, `get` reads it — exactly the storage
-effect's semantics.  Recursion is structural on the effect's continuation (just as `freeBind`
-and `foldFree` recurse). -/
+address to value, absent cells reading `0`).  The whole interpreter is just `foldFree` into the
+`StateM Store` monad: it folds every effect layer with a one-line `handleStore` — `set` mutates
+the store, `get` reads it — and `foldFree` threads the state and sequences the continuations. -/
 
 /-- A concrete memory: address → value (unwritten cells read as `0`). -/
 abbrev Store : Type := Nat → Nat
@@ -53,12 +52,16 @@ def Store.empty : Store := fun _ => 0
 def Store.write (s : Store) (addr val : Nat) : Store :=
   fun a => if a = addr then val else s a
 
+/-- Interpret a single storage effect into `StateM Store`: `set` mutates the store, `get`
+    reads the addressed cell. -/
+def handleStore : {x : Type} → Effect StoreOp x → StateM Store x
+  | _, .mk .set inp => modify (fun s => s.write inp.1 inp.2)
+  | _, .mk .get adr => (· adr) <$> get
+
 /-- Run a storage computation against an initial store, returning its result paired with the
-    final store. -/
-def runStore {α : Type} : Free (Effect StoreOp) α → Store → α × Store
-  | .Pure a,                   s => (a, s)
-  | .Impure (.mk .set inp) cont, s => runStore (cont ()) (s.write inp.1 inp.2)
-  | .Impure (.mk .get adr) cont, s => runStore (cont (s adr)) s
+    final store — `foldFree` folds each effect through `handleStore`, threading the `Store`. -/
+def runStore {α : Type} (p : Free (Effect StoreOp) α) (s : Store) : α × Store :=
+  (foldFree p handleStore).run s
 
 /-! ## Examples / smoke tests -/
 
