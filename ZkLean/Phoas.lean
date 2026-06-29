@@ -1,197 +1,403 @@
 import ZkLean.Basic
 
 /-!
-# A PHOAS AST for free-monadic programs, with denotation and a reflecting elaborator
+# A PHOAS A-normal AST for free-monadic programs, with denotation and a reflecting elaborator
 
 A sketch for *poking* at reflecting a real Lean term that builds a `Free F`
 computation into an explicit syntax tree (`reflect%`), denoting that tree back into
-`Free F` (`denoteP`), and handing back a *proof* that the round-trip is faithful.
+`Free F` (`denote`), and handing back a *proof* that the round-trip is faithful.
 
 We use **PHOAS** (Parametric Higher-Order Abstract Syntax): object-language
-binders are Lean binders over an abstract variable representation `V : Type → Type`.
+binders are Lean binders over an abstract variable representation `V : Tp → Type`.
 No de Bruijn indices, no capture — we reuse Lean's binders.
 
-## One signature, two worlds
+## A universe of object types
 
-The crux is the effect signature.  An effect has two very different kinds of hole:
-its **inputs** (data fed *in* — these should be object *terms*, hence may be
-variables or anything computable) and its **result** (bound *out* in the
-continuation — a PHOAS binder).  So we describe an effect once, by a tiny GADT
-indexed by *(input type, result type)*:
+The AST is no longer indexed by arbitrary Lean `Type`s.  Instead it carries a small
+*object type universe* `Tp` (booleans, naturals, `ZMod n`, `Unit`, products, and
+functions), with a denotation `Tp.denote : Tp → Type` back into Lean.  Indexing
+everything by `Tp` (rather than `Type`) gives `reflect%` a concrete notion of which host
+types are *supported*: it reifies each Lean type it meets into a `Tp` and aborts if it
+cannot.
+
+## One signature
+
+An effect has two very different kinds of hole: its **inputs** (data fed *in* — these
+should be object *atoms*) and its **result** (bound *out* in the continuation — a PHOAS
+binder).  So we describe an effect once, by a tiny GADT indexed by *(input type, result
+type)*, now over `Tp`:
 
 ```
-Op : Type → Type → Type        -- `Op I R` : an operation taking an `I`, returning an `R`
+Op : Tp → Tp → Type            -- `Op I R` : an operation taking an `I`, returning an `R`
 ```
 
-From this single source we *derive* the functor the freer monad `Free` needs:
+From this single source we *derive* the functor the freer monad `Free` needs.  An
+`Effect Op R` (with `R : Type`) is some operation `Op I O` packaged with its input
+`I.denote`, whose result type `R` is fixed to `O.denote`; the runtime monad is then the
+ordinary `Free (Effect Op)` from `ZkLean.Basic`.  `denote` bridges the two.
 
-```
-Effect Op R := Σ I, Op I R × I  -- an op returning `R`, packaged with its input value
-```
+## One A-normal AST
 
-so the runtime monad is the ordinary `Free (Effect Op)` from `ZkLean.Basic`, while
-the syntax tree's `op` node uses the very same `Op`, with the input as a term
-`Tm V I` and the result as a binder `V R`.  `denoteP` bridges the two by evaluating
-the input term and packing it into `Effect.mk`.
+The AST is a single inductive family `Exp Op V α` (`α : Tp`), in **A-normal form**:
+every non-trivial construct names its result with a continuation binder, and every
+operand is an *atom* (a `V _`).  The constructors:
 
-The AST is split into two families, which keeps every universe at the bottom:
+* `ret v`        — tail position: yield the atom `v : V α`.
+* `lit n k`      — bind a host literal `n : α.denote` as an atom, continue with `k`.
+* `op o i k`     — perform `o : Op I R` on the atom `i : V I`, bind its result, continue.
+* `un`/`bin`     — apply a pure primitive (`Un`/`Bin`: arithmetic, comparison, tupling…)
+                   to atoms, binding the result.
+* `forN n s b k` — a bounded `for` loop over `0,…,n-1` threading a state atom through the
+                   body `b`, then binding the final state into `k`.
 
-* `Tm  V τ`    — the pure λ-calculus fragment (`var` / `lit` / `lam` / `app` / `letE`).
-* `Prog Op V α` — the free-monadic fragment (`ret` / `bind` / `op`).
+Sequencing (`>>=`) is not a constructor: it is absorbed into the continuations of the
+binding forms, which is exactly what A-normalisation buys us.
 -/
 
 namespace ZkFree
 
 open Lean Lean.Meta Lean.Elab Lean.Elab.Term
 
+/-! ## The object type universe -/
+
+/-- The universe of object-language types the AST may mention. -/
+inductive Tp : Type
+  /-- Booleans. -/
+  | bool : Tp
+  /-- Naturals. -/
+  | nat : Tp
+  /-- The integers mod `n`. -/
+  | zmod : Nat → Tp
+  /-- The unit type. -/
+  | unit : Tp
+  /-- Product (tuple) types. -/
+  | prod : Tp → Tp → Tp
+  /-- Function types. -/
+  | fn : Tp → Tp → Tp
+
+/-- Denote an object type back into Lean.  Reducible so that type-class search (e.g.
+    `ToString`) and unification see through it to the underlying Lean type. -/
+@[reducible] def Tp.denote : Tp → Type
+  | .bool     => Bool
+  | .nat      => Nat
+  | .zmod n   => ZMod n
+  | .unit     => Unit
+  | .prod a b => a.denote × b.denote
+  | .fn a b   => a.denote → b.denote
+
+/-! ## Pure primitive operations -/
+
+/-- Unary primitive operations, indexed by (argument, result) object type. -/
+inductive Un : Tp → Tp → Type
+  | not : Un .bool .bool
+  | fst {a b : Tp} : Un (.prod a b) a
+  | snd {a b : Tp} : Un (.prod a b) b
+
+/-- Binary primitive operations, indexed by (left, right, result) object type. -/
+inductive Bin : Tp → Tp → Tp → Type
+  | add : Bin .nat .nat .nat
+  | sub : Bin .nat .nat .nat
+  | mul : Bin .nat .nat .nat
+  | eq  : Bin .nat .nat .bool
+  | and : Bin .bool .bool .bool
+  | or  : Bin .bool .bool .bool
+  | pair {a b : Tp} : Bin a b (.prod a b)
+
+/-- Denote a unary primitive to its Lean operation. -/
+def Un.denote : Un a b → a.denote → b.denote
+  | .not, x => !x
+  | .fst, p => p.1
+  | .snd, p => p.2
+
+/-- Denote a binary primitive to its Lean operation. -/
+def Bin.denote : Bin a b c → a.denote → b.denote → c.denote
+  | .add,  x, y => x + y
+  | .sub,  x, y => x - y
+  | .mul,  x, y => x * y
+  | .eq,   x, y => x == y
+  | .and,  x, y => x && y
+  | .or,   x, y => x || y
+  | .pair, x, y => (x, y)
+
 /-! ## The effect signature and its derived functor -/
 
-/-- The freer-monad functor generated by an operation signature `Op`: one effect
-    layer returning `R` is some operation `Op I R` packaged with its input `I`. -/
-structure Effect (Op : Type → Type → Type) (R : Type) : Type 1 where
-  {I : Type}
-  op  : Op I R
-  inp : I
+/-- The freer-monad functor generated by an operation signature `Op`: one effect layer
+    returning the (denoted) type `R` is some operation `Op I O` packaged with its input
+    `I.denote`, with `R` fixed to `O.denote`.  Indexing the result by the *denotation*
+    means matching on `Effect.mk` recovers the equation `R = O.denote` definitionally,
+    so `denote` needs no casts. -/
+inductive Effect (Op : Tp → Tp → Type) : Type → Type 1 where
+  | mk {I O : Tp} : Op I O → I.denote → Effect Op O.denote
 
 /-! ## The AST -/
 
-/-- Pure PHOAS λ-terms. -/
-inductive Tm (V : Type → Type) : Type → Type 1
-  /-- A bound object variable. -/
-  | var {α : Type} : V α → Tm V α
-  /-- A `Nat` literal lifted into the object language. -/
-  | lit : Nat → Tm V Nat
-  /-- Object-language λ. -/
-  | lam {α β : Type} : (V α → Tm V β) → Tm V (α → β)
-  /-- Object-language application (a "call"). -/
-  | app {α β : Type} : Tm V (α → β) → Tm V α → Tm V β
-  /-- A normal (non-monadic) `let`. -/
-  | letE {α β : Type} : Tm V α → (V α → Tm V β) → Tm V β
-
-/-- Free-monadic PHOAS programs over an operation signature `Op`. -/
-inductive Prog (Op : Type → Type → Type) (V : Type → Type) : Type → Type 1
-  /-- Monadic `pure` of a pure term. -/
-  | ret {α : Type} : Tm V α → Prog Op V α
-  /-- Monadic `bind` (`>>=`); the continuation binds the *value* of type `α`. -/
-  | bind {α β : Type} : Prog Op V α → (V α → Prog Op V β) → Prog Op V β
-  /-- Perform operation `Op I R`: its **input** is an object term `Tm V I` (so it
-      may be a variable!), and its **result** `R` is bound in the continuation. -/
-  | op {α I R : Type} : Op I R → Tm V I → (V R → Prog Op V α) → Prog Op V α
+/-- Free-monadic PHOAS programs over an operation signature `Op`, in A-normal form.
+    Every operand is an atom (`V _`); every binding form carries its continuation. -/
+inductive Exp (Op : Tp → Tp → Type) (V : Tp → Type) : Tp → Type 1
+  /-- Tail position: return the atom `v`. -/
+  | ret {α : Tp} : V α → Exp Op V α
+  /-- Bind a host literal `n : α.denote` as an atom, then continue. -/
+  | lit {α β : Tp} : α.denote → (V α → Exp Op V β) → Exp Op V β
+  /-- Perform operation `Op I R`: its **input** is the atom `i : V I`, and its
+      **result** `R` is bound in the continuation. -/
+  | op {α I R : Tp} : Op I R → V I → (V R → Exp Op V α) → Exp Op V α
+  /-- Apply a unary primitive to an atom, binding the result. -/
+  | un {α a b : Tp} : Un a b → V a → (V b → Exp Op V α) → Exp Op V α
+  /-- Apply a binary primitive to two atoms, binding the result. -/
+  | bin {α a b c : Tp} : Bin a b c → V a → V b → (V c → Exp Op V α) → Exp Op V α
+  /-- A bounded `for` loop over `0,…,n-1`: thread the state atom through `n`
+      iterations of `body` (index and current state in, new state out), then bind the
+      final state into the continuation. -/
+  | forN {α s : Tp} : Nat → V s → (V .nat → V s → Exp Op V s) → (V s → Exp Op V α) → Exp Op V α
 
 /-- A *closed* program: parametric in the variable representation. -/
-def Closed (Op : Type → Type → Type) (α : Type) : Type 1 := ∀ V, Prog Op V α
+def Closed (Op : Tp → Tp → Type) (α : Tp) : Type 1 := ∀ V, Exp Op V α
 
-/-! ## Denotation (the identity interpreter, `V := Id`) -/
+/-! ## Denotation (the identity interpreter, `V := Tp.denote`) -/
 
-/-- Denote a pure term to its Lean value. -/
-def denoteT {τ : Type} : Tm Id τ → τ
-  | .var v    => v
-  | .lit a    => a
-  | .lam f    => fun x => denoteT (f x)
-  | .app f a  => (denoteT f) (denoteT a)
-  | .letE v k => denoteT (k (denoteT v))
-
-/-- Denote a program to a real `Free (Effect Op)` computation: the `op` node's
-    input term is evaluated and packed into the derived `Effect` functor. -/
-def denoteP {Op : Type → Type → Type} {α : Type} : Prog Op Id α → Free (Effect Op) α
-  | .ret t     => Free.Pure (denoteT t)
-  | .bind p k  => freeBind (denoteP p) (fun x => denoteP (k x))
-  | .op o i k  => Free.Impure ⟨o, denoteT i⟩ (fun r => denoteP (k r))
+/-- Denote a program to a real `Free (Effect Op)` computation: a `lit` binds its host
+    value and continues; an `op` node packs its (already atomic) input into the derived
+    `Effect` functor. -/
+def denote {Op : Tp → Tp → Type} {α : Tp} : Exp Op Tp.denote α → Free (Effect Op) α.denote
+  | .ret v     => Free.Pure v
+  | .lit n k   => denote (k n)
+  | .op o i k  => Free.Impure (Effect.mk o i) (fun r => denote (k r))
+  | .un o a k  => denote (k (Un.denote o a))
+  | .bin o a b k => denote (k (Bin.denote o a b))
+  | .forN n init body k =>
+    freeBind
+      (forIn [0:n] init
+        (fun i acc => freeBind (denote (body i acc)) (fun acc' => Free.Pure (ForInStep.yield acc'))))
+      (fun acc => denote (k acc))
 
 /-! ## The `reflect%` elaborator
 
-`reflect% e` takes a real Lean term `e : A₁ → … → Aₙ → Free (Effect Op) τ` (a
-function returning a free-monadic value; `n = 0` is allowed) and produces
+`reflect% e` takes a real Lean term `e : A₁ → … → Aₙ → Free (Effect Op) τ` (a function
+returning a free-monadic value; `n = 0` is allowed) and produces
 
 ```
-reflect% e : { g : A₁ → … → Aₙ → Prog Op Id τ // ∀ a…, denoteP (g a…) = e a… }
+reflect% e : { g : A₁ → … → Aₙ → Exp Op Tp.denote τ̂ // ∀ a…, denote (g a…) = e a… }
 ```
 
-The AST is built so that `denoteP` of it is *definitionally* the original
-computation, so the soundness proof is just `rfl`.
+where `τ̂` is the `Tp` reifying `τ`.  Every Lean type the walk needs (the result type, and
+the type of each literal/atom) is reified into a `Tp` via `reifyTp`; if a type is not
+expressible, the elaborator aborts.  The walk is continuation-passing, so the result
+comes out A-normal, and `denote` of it is *definitionally* the original computation, so
+the soundness proof is just `rfl`.
 -/
 
-/-- The identity-functor `V := Id` at `Type 0`, the variable representation that
-    `reflect%` targets. -/
-private def idExpr : Expr := .const ``Id [.zero]
+/-- The denotation `Tp.denote : Tp → Type`, the variable representation `reflect%`
+    targets (so the denoted program runs at the real Lean types). -/
+private def denoteV : Expr := .const ``Tp.denote []
 
-/-- A reflection environment: the abstract variable representation `V` we build
-    against, plus a substitution from each continuation-bound host placeholder to
-    the object variable (`vx : V R`) that should replace it. -/
+/-- Reify a Lean type into the object type universe `Tp`, or `none` if unsupported.
+    Supported: `Bool`, `Nat`, `ZMod n`, `Unit`, products, and (non-dependent) functions. -/
+private partial def reifyTp (T : Expr) : MetaM (Option Expr) := do
+  let T ← whnf T
+  match_expr T with
+  | Bool     => return some (.const ``Tp.bool [])
+  | Nat      => return some (.const ``Tp.nat [])
+  | ZMod n   => return some (mkApp (.const ``Tp.zmod []) n)
+  | PUnit    => return some (.const ``Tp.unit [])
+  | Prod A B =>
+    let some a ← reifyTp A | return none
+    let some b ← reifyTp B | return none
+    return some (mkApp2 (.const ``Tp.prod []) a b)
+  | _ =>
+    -- a (non-dependent) function type `A → B`
+    if let .forallE _ A B _ := T then
+      if B.hasLooseBVars then return none      -- dependent Π: unsupported
+      let some a ← reifyTp A | return none
+      let some b ← reifyTp B | return none
+      return some (mkApp2 (.const ``Tp.fn []) a b)
+    else
+      return none
+
+/-- Reify a Lean type into a `Tp`, aborting elaboration if it is unsupported. -/
+private def reifyTpOrThrow (T : Expr) : MetaM Expr := do
+  match ← reifyTp T with
+  | some tp => return tp
+  | none    => throwError "reflect%: type is not expressible as a `Tp` \
+                           (supported: `Bool`/`Nat`/`ZMod _`/`Unit`/`×`/`→`){indentExpr T}"
+
+/-- A reflection environment: the abstract variable representation `V` we build against,
+    plus a substitution from each continuation-bound host placeholder to the object atom
+    (`vx : V α`) that should replace it. -/
 private structure Env where
   V : Expr
   subst : List (FVarId × Expr)
 
-private def Env.mkVar (env : Env) (vx : Expr) : MetaM Expr :=
-  mkAppOptM ``Tm.var #[env.V, none, vx]
+/-- Bind a host literal `a : αTp.denote` as a fresh atom and feed that atom to `k`,
+    wrapping the result in a `lit` node.  This is the A-normalisation step that turns a
+    literal operand into an atom. -/
+private def Env.mkLitBind (env : Env) (Op a αTp : Expr) (k : Expr → MetaM Expr) : MetaM Expr := do
+  withLocalDeclD `v (mkApp env.V αTp) fun vx => do
+    let body ← k vx
+    let lam ← mkLambdaFVars #[vx] body
+    mkAppOptM ``Exp.lit #[Op, env.V, αTp, none, a, lam]
 
-private def Env.mkLit (env : Env) (a : Expr) : MetaM Expr :=
-  mkAppOptM ``Tm.lit #[env.V, a]
+/-- Emit a `ret` node returning the atom. -/
+private def Env.mkRet (env : Env) (Op atom : Expr) : MetaM Expr :=
+  mkAppOptM ``Exp.ret #[Op, env.V, none, atom]
 
-/-- Reflect a pure value Expr into a `Tm V _`.  A continuation-bound variable
-    becomes `var`; a host `Nat` (a literal or a function argument) becomes `lit`;
-    a *computation* that mentions a bound variable is rejected — it cannot live in
-    a `∀ V` program. -/
-private def Env.reflectLeaf (env : Env) (a : Expr) : MetaM Expr := do
-  if let .fvar fid := a then
-    match env.subst.lookup fid with
-    | some vx => env.mkVar vx
-    | none =>
-      if ← isDefEq (← inferType a) (.const ``Nat []) then env.mkLit a
-      else throwError "reflect%: free variable is not a `Nat`{indentExpr a}"
-  else if a.hasAnyFVar fun fid => (env.subst.lookup fid).isSome then
-    throwError "reflect%: cannot reflect a computation on a bound variable into a \
-                `∀ V` program (the object language has no operations on `V`-values); \
-                thread the variable instead, or reflect at `V := Id`.{indentExpr a}"
-  else if ← isDefEq (← inferType a) (.const ``Nat []) then env.mkLit a
-  else throwError "reflect%: values must be a bound variable or a `Nat`{indentExpr a}"
-
-private def Env.mkRet (env : Env) (Op a : Expr) : MetaM Expr := do
-  mkAppOptM ``Prog.ret #[Op, env.V, none, ← env.reflectLeaf a]
-
-private def Env.mkBind (env : Env) (Op p k : Expr) : MetaM Expr :=
-  mkAppOptM ``Prog.bind #[Op, env.V, none, none, p, k]
-
-private def Env.mkOp (env : Env) (Op o inp k : Expr) : MetaM Expr :=
-  mkAppOptM ``Prog.op #[Op, env.V, none, none, none, o, inp, k]
+/-- Build the projection primitive `@ctor a b` (`Un.fst`/`Un.snd`) for a value `p`
+    whose object type must be a product `Tp.prod a b`. -/
+private def Env.prodUn (_env : Env) (ctor : Name) (p : Expr) : MetaM Expr := do
+  match_expr ← reifyTpOrThrow (← inferType p) with
+  | Tp.prod a b => return mkApp2 (.const ctor []) a b
+  | _           => throwError "reflect%: projection applied to a non-product{indentExpr p}"
 
 mutual
-  /-- Reflect a host `Free (Effect Op) _` expression into a `Prog Op V _`. -/
-  private partial def walkProg (env : Env) (Op e : Expr) : MetaM Expr := do
+  /-- Reflect a *pure* host value into an atom, A-normalising any arithmetic into a chain
+      of `un`/`bin` lets, and feed the resulting atom to `k`.  Cases, in order:
+      a continuation-bound variable is already an atom; a `ForInStep.yield` is unwrapped
+      (loop-body tail); a value closed w.r.t. bound variables is `lit`-bound (also the
+      point at which an unsupported type aborts); otherwise it must be a recognised
+      primitive applied to sub-expressions, else we abort. -/
+  private partial def Env.reflectExpr (env : Env) (Op a : Expr) (k : Expr → MetaM Expr) :
+      MetaM Expr := do
+    let a := a.consumeMData
+    if let .fvar fid := a then
+      if let some atom := env.subst.lookup fid then return ← k atom
+    match_expr a with
+    | ForInStep.yield _ v => return ← env.reflectExpr Op v k
+    | ForInStep.done _ _  =>
+        throwError "reflect%: `break`/early `return` inside a loop is not supported{indentExpr a}"
+    | _ => pure ()
+    -- closed w.r.t. bound variables → a literal (function arguments are allowed here)
+    if !(a.hasAnyFVar fun fid => (env.subst.lookup fid).isSome) then
+      return ← env.mkLitBind Op a (← reifyTpOrThrow (← inferType a)) k
+    -- otherwise: a recognised primitive on sub-expressions
+    match_expr a with
+    | HMul.hMul _ _ _ _ x y => env.reflectBin Op (.const ``Bin.mul []) (.const ``Tp.nat []) x y k
+    | HAdd.hAdd _ _ _ _ x y => env.reflectBin Op (.const ``Bin.add []) (.const ``Tp.nat []) x y k
+    | HSub.hSub _ _ _ _ x y => env.reflectBin Op (.const ``Bin.sub []) (.const ``Tp.nat []) x y k
+    | BEq.beq _ _ x y       => env.reflectBin Op (.const ``Bin.eq [])  (.const ``Tp.bool []) x y k
+    | Bool.and x y          => env.reflectBin Op (.const ``Bin.and []) (.const ``Tp.bool []) x y k
+    | Bool.or  x y          => env.reflectBin Op (.const ``Bin.or [])  (.const ``Tp.bool []) x y k
+    | Bool.not x            => env.reflectUn  Op (.const ``Un.not [])   (.const ``Tp.bool []) x k
+    | Prod.mk _ _ x y       =>
+        let aTp ← reifyTpOrThrow (← inferType x)
+        let bTp ← reifyTpOrThrow (← inferType y)
+        env.reflectBin Op (mkApp2 (.const ``Bin.pair []) aTp bTp)
+          (mkApp2 (.const ``Tp.prod []) aTp bTp) x y k
+    | Prod.fst _ _ p        => env.reflectUn Op (← env.prodUn ``Un.fst p) (← reifyTpOrThrow (← inferType a)) p k
+    | Prod.snd _ _ p        => env.reflectUn Op (← env.prodUn ``Un.snd p) (← reifyTpOrThrow (← inferType a)) p k
+    | _ => throwError "reflect%: cannot reflect this operation on a bound variable \
+                       (no matching object primitive){indentExpr a}"
+
+  /-- Reflect a binary primitive: reflect both operands to atoms, then emit a `bin` node
+      binding the result (of object type `cTp`). -/
+  private partial def Env.reflectBin (env : Env) (Op binOp cTp x y : Expr)
+      (k : Expr → MetaM Expr) : MetaM Expr :=
+    env.reflectExpr Op x fun ax =>
+    env.reflectExpr Op y fun ay =>
+    withLocalDeclD `v (mkApp env.V cTp) fun vc => do
+      let lam ← mkLambdaFVars #[vc] (← k vc)
+      mkAppOptM ``Exp.bin #[Op, env.V, none, none, none, none, binOp, ax, ay, lam]
+
+  /-- Reflect a unary primitive: reflect the operand to an atom, then emit a `un` node. -/
+  private partial def Env.reflectUn (env : Env) (Op unOp cTp x : Expr)
+      (k : Expr → MetaM Expr) : MetaM Expr :=
+    env.reflectExpr Op x fun ax =>
+    withLocalDeclD `v (mkApp env.V cTp) fun vc => do
+      let lam ← mkLambdaFVars #[vc] (← k vc)
+      mkAppOptM ``Exp.un #[Op, env.V, none, none, none, unOp, ax, lam]
+end
+
+mutual
+  /-- Reflect a host `Free (Effect Op) _` expression into an `Exp Op V _`, in A-normal
+      form.  `k` is the *final* continuation: it consumes the atom holding this
+      computation's result and produces the tail of the program. -/
+  private partial def walkProg (env : Env) (Op e : Expr) (k : Expr → MetaM Expr) : MetaM Expr := do
     let e := e.consumeMData.headBeta
     -- zeta-reduce `let`/`have` introduced by `do`-elaboration
     if let .letE _ _ v b _ := e then
-      return ← walkProg env Op (b.instantiate1 v)
+      return ← walkProg env Op (b.instantiate1 v) k
     match_expr e with
-    | Free.Pure _ _ a         => env.mkRet Op a
-    | Pure.pure _ _ _ a       => env.mkRet Op a
-    | Bind.bind _ _ _ _ x f   => env.mkBind Op (← walkProg env Op x) (← walkCont env Op f)
-    | freeBind _ _ _ x f      => env.mkBind Op (← walkProg env Op x) (← walkCont env Op f)
-    | Free.Impure _ _ _ eff k =>
-      -- `eff : Effect Op R` is `Effect.mk o inp`; lift the input to a term
+    | Free.Pure _ _ a         => env.reflectExpr Op a k
+    | Pure.pure _ _ _ a       => env.reflectExpr Op a k
+    | Bind.bind _ _ _ _ x f   => walkBind env Op x f k
+    | freeBind _ _ _ x f      => walkBind env Op x f k
+    | ForIn.forIn _ _ _ _ beta range init body => walkForN env Op range init body beta k
+    | Free.Impure _ _ _ eff cont =>
+      -- `eff : Effect Op _` is `Effect.mk o inp`; reflect the input as an atom and read
+      -- the result object type `Otp` off the operation's indices
       match_expr eff with
-      | Effect.mk _ _ _ o inp => env.mkOp Op o (← env.reflectLeaf inp) (← walkCont env Op k)
+      | Effect.mk _ _ Otp o inp => env.reflectExpr Op inp (fun ia => walkOp env Op Otp o ia cont k)
       | _ => throwError "reflect%: effect is not an `Effect.mk`{indentExpr eff}"
     | _ =>
       -- a smart constructor / user definition: unfold its head and retry
       match ← unfoldDefinition? e with
-      | some e' => walkProg env Op e'
+      | some e' => walkProg env Op e' k
       | none    => throwError "reflect%: don't know how to reflect computation{indentExpr e}"
 
-  /-- Reflect a host continuation `f : X → Free (Effect Op) _` into the object
-      continuation `fun (vx : V X) => …`.  We introduce two locals: the object
-      variable `vx : V X` that the result binds, and a host placeholder `hx : X`
-      to symbolically evaluate `f`'s body — occurrences of `hx` are rewritten to
-      `var vx` via the substitution. -/
-  private partial def walkCont (env : Env) (Op f : Expr) : MetaM Expr := do
+  /-- Reflect a `bind x f`.  A *pure* `x` (`pure a`) is inlined via the monad left-identity
+      law (`pure a >>= f ≡ f a`) — this elides the unit-typed `pure ()` actions that
+      `do`-notation inserts between statements; otherwise `x` is an effect whose result atom
+      is threaded into `f`. -/
+  private partial def walkBind (env : Env) (Op x f : Expr) (k : Expr → MetaM Expr) : MetaM Expr := do
+    match_expr x.consumeMData.headBeta with
+    | Free.Pure _ _ a   => walkProg env Op (f.beta #[a]) k
+    | Pure.pure _ _ _ a => walkProg env Op (f.beta #[a]) k
+    | _                 => walkProg env Op x (fun xa => walkBindCont env Op f xa k)
+
+  /-- Continue a `bind`: `f : X → Free _ τ` is the binder, `xa : V α` is the atom holding
+      the bound value.  Apply `f` to a host placeholder (rewritten to `xa`) and walk its
+      body with the same final continuation `k`. -/
+  private partial def walkBindCont (env : Env) (Op f xa : Expr) (k : Expr → MetaM Expr) :
+      MetaM Expr := do
     let fty ← whnf (← inferType f)
     let .forallE _ X _ _ := fty
       | throwError "reflect%: expected a continuation function, got{indentExpr fty}"
-    withLocalDeclD `v (.app env.V X) fun vx =>
     withLocalDeclD `h X fun hx => do
+      let env' := { env with subst := (hx.fvarId!, xa) :: env.subst }
+      walkProg env' Op (f.beta #[hx]) k
+
+  /-- Emit an `op` node.  `Otp : Tp` is the op's result object type and `cont : Otp.denote
+      → Free _ τ` its continuation; we introduce the object variable `vx : V Otp` it binds
+      and a host placeholder `hx : Otp.denote` (rewritten to `vx`), then walk the rest with
+      the same final continuation `k`. -/
+  private partial def walkOp (env : Env) (Op Otp o ia cont : Expr) (k : Expr → MetaM Expr) :
+      MetaM Expr := do
+    let cty ← whnf (← inferType cont)
+    let .forallE _ Rt _ _ := cty
+      | throwError "reflect%: expected an op continuation, got{indentExpr cty}"
+    withLocalDeclD `v (mkApp env.V Otp) fun vx =>
+    withLocalDeclD `h Rt fun hx => do
       let env' := { env with subst := (hx.fvarId!, vx) :: env.subst }
-      let body ← walkProg env' Op (f.beta #[hx])
-      mkLambdaFVars #[vx] body
+      let body ← walkProg env' Op (cont.beta #[hx]) k
+      let lam ← mkLambdaFVars #[vx] body
+      mkAppOptM ``Exp.op #[Op, env.V, none, none, none, o, ia, lam]
+
+  /-- Reflect a `ForIn.forIn` over a constant range `[0:n]` into a `forN` node.  `beta` is
+      the (host) loop-state type; `body : Nat → β → Free _ (ForInStep β)`.  We require a
+      literal `[0:n]` (start 0, step 1), reflect the initial state to an atom, build the
+      body under fresh index/state atoms (its tail `ForInStep.yield` is unwrapped by
+      `reflectExpr`), and thread the final state into `k`. -/
+  private partial def walkForN (env : Env) (Op range init body beta : Expr)
+      (k : Expr → MetaM Expr) : MetaM Expr := do
+    let sTp ← reifyTpOrThrow beta
+    let nExpr ← match_expr range with
+      | Std.Legacy.Range.mk start stop step _ => do
+          unless ← isDefEq start (mkNatLit 0) do
+            throwError "reflect%: loop range must start at 0{indentExpr range}"
+          unless ← isDefEq step (mkNatLit 1) do
+            throwError "reflect%: loop range must have step 1{indentExpr range}"
+          pure stop
+      | _ => throwError "reflect%: loop range is not a literal `[0:n]`{indentExpr range}"
+    env.reflectExpr Op init fun initAtom => do
+      let bodyLam ← withLocalDeclD `i (mkApp env.V (.const ``Tp.nat [])) fun vi =>
+                    withLocalDeclD `s (mkApp env.V sTp) fun vs =>
+                    withLocalDeclD `hi (.const ``Nat []) fun hi =>
+                    withLocalDeclD `hs beta fun hs => do
+                      let env' := { env with
+                        subst := (hi.fvarId!, vi) :: (hs.fvarId!, vs) :: env.subst }
+                      let bodyExp ← walkProg env' Op (body.beta #[hi, hs]) (env.mkRet Op ·)
+                      mkLambdaFVars #[vi, vs] bodyExp
+      let contLam ← withLocalDeclD `r (mkApp env.V sTp) fun vr => do
+                      mkLambdaFVars #[vr] (← k vr)
+      mkAppOptM ``Exp.forN #[Op, env.V, none, sTp, nExpr, initAtom, bodyLam, contLam]
 end
 
 elab "reflect% " t:term : term => do
@@ -206,128 +412,200 @@ elab "reflect% " t:term : term => do
       | throwError "reflect%: the body must have type `Free F τ`, got{indentExpr bty}"
     let_expr Effect Op := F
       | throwError "reflect%: the functor must be `Effect Op`, got{indentExpr F}"
-    -- Build the program against an abstract `V : Type → Type`.
+    -- the result type must be a supported object type (early, clear error)
+    let _ ← reifyTpOrThrow τ
+    -- Build the program against an abstract `V : Tp → Type`.
     let tyTy := mkSort (.succ .zero)
-    withLocalDeclD `V (← mkArrow tyTy tyTy) fun V => do
-      let prog ← walkProg { V := V, subst := [] } Op (e.beta args)
-      -- g := fun V args => prog   (so `g.1` is `Closed Op τ` when there are no args)
+    withLocalDeclD `V (← mkArrow (.const ``Tp []) tyTy) fun V => do
+      let env : Env := { V := V, subst := [] }
+      -- the final continuation: yield the result atom in tail position
+      let retK := fun (atom : Expr) => mkAppOptM ``Exp.ret #[Op, V, none, atom]
+      let prog ← walkProg env Op (e.beta args) retK
+      -- g := fun V args => prog   (so `g.1` is `Closed Op τ̂` when there are no args)
       let g ← mkLambdaFVars (#[V] ++ args) prog
       let gTy ← inferType g
-      -- predicate  fun g => ∀ args, denoteP (g Id args) = e args
+      -- predicate  fun g => ∀ args, denote (g Tp.denote args) = e args
       let pred ← withLocalDeclD `g gTy fun gv => do
-        let lhs ← mkAppOptM ``denoteP #[Op, τ, mkAppN gv (#[idExpr] ++ args)]
+        let lhs ← mkAppOptM ``denote #[Op, none, mkAppN gv (#[denoteV] ++ args)]
         let eq ← mkEq lhs (e.beta args)
         mkLambdaFVars #[gv] (← mkForallFVars args eq)
-      -- proof  fun args => rfl   (well-typed because denoteP (g Id args) ≡ e args)
-      let dp ← mkAppOptM ``denoteP #[Op, τ, mkAppN g (#[idExpr] ++ args)]
+      -- proof  fun args => rfl   (well-typed because denote (g Tp.denote args) ≡ e args)
+      let dp ← mkAppOptM ``denote #[Op, none, mkAppN g (#[denoteV] ++ args)]
       let prf ← mkLambdaFVars args (← mkEqRefl dp)
       mkAppOptM ``Subtype.mk #[gTy, pred, g, prf]
 
 /-! ## A pretty-printer (instantiating `V := fun _ => String`) -/
 
-/-- Pretty-print a pure term, threading a fresh-name counter. -/
-def ppT : {α : Type} → Nat → Tm (fun _ => String) α → (String × Nat)
-  | _, i, .var s => (s, i)
-  | _, i, .lit n => (s!"{n}", i)
-  | _, i, .lam f =>
-    let v := s!"v{i}"
-    let (body, n) := ppT (i + 1) (f v)
-    (s!"λ{v} => {body}", n)
-  | _, i, .app f a =>
-    let (f, i) := ppT i f
-    let (a, i) := ppT i a
-    (s!"(({f})({a}))", i)
-  | _, i, .letE e b =>
-    let v := s!"v{i}"
-    let i := i + 1
-    let (e, i) := ppT i e
-    let (b, i) := ppT i (b v)
-    (s!"let {v} := {e}; {b}", i)
+/-- Render a host literal of object type `α` for the pretty-printer.  Scalars print
+    their value; functions (and `ZMod`, lacking a uniform `ToString`) print a placeholder. -/
+def Tp.toStr : (α : Tp) → α.denote → String
+  | .bool,     b => toString b
+  | .nat,      n => toString n
+  | .zmod _,   _ => "<zmod>"
+  | .unit,     _ => "()"
+  | .prod a b, p => s!"({Tp.toStr a p.1}, {Tp.toStr b p.2})"
+  | .fn _ _,   _ => "<fn>"
 
-/-- Pretty-print a program.  Note the `op` case can render its input via `ppT` —
-    that is only possible because the input is now a real term. -/
-def ppProg {Op : Type → Type → Type} {α : Type}
-    (name : {I R : Type} → Op I R → String) :
-    Nat → Prog Op (fun _ => String) α → (String × Nat)
-  | i, .ret x => ppT i x
-  | i, .bind b f =>
+/-- Symbol for a unary primitive, for the pretty-printer. -/
+def Un.sym : Un a b → String
+  | .not => "!" | .fst => ".1 " | .snd => ".2 "
+
+/-- Symbol for a binary primitive, for the pretty-printer. -/
+def Bin.sym : Bin a b c → String
+  | .add => "+" | .sub => "-" | .mul => "*" | .eq => "==" | .and => "&&" | .or => "||" | .pair => ","
+
+/-- Indentation (two spaces per nesting level) for the pretty-printer. -/
+private def ppIndent (d : Nat) : String := String.join (List.replicate d "  ")
+
+/-- Worker for `pp`, threading the nesting depth `d` (for indentation) and a fresh-name
+    counter `i`.  Every binding is emitted on its own line at depth `d`; a `forN`'s body
+    is rendered one level deeper.  Note the `op` case can render its input directly — that
+    is only possible because the input is now an atom (a `V _`, here a `String`). -/
+private def ppAux {Op : Tp → Tp → Type} {α : Tp}
+    (name : {I R : Tp} → Op I R → String) :
+    Nat → Nat → Exp Op (fun _ => String) α → (String × Nat)
+  | d, i, .ret v => (s!"{ppIndent d}{v}", i)
+  | d, i, @Exp.lit _ _ α _ val k =>
     let v := s!"v{i}"
     let i := i + 1
-    let (b, i) := ppProg name i b
-    let (f, i) := ppProg name i (f v)
-    (s!"let {v} ← {b}; {f}", i)
-  | i, .op o inp f =>
-    let (inpS, i) := ppT i inp
+    let (rest, i) := ppAux name d i (k v)
+    (s!"{ppIndent d}let {v} := {Tp.toStr α val}\n{rest}", i)
+  | d, i, .op o inp k =>
     let v := s!"v{i}"
     let i := i + 1
-    let (contS, i) := ppProg name i (f v)
-    (s!"let {v} ← {name o}({inpS}); {contS}", i)
+    let (rest, i) := ppAux name d i (k v)
+    (s!"{ppIndent d}let {v} ← {name o}({inp})\n{rest}", i)
+  | d, i, .un o a k =>
+    let v := s!"v{i}"
+    let i := i + 1
+    let (rest, i) := ppAux name d i (k v)
+    (s!"{ppIndent d}let {v} := {Un.sym o}{a}\n{rest}", i)
+  | d, i, .bin o a b k =>
+    let v := s!"v{i}"
+    let i := i + 1
+    let (rest, i) := ppAux name d i (k v)
+    (s!"{ppIndent d}let {v} := {a} {Bin.sym o} {b}\n{rest}", i)
+  | d, i, .forN n init body k =>
+    let iv := s!"i{i}"
+    let av := s!"a{i}"
+    let i := i + 1
+    let (b, i) := ppAux name (d + 1) i (body iv av)
+    let v := s!"v{i}"
+    let i := i + 1
+    let (rest, i) := ppAux name d i (k v)
+    (s!"{ppIndent d}let {v} := forN {n} from {init} via λ {iv} {av} =>\n{b}\n{rest}", i)
+
+/-- Pretty-print a program as a multi-line, indented block (one binding per line). -/
+def pp {Op : Tp → Tp → Type} {α : Tp}
+    (name : {I R : Tp} → Op I R → String) (e : Exp Op (fun _ => String) α) : String :=
+  (ppAux name 0 0 e).1
 
 /-! ## A concrete signature
 
-The single source of truth — note `CircOp.assertNZ`'s input is a `Nat`, which in a
-program will be supplied as a *term* (often a variable). -/
+The single source of truth — note `CircOp.assertNZ`'s input is a `nat`, which in a
+program will be supplied as an *atom* (often a variable). -/
 
-inductive CircOp : Type → Type → Type
+inductive CircOp : Tp → Tp → Type
   /-- Ask for a hint computed from a seed `Nat`; returns the `Nat`. -/
-  | hint     : CircOp Nat Nat
-  /-- Assert the input `Nat` is nonzero; returns `Unit`. -/
-  | assertNZ : CircOp Nat Unit
+  | hint     : CircOp .nat .nat
+  /-- Assert the input `Nat` is nonzero; returns the `Bool` result of the check. -/
+  | assertNZ : CircOp .nat .bool
+  /-- Assert the input `Bool` holds; returns it. -/
+  | assert   : CircOp .bool .bool
 
 /-- Operation names, for the pretty-printer. -/
-def CircOp.name : {I R : Type} → CircOp I R → String
+def CircOp.name : {I R : Tp} → CircOp I R → String
   | _, _, .hint     => "hint"
   | _, _, .assertNZ => "assertNZ"
+  | _, _, .assert   => "assert"
 
 /-- Runtime smart constructors, living in the ordinary `Free (Effect CircOp)`. -/
 def hintF (seed : Nat) : Free (Effect CircOp) Nat :=
-  Free.Impure ⟨CircOp.hint, seed⟩ Free.Pure
-def assertNZ (x : Nat) : Free (Effect CircOp) Unit :=
-  Free.Impure ⟨CircOp.assertNZ, x⟩ Free.Pure
+  Free.Impure (Effect.mk CircOp.hint seed) Free.Pure
+def assertNZ (x : Nat) : Free (Effect CircOp) Bool :=
+  Free.Impure (Effect.mk CircOp.assertNZ x) Free.Pure
+def assert (b : Bool) : Free (Effect CircOp) Bool :=
+  Free.Impure (Effect.mk CircOp.assert b) Free.Pure
 
 /-! ## Examples / smoke tests -/
 
 section Examples
 
-variable {V : Type → Type} {α : Type}
+variable {V : Tp → Type} {α : Tp}
 
-/-- Pure fragment: `let f := id in f x`. -/
-def pureExample : Tm V (α → α) :=
-  .lam (fun x => .letE (.lam (fun y => .var y)) (fun f => .app (.var f) (.var x)))
-
-example : denoteT (pureExample (V := Id) (α := Nat)) = (fun x => x) := rfl
-
-#eval ppT 0 (pureExample (α := Nat))   -- "λv0 => let v1 := λv2 => v2; ((v1)(v0))"
-
-/-- A real Lean `do`-block.  Crucially, `assertNZ n` feeds the *variable* `n`
-    (bound by the preceding `hint`) into the effect's input position, and the
-    function argument `k` becomes a literal.  The result threads `n` rather than
-    computing on it, so the whole thing reflects into a `∀ V` program. -/
+/-- A real Lean `do`-block.  Crucially, `assertNZ n` feeds the *variable* `n` (bound by
+    the preceding `hint`) into the effect's input position, and the function argument `k`
+    becomes a `lit`-bound atom.  The result threads `n` rather than computing on it, so
+    the whole thing reflects into a `∀ V` program. -/
 def hostExample (k : Nat) : Free (Effect CircOp) Nat := do
   let n ← hintF k
   let _ ← assertNZ n
   pure n
 
 
-/-- Reflecting it yields a **closed** (`∀ V`) AST plus a `rfl`-backed soundness proof. -/
+/-- Reflecting it yields a **closed** (`∀ V`) A-normal AST plus a `rfl`-backed proof. -/
 def reflectedExample := reflect% hostExample
 
-#check (reflectedExample.1 : (V : Type → Type) → Nat → Prog CircOp V Nat)
+#check (reflectedExample.1 : (V : Tp → Type) → Nat → Exp CircOp V Tp.nat)
 
-/-- Soundness for every argument (denotation taken at `V := Id`). -/
-example : ∀ k, denoteP (reflectedExample.1 Id k) = hostExample k := reflectedExample.2
+/-- Soundness for every argument (denotation taken at `V := Tp.denote`). -/
+example : ∀ k, denote (reflectedExample.1 Tp.denote k) = hostExample k := reflectedExample.2
 
 /-- Closed case (`n = 0` arguments): `reflect%`'s program is literally a `Closed`. -/
-example : denoteP ((reflect% (hostExample 7)).1 Id) = hostExample 7 :=
+example : denote ((reflect% (hostExample 7)).1 Tp.denote) = hostExample 7 :=
   (reflect% (hostExample 7)).2
 
 -- Because the reflected program is polymorphic in `V`, we can now pretty-print it
--- (instantiating `V := fun _ => String`).  With `k := 99`:
---   "let v0 ← hint(99); let v1 ← assertNZ(v0); v0"
-#eval ppProg CircOp.name 0 (reflectedExample.1 (fun _ => String) 99)
+-- (instantiating `V := fun _ => String`).  With `k := 99` the function argument is
+-- A-normalised into a leading `lit`:
+--   let v0 := 99
+--   let v1 ← hint(v0)
+--   let v2 ← assertNZ(v1)
+--   v1
+#eval IO.println (pp CircOp.name (reflectedExample.1 (fun _ => String) 99))
 
 -- And it denotes back to an ordinary `Free (Effect CircOp)` computation:
-#check (denoteP (reflectedExample.1 Id 99) : Free (Effect CircOp) Nat)
+#check (denote (reflectedExample.1 Tp.denote 99) : Free (Effect CircOp) Nat)
+
+
+/-- A computation whose *result* type is not expressible as a `Tp`: `reflect%` must abort. -/
+def badResult : Free (Effect CircOp) (List Nat) := pure []
+#check_failure (reflect% badResult)
+
+/-- Compile-time exponent. -/
+def powN : Nat := 5
+
+/-- Compute `x ^ powN` by iterated multiplication, accumulating in a `let mut` driven by
+    a `for … in` loop, then assert the loop result equals the host-side `x ^ powN`.
+
+    The `let mut` + `for` lowers to `ForIn.forIn` over the `Free` monad, the body's
+    `acc * x` is a pure operation on the loop-state atom, and the `==` is another — so
+    reflecting this exercises the loop node and the primitive-operation compiler. -/
+def powExample (x : Nat) : Free (Effect CircOp) Bool := do
+  let mut acc := 1
+  for _ in [0:powN] do
+    acc := acc * x
+  assert (acc == x ^ powN)
+
+/-- It reflects into a `forN` loop whose body is a `bin .mul`, followed by a `bin .eq`
+    against the `lit`-bound reference value, fed into the `assert` effect. -/
+def reflectedPow := reflect% powExample
+
+/-- Soundness still holds by `rfl`: `denote`'s `forN` case is defined via the very same
+    `forIn`, so the round-trip is definitional even with the loop. -/
+example : ∀ x, denote (reflectedPow.1 Tp.denote x) = powExample x := reflectedPow.2
+
+-- Pretty-printed at `V := fun _ => String`, with `x := 3` (so `x ^ powN = 243`):
+--   let v0 := 1
+--   let v4 := forN 5 from v0 via λ i1 a1 =>
+--     let v2 := 3
+--     let v3 := a1 * v2
+--     v3
+--   let v5 := 243
+--   let v6 := v4 == v5
+--   let v7 ← assert(v6)
+--   v7
+#eval IO.println (pp CircOp.name (reflectedPow.1 (fun _ => String) 3))
 
 end Examples
 
