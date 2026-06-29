@@ -1,4 +1,4 @@
-import ZkLean
+import Freigen
 
 def main : IO Unit :=
-  IO.println "ZkLean"
+  IO.println "Freigen"

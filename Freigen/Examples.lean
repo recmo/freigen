@@ -1,4 +1,4 @@
-import ZkLean.Reflect
+import Freigen.Reflect
 
 /-!
 # Examples / smoke tests
@@ -7,7 +7,7 @@ A concrete operation signature `CircOp` and example programs exercising literals
 loops, monomorphised definitions, multi-argument functions, and hints.
 -/
 
-namespace ZkFree
+namespace Freigen
 
 /-! ## A concrete signature
 
@@ -204,4 +204,4 @@ example : ∀ a b, denoteProg (reflectedMulti.1 (KleisliF CircOp) Tp.denote) (.c
 
 end Examples
 
-end ZkFree
+end Freigen

@@ -23,7 +23,7 @@ def foldFree [Functor F] [Monad M] (x : Free F α) (f : ∀{x}, F x → M x): M 
   | Free.Pure x => pure x
   | Free.Impure a f' => f a >>= fun x => foldFree (f' x) f
 
-namespace ZkFree
+namespace Freigen
 
 /-! ## The effect signature and its derived functor -/
 
@@ -33,4 +33,4 @@ namespace ZkFree
 inductive Effect (Op : Type → Type → Type 1) : Type → Type 1 where
   | mk {I O : Type} : Op I O → I → Effect Op O
 
-end ZkFree
+end Freigen

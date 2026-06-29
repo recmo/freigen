@@ -1,4 +1,4 @@
-import ZkLean.Free
+import Freigen.Free
 import Mathlib.Data.ZMod.Basic
 import Mathlib.Algebra.Ring.Defs
 
@@ -15,7 +15,7 @@ telescope of pulled-out function definitions (`Prog.def_`) ending in `Prog.main`
 interprets a program back into `Free (Effect Op)`.  This file also has a pretty-printer.
 -/
 
-namespace ZkFree
+namespace Freigen
 
 /-! ## The object type universe -/
 
@@ -350,4 +350,4 @@ def pp {Op : Type → Type → Type 1} {mainArgs : List Tp} {α : Tp}
     (name : {I R : Type} → Op I R → String) (p : Prog Op PpF PpV mainArgs α) : String :=
   (ppProgAux name 0 p).1
 
-end ZkFree
+end Freigen

@@ -1,4 +1,4 @@
-import ZkLean.Ast
+import Freigen.Ast
 
 /-!
 # The `reflect%` elaborator
@@ -7,7 +7,7 @@ Reflects a real Lean `Free (Effect Op)` computation into an explicit `Prog` AST,
 `rfl`-backed proof that denoting the AST recovers the original computation.
 -/
 
-namespace ZkFree
+namespace Freigen
 
 open Lean Lean.Meta Lean.Elab Lean.Elab.Term
 
@@ -472,4 +472,4 @@ elab "reflect% " t:term : term => do
       let prf ← mkLambdaFVars args (← mkEqRefl dp)
       mkAppOptM ``Subtype.mk #[gTy, pred, g, prf]
 
-end ZkFree
+end Freigen
