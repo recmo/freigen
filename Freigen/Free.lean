@@ -19,7 +19,7 @@ instance {F : Type u → Type v} : Monad (Free F) where
   pure := Free.Pure
   bind := freeBind
 
-def foldFree [Functor F] [Monad M] (x : Free F α) (f : ∀{x}, F x → M x): M α := match x with
+def foldFree [Monad M] (x : Free F α) (f : ∀{x}, F x → M x): M α := match x with
   | Free.Pure x => pure x
   | Free.Impure a f' => f a >>= fun x => foldFree (f' x) f
 
