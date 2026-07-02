@@ -68,6 +68,8 @@ pub enum BinOp {
     MulF,
     PowF,
     Pair,
+    /// `xs.push x` — append one element to an array.
+    Push,
 }
 
 /// Partial (proof-erased) primitives (Lean's `POp`).  Their proof obligations were erased at

@@ -1,4 +1,4 @@
-import Freigen.Reflect.Recursion
+import Freigen.Reflect.Basic
 import Freigen.Free
 import Freigen.Compile
 import Freigen.Examples.Circuit.Basic

@@ -205,6 +205,7 @@ fn bin_op(head: &str) -> Option<BinOp> {
         "mulf" => BinOp::MulF,
         "powf" => BinOp::PowF,
         "pair" => BinOp::Pair,
+        "push" => BinOp::Push,
         _ => return None,
     })
 }

@@ -284,6 +284,13 @@ fn eval_un(op: UnOp, a: Value) -> Result<Value> {
 fn eval_bin(op: BinOp, a: Value, b: Value) -> Result<Value> {
     match op {
         BinOp::Pair => Ok(Value::Pair(Box::new(a), Box::new(b))),
+        BinOp::Push => match a {
+            Value::Array(mut xs) => {
+                xs.push(b);
+                Ok(Value::Array(xs))
+            }
+            _ => malformed("push on a non-array"),
+        },
         BinOp::And => Ok(Value::Bool(as_bool(a)? && as_bool(b)?)),
         BinOp::Or => Ok(Value::Bool(as_bool(a)? || as_bool(b)?)),
         BinOp::Add => Ok(Value::Nat(as_nat(a)? + as_nat(b)?)),

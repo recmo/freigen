@@ -1,5 +1,5 @@
 import Freigen.Free
-import Freigen.Reflect.Recursion
+import Freigen.Reflect.Basic
 import Freigen.Compile
 
 /-!

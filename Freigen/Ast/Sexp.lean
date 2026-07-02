@@ -53,7 +53,7 @@ VALUE   ::= true | false | NAT | unit | opaque
           | (VALUE*) | (inl VALUE) | (inr VALUE)
 UNOP    ::= not | fst | snd | inl | inr | to-array | fin-val
 BINOP   ::= add | sub | mul | pow | eq | lt | le | and | or
-          | addf | subf | mulf | powf | pair
+          | addf | subf | mulf | powf | pair | push
 POP     ::= vget | vset | aget | aset | select
 ```
 
@@ -109,7 +109,7 @@ def Bin.sexpName {a b c : Tp} : Bin a b c → String
   | .add => "add" | .sub => "sub" | .mul => "mul" | .pow => "pow"
   | .eq => "eq" | .lt => "lt" | .ble => "le" | .and => "and" | .or => "or"
   | .addZ => "addf" | .subZ => "subf" | .mulZ => "mulf" | .powZ => "powf"
-  | .pair => "pair"
+  | .pair => "pair" | .push => "push"
 
 /-- S-expression head for a partial primitive — the upcasts carry their target bound as their
     first argument. -/

@@ -89,6 +89,8 @@ inductive Bin : Tp → Tp → Tp → Type
   /-- Field power with a `Nat` exponent. -/
   | powZ {n : Nat} : Bin (.zmod n) .nat (.zmod n)
   | pair {a b : Tp} : Bin a b (.prod a b)
+  /-- **Array push** `xs.push x` — append one element (total). -/
+  | push {a : Tp} : Bin (.array a) a (.array a)
 
 /-- Denote a unary primitive to its Lean operation. -/
 def Un.denote {a b : Tp} : Un a b → a.denote → b.denote
@@ -116,6 +118,7 @@ def Bin.denote {a b c : Tp} : Bin a b c → a.denote → b.denote → c.denote
   | .mulZ, x, y => x * y
   | .powZ, x, y => x ^ y
   | .pair, x, y => (x, y)
+  | .push, xs, x => xs.push x
 
 /-- **Partial** primitive operations, indexed by (argument list, result) object types.  These are
     the *proof-erased* primitives — collection get/set and refinement upcasts — whose Lean

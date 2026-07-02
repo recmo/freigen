@@ -1,5 +1,5 @@
 import Freigen.Ast.Sexp
-import Freigen.Reflect.Recursion
+import Freigen.Reflect.Basic
 import Lean.Elab.Command
 import Lean.Elab.SyntheticMVars
 
