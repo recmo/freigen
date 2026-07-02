@@ -8,6 +8,9 @@ require "leanprover-community" / "mathlib"
 
 @[default_target]
 lean_lib Freigen where
+  -- build every `Freigen.*` module, imported by the umbrella or not — an orphan module must fail
+  -- CI rather than silently go unchecked
+  globs := #[.andSubmodules `Freigen]
 
 @[default_target]
 lean_exe freigen where

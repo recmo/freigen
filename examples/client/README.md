@@ -1,21 +1,26 @@
-# MyCircuits — using Freigen as a library
+# Client — using Freigen as a library
 
 A minimal downstream project that depends on Freigen, writes a `Free` program, and compiles it to a
 `.prog` file on disk.
 
 ## Layout
 
-- `lakefile.lean` — `require freigen`, one `lean_lib MyCircuits`.
-- `MyCircuits/Program.lean` — a `Free CircOp HintS` program, `reflect%`'d and marked with
+- `lakefile.toml` — `require freigen`, one `lean_lib Client` (a plain-TOML consumer: the `prog`
+  facet and the emitter come from the dependency).
+- `Client/Program.lean` — a hand-written `Free CircOp HintS` program, marked with
   `#compile … => "out/myProgram.prog"`.
+- `Client/Poseidon.lean` — a *real* circuit: the Poseidon hash over BN254 `Fr` (reference
+  constants, circomlib-pinned test vectors, `≈`-soundness and axiom guards inline), marked with
+  `#compile … => "out/poseidon.prog"` — two artifacts per build.
+- `expected/` — golden files; CI diffs every emitted artifact against them.
 
 ## Build and compile
 
 ```sh
-lake build MyCircuits:prog
+lake build Client:prog
 ```
 
-This builds the library and writes the reflected AST to `out/myProgram.prog`:
+This builds the library and writes both reflected ASTs under `out/`; `myProgram.prog` reads:
 
 ```
 def main() =>

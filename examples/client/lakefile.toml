@@ -1,5 +1,5 @@
-name = "mycircuits"
-defaultTargets = ["MyCircuits"]
+name = "client"
+defaultTargets = ["Client"]
 
 # Depend on Freigen from the repo root.  In a real project this would be a git require, e.g.
 #   [[require]]
@@ -13,4 +13,4 @@ name = "freigen"
 path = "../.."
 
 [[lean_lib]]
-name = "MyCircuits"
+name = "Client"
