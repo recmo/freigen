@@ -33,29 +33,29 @@ containing function values.
 namespace Freigen
 namespace ITree
 
-variable {ε : Type} {br : ε → Type}
+variable {ε : Type _} {br : ε → Type _}
 
 /-! ## The one-step functor -/
 
 /-- One-step *positions* of an interaction tree. -/
-inductive Pos (ε : Type) (α : Type) : Type
+inductive Pos (ε : Type _) (α : Type _) : Type _
   | ret  : α → Pos ε α
   | tau  : Pos ε α
   | fail : Pos ε α
   | vis  : ε → Pos ε α
 
 /-- Arity (set of children) of each position. -/
-@[reducible] def Ar {ε α} (br : ε → Type) : Pos ε α → Type
+@[reducible] def Ar {ε α} (br : ε → Type _) : Pos ε α → Type _
   | .ret _  => PEmpty
   | .tau    => PUnit
   | .fail   => PEmpty
   | .vis e  => br e
 
 /-- The polynomial one-step functor of interaction trees. -/
-@[reducible] def P (ε : Type) (br : ε → Type) (α : Type) : PFunctor.{0, 0} := ⟨Pos ε α, Ar br⟩
+@[reducible] def P (ε : Type _) (br : ε → Type _) (α : Type _) : PFunctor := ⟨Pos ε α, Ar br⟩
 
 /-- Interaction trees over the event signature `(ε, br)` returning `α`: the final coalgebra. -/
-def CompE (ε : Type) (br : ε → Type) (α : Type) : Type := (P ε br α).M
+def CompE (ε : Type _) (br : ε → Type _) (α : Type _) : Type _ := (P ε br α).M
 
 /-- Interaction trees over a first-order DSL signature. -/
 abbrev Comp (Op : TpF → TpF → Type) (α : Type) : Type := CompE (Effect Op) Effect.arity α
@@ -124,7 +124,7 @@ def bindCo {α β : Type} (k : α → CompE ε br β) :
     match t.dest with | ⟨b, g⟩ => ⟨b, fun i => .inr (g i)⟩
 
 /-- Monadic bind on interaction trees. -/
-def bind {α β : Type} (m : CompE ε br α) (k : α → CompE ε br β) : CompE ε br β :=
+def bind {α β : Type _} (m : CompE ε br α) (k : α → CompE ε br β) : CompE ε br β :=
   PFunctor.M.corec (bindCo k) (.inl m)
 
 /-- Copying an already-built tree (the `inr` state) is the identity. -/

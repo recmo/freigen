@@ -80,6 +80,7 @@ example : Closed CircOp HintS [] .unit := circC
 /-- info: Freigen.circC_sound : ITree.Eutt (denoteProg (circC (KC CircOp) (Tp.denote CircOp)) HList.nil) (ofFree circ) -/
 #guard_msgs (whitespace := lax) in
 #check circC_sound
+#check ofFree
 
 -- The reified AST — arithmetic is a real `Bin.eq` node, the `hint` an out-of-circuit scope.
 /-- info:
