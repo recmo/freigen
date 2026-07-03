@@ -13,8 +13,9 @@ keeps its sharing.
 
 **Recursion is not special.**  A structural `0`/`succ` recursion (at any `Nat` argument) spills
 as a `Prog.rec_` at the tupled state of its value arguments — hypothesis arguments erased,
-function/type arguments monomorphised — with `mrec` adequacy (`recSound`, at the measure = the
-recursion component) proved per monomorphisation in the `elabRecKits` stage between discovery and
+type arguments monomorphised, invariant function arguments carried first-class — with `mrec`
+adequacy by the source's own functional induction (`fun_induction` + leaf-wise plugging,
+`adeqPlug`) proved per monomorphisation in the `elabRecKits` stage between discovery and
 build.  A *recursive program* is just the degenerate case: its definition is kept folded and
 `main` becomes the call.  Closed values containing a (user-module) recursion bypass
 `Code.lit`-folding — a recursion reflects structurally, never evaluates.
@@ -148,14 +149,10 @@ structure RecData where
   /-- The result *value* host type (`X` above; `= ρTy` for a pure helper) — the `ρ` of
       `CallOp Op σ ρ` and of the `rec_`'s result. -/
   ρValTy : Expr
-  /-- The CallOp-lifted **totalized** body `cb : σ → Free (CallOp Op σ ρ) SOp ρ`
-      (`bif i == 0 then pure base else …call…`). -/
+  /-- The call-lifted body `cb : (hosts…) → (kf-slots…) → σ → FreeC …`
+      (`bif i == 0 then pure base else …call-event…`) — invariant fn state enters as pure host
+      binders, with `kf` stand-ins where self-call tuples carry their embeddings. -/
   cb : Expr
-  /-- The totalized `Nat.rec` twin `goT : σ → ρ` (agrees with the source wherever the source's
-      hypotheses hold — the `bridge`). -/
-  goT : Expr
-  /-- The measure `μ : σ → Nat` (the recursion component's projection). -/
-  μ : Expr
   deriving Inhabited
 
 /-- A call-site analysis of a **spillable helper** — a `Free`-valued function or a *pure* function
@@ -510,9 +507,11 @@ A **structural-recursive pure helper** (two equations, `0`/`succ` patterns on a 
 at any position) spills as a `Prog.rec_` at the tupled state of its value arguments.  Hypothesis
 arguments are *erased* (self-calls drop them; remaining proof subterms are re-synthesized at the
 monomorphised bounds — obligations queued as mvars and discharged by `omega` after discovery),
-and function/type arguments *monomorphise*.  Soundness is `recSound` (`mrec` adequacy at the
-measure = the recursion component) against the **totalized** `Nat.rec` twin `goT`, bridged back
-to the partial source by a generated induction — so a call site gets
+type arguments *monomorphise*, and invariant function arguments ride the state first-class.
+Soundness is by the source's **own functional induction** (`fun_induction`): each case closes by
+one `mrec` unfolding (the walked `hspec` equality) and leaf-wise plugging (`adeqPlug`), the
+per-call adequacy facts arriving as the induction's hypotheses — proofs included, so no
+totalization twin, measure, or bridge exists — giving a call site
 `cf ⟨state⟩ ≈ ret (source state hyps)`, an *eutt* step (`sc_callPureE`). -/
 
 /-- Right-nested host product type `A₀ × (A₁ × …)` (singleton = the type itself). -/
@@ -898,96 +897,6 @@ def Env.buildCb (env : Env) (shape : RecShape) (cName : Name) (fArgs : Array Exp
     let condE ← mkAppM ``BEq.beq #[recProj, mkNatLit 0]
     mkLambdaFVars (hosts ++ kfs ++ #[s]) (← mkAppM ``cond #[condE, baseE, stepE])
 
-/-- The totalized `Nat.rec` twin `goT : σ → ρ`: recursion on the `Nat` component, the other
-    state components threading through the motive.  Definitionally reduces on `0`/`succ` — that
-    (plus proof irrelevance) is what makes the `bridge` induction close by `rfl`. -/
-partial def Env.buildGoT (env : Env) (shape : RecShape) (cName : Name) (fArgs : Array Expr)
-    (stateTys : Array Expr) (statePos : Array Nat) (fnHostTys : Array Expr)
-    (σTy ρTy : Expr) (recIdx : Nat) : MetaM Expr := do
-  let fnCount := fnHostTys.size
-  let restTys := (stateTys.toList.zipIdx.filterMap fun (t, i) =>
-    if i == recIdx || i < fnCount then none else some t)
-  let natTy : Expr := .const ``Nat []
-  -- state-order values from (hosts, m?, rest-projections)
-  let stateValsOf (hosts : Array Expr) (m : Expr) (restVals : List Expr) : Array Expr := Id.run do
-    let mut vals : Array Expr := #[]
-    let mut rest := restVals
-    for i in [0:stateTys.size] do
-      if h : i < fnCount then vals := vals.push hosts[i]!
-      else if i == recIdx then vals := vals.push m
-      else
-        vals := vals.push rest.head!
-        rest := rest.tail
-    return vals
-  -- rewrite self-calls `go args ↦ ih ⟨rest-of-args⟩` (innermost-first; the recursion argument
-  -- must be *exactly* the pattern variable — structural recursion)
-  let rewriteSelf (hosts : Array Expr) (m ih : Expr) (t0 : Expr) : MetaM Expr := do
-    let isSelf (x : Expr) : Bool :=
-      x.getAppFn.isConstOf cName && x.getAppArgs.size == shape.arity
-    let rec loop (t : Expr) (fuel : Nat) : MetaM Expr := do
-      if fuel == 0 then throwError "reflect%: internal: self-call rewrite did not terminate"
-      let rec innermost (x : Expr) : Option Expr :=
-        match x.find? isSelf with
-        | none => none
-        | some c => match c.getAppArgs.findSome? innermost with
-          | some deeper => some deeper
-          | none => some c
-      match innermost t with
-      | none => return t
-      | some c =>
-          let cArgs := c.getAppArgs
-          unless cArgs[shape.recPos]! == m do
-            throwError "reflect%: recursive helper `{cName}`: a self-call's recursion argument \
-                        is not the structural predecessor{indentExpr c}"
-          for i in [0:fnCount] do
-            unless cArgs[statePos[i]!]! == hosts[i]! do
-              throwError "reflect%: recursive helper `{cName}` modifies its function-valued \
-                          state — only invariant function state is supported{indentExpr c}"
-          let restArgs := statePos.toList.zipIdx.filterMap fun (j, i) =>
-            if j == shape.recPos || i < fnCount then none else some cArgs[j]!
-          let repl := if restTys.isEmpty then ih else mkApp ih (mkTupleE restTys restArgs)
-          loop (t.replace (fun x => if x == c then some repl else none)) (fuel - 1)
-    loop t0 32
-  let hostDecls : Array (Name × (Array Expr → MetaM Expr)) :=
-    (Array.range fnHostTys.size).map fun i =>
-      (Name.mkSimple s!"f{i}", fun _ => pure fnHostTys[i]!)
-  withLocalDeclsD hostDecls fun hosts => do
-  withLocalDeclD `s σTy fun s => do
-    let projs := (mkTupleProjs stateTys.toList s).toArray
-    let recProj := projs[recIdx]!
-    let restProjs := projs.toList.zipIdx.filterMap fun (p, i) =>
-      if i == recIdx || i < fnCount then none else some p
-    if restTys.isEmpty then
-      let motive ← withLocalDeclD `n natTy fun n => mkLambdaFVars #[n] ρTy
-      let base ← withInstEqn shape shape.baseEqn fArgs (stateValsOf hosts (mkNatLit 0) []) none
-        fun hyps rhs => env.elimHyps hyps rhs
-      let step ← withLocalDeclD `m natTy fun m =>
-        withLocalDeclD `ih ρTy fun ih => do
-          withInstEqn shape shape.stepEqn fArgs (stateValsOf hosts m []) (some m)
-            fun hyps rhs => do
-              let rhs ← rewriteSelf hosts m ih rhs
-              mkLambdaFVars #[m, ih] (← env.elimHyps hyps rhs)
-      let recApp ← mkAppOptM ``Nat.rec #[motive, base, step, recProj]
-      mkLambdaFVars (hosts ++ #[s]) recApp
-    else
-      let restTy := mkProdTy restTys
-      let motTy ← mkArrow restTy ρTy
-      let motive ← withLocalDeclD `n natTy fun n => mkLambdaFVars #[n] motTy
-      let base ← withLocalDeclD `rest restTy fun rest => do
-        let rps := (mkTupleProjs restTys rest).toArray
-        withInstEqn shape shape.baseEqn fArgs (stateValsOf hosts (mkNatLit 0) rps.toList) none
-          fun hyps rhs => do mkLambdaFVars #[rest] (← env.elimHyps hyps rhs)
-      let step ← withLocalDeclD `m natTy fun m =>
-        withLocalDeclD `ih motTy fun ih =>
-        withLocalDeclD `rest restTy fun rest => do
-          let rps := (mkTupleProjs restTys rest).toArray
-          withInstEqn shape shape.stepEqn fArgs (stateValsOf hosts m rps.toList) (some m)
-            fun hyps rhs => do
-              let rhs ← rewriteSelf hosts m ih rhs
-              mkLambdaFVars #[m, ih, rest] (← env.elimHyps hyps rhs)
-      let recApp ← mkAppOptM ``Nat.rec #[motive, base, step, recProj]
-      mkLambdaFVars (hosts ++ #[s]) (mkApp recApp (mkTupleE restTys restProjs))
-
 /-- Analyze a call to a **recursive pure helper** at this site: recognise the shape, require the
     monomorphisation arguments closed, and produce the spill signature — reusing an existing
     monomorphisation's synthesis (`RecData`) or building it (discovery only). -/
@@ -1049,15 +958,8 @@ def Env.analyzeRecCall (env : Env) (e : Expr) : MetaM (Option CallSig) := do
     throwError "reflect%: recursive helper `{cName}`: more than one function-valued state \
                 component is not yet supported"
   let cb ← env.buildCb shape cName fArgs stateTys statePos fnHostTys σTy ρValTy recIdx isPure
-  -- the `Nat.rec` twin (and its bridge) exist only to *totalize* — hypothesis-free sources are
-  -- total over the state already and stand in for themselves
-  let goT ←
-    if shape.hypPos.isEmpty then pure (Expr.const ``Unit.unit [])
-    else env.buildGoT shape cName fArgs stateTys statePos fnHostTys σTy ρTy recIdx
-  let μ ← withLocalDeclD `s σTy fun s =>
-    mkLambdaFVars #[s] (mkTupleProjs stateTys.toList s).toArray[recIdx]!
   let rd : RecData := { statePos, hypPos := shape.hypPos,
-                        recIdx, stateTys, stateTps, σTy, σTp, ρTy, ρValTy, cb, goT, μ,
+                        recIdx, stateTys, stateTps, σTy, σTp, ρTy, ρValTy, cb,
                         fnStateCount := fnState.size, fnHostTys }
   return some { sig0 with rec? := some rd }
 
@@ -2122,13 +2024,14 @@ partial def withRecTelescope {α} (shape : RecShape) (cName : Name) (fnConst : E
   go 0 ty #[] #[]
 
 open Lean.Elab.Term in
-/-- After the discovery pass: ❶ discharge the queued totalization obligations (`omega`/`decide`),
+/-- After the discovery pass: ❶ discharge the queued proof-erasure obligations (`omega`/`decide`),
     then ❷ for every discovered **recursive helper** build its reflected `rec_` body (shared by
     the abstract build and proof mode — their definitional equality relies on it), its `mrec`
-    adequacy (`recSound`: `hspec` by a proof-mode walk of the lifted body, `hrun`/`hcl` by
-    generated case tactics), the totalization `bridge` (generated induction, closing by `rfl`
-    thanks to `Nat.rec` iota + proof irrelevance), and seed the proof-mode cache with the
-    call-site equation `∀ args hyps, cf args ≈ ret (source … hyps)`. -/
+    adequacy by the source's own **functional induction** (`fun_induction`): per case, one
+    `mrec` unfolding (`hspec`, by a proof-mode walk of the lifted body at the literal invariant
+    state) and leaf-wise plugging (`adeqPlug`), the per-call facts arriving as induction
+    hypotheses, proofs included, so no measure, totalization twin, or bridge exists — and seed
+    the proof-mode cache with the call-site equation `∀ args hyps, cf args ≈ ret (source … hyps)`. -/
 def elabRecKits (Op SOp : Expr) (defs : IO.Ref (Array CallSig))
     (pfDefs : IO.Ref (Array PfDefEntry)) (inFlight : IO.Ref (Array Name))
     (pending : IO.Ref (Array MVarId)) (recVerdicts : IO.Ref (List (Name × Bool)))
@@ -2149,8 +2052,6 @@ def elabRecKits (Op SOp : Expr) (defs : IO.Ref (Array CallSig))
     let some shape ← analyzeRecShape sig.cName
       | throwError "reflect%: internal: lost recursion shape for {sig.cName}"
     let cb ← instantiateMVars rd.cb
-    let goT ← instantiateMVars rd.goT
-    let μE ← instantiateMVars rd.μ
     let σTy := rd.σTy
     let ρTy := rd.ρTy
     let ρTp := sig.retTp
@@ -2176,7 +2077,6 @@ def elabRecKits (Op SOp : Expr) (defs : IO.Ref (Array CallSig))
     let _ : Unit ← withLocalDeclsD hostDecls fun hosts => do
       let embs ← hosts.mapM (fun h => (mkEmbOf εEK arityEK h : MetaM Expr))
       let cbH := (cb.beta (hosts ++ embs)).headBeta
-      let goTH := (goT.beta hosts).headBeta
       let Papp ← withLocalDeclD `sv σTy fun sv => do
         if fnCount == 0 then mkLambdaFVars #[sv] (Lean.mkConst ``True)
         else mkLambdaFVars #[sv] (← mkEq (← mkAppM ``Prod.fst #[sv]) embs[0]!)
@@ -2203,188 +2103,135 @@ def elabRecKits (Op SOp : Expr) (defs : IO.Ref (Array CallSig))
           mkLambdaFVars #[Vp0, F', argAtom] codeT
       recBodies.modify (·.push (sig, recBody))
       let bodyCode := recBody.beta #[denoteV, kcExt]
-      -- (hspec is built below, after the component-form machinery)
-      -- the total source over the tupled state: `goT` when the source is hypothesis-guarded,
-      -- else the source itself; fn components enter as the pure hosts (the σ-slot is ignored);
-      -- a pure result wraps in `pure`
-      let fW ← withLocalDeclD `s σTy fun s => do
-        let projs := (mkTupleProjs rd.stateTys.toList s).toArray
-        let src ←
-          if hasHyps then pure (mkApp goTH s)
-          else do
-            let mut fullArgs := sig.fArgs
-            for j in [0:sig.valuePos.size] do
-              fullArgs := fullArgs.set! (sig.valuePos[j]!)
-                (if j < fnCount then hosts[j]! else projs[j]!)
-            pure (mkAppN sig.cValInst fullArgs)
-        if sig.isPure then
-          mkLambdaFVars #[s] (← mkAppOptM ``FreeE.pure
-            #[mkApp (Lean.mkConst ``Effect []) Op, mkApp (Lean.mkConst ``Effect.arity []) Op,
-              SOp, rd.ρValTy, src])
-        else
-          mkLambdaFVars #[s] src
-      -- hrun/hcl: proved in *component* form (plain `intro`s, no tuple patterns; fn slots are
-      -- the hosts' embeddings, literally), repackaged over the tupled `N` under the invariant
-      -- (`fst_eq_tuple` pins the fn component; surjective pairing is definitional for the rest)
+      -- `bodyD` — the `mrec` body function of this monomorphisation
+      let bodyD ← withLocalDeclD `s σTy fun s =>
+        mkLambdaFVars #[s] (mkApp2 denC ρTp (mkApp bodyCode s))
       let kSt := rd.stateTps.size
-      let compIds := ((Array.range kSt).filter (· ≥ fnCount)).map fun i =>
-        mkIdent (Name.mkSimple s!"c{i}")
-      let recId := mkIdent (Name.mkSimple s!"c{rd.recIdx}")
       let stateDecls : Array (Name × (Array Expr → TermElabM Expr)) :=
         ((Array.range kSt).filter (· ≥ fnCount)).map fun i =>
           (Name.mkSimple s!"c{i}", fun _ => pure rd.stateTys[i]!)
-      let repackage (component : Expr) (want : Expr → MetaM Expr) : MetaM Expr :=
-        withLocalDeclD `N σTy fun N =>
-        withLocalDeclD `hP (mkApp Papp N) fun hP => do
+      -- hspec, in component form at the **literal invariant state** `⟨emb f₀, cs⟩` (projection
+      -- and application steps reduce definitionally there), lifted into the `mrec`-unfolded
+      -- shape the induction tactic rewrites with
+      let hspecComp ← withLocalDeclsD stateDecls fun cs => do
+        let tup := mkTupleE rd.stateTys.toList (embs.toList ++ cs.toList)
+        let penv : Env := { Op, Opc := opcExt, opWrap := wrapBase, SOp, F := kcExt,
+                            V := denoteV, subst := [], defs, pfDefs, inFlight,
+                            pending, recVerdicts, recBodies, noSpill := true, pf := true,
+                            recMode := true, recTps := some (rd.σTp, ρTp) }
+        let (_, pf?) ←
           if fnCount == 0 then
-            let projs := (mkTupleProjs rd.stateTys.toList N).toArray
-            mkLambdaFVars #[N, hP] (← mkExpectedTypeHint (mkAppN component projs) (← want N))
-          else do
-            -- `N = (emb f₀, N.2)` by the invariant; the component instance is at the
-            -- projections of `N.2` (η-definitional)
-            let tupleEq ← mkAppM ``fst_eq_tuple #[hP]
-            let sndN ← mkAppM ``Prod.snd #[N]
-            let restProjs := (mkTupleProjs rd.stateTys.toList.tail sndN).toArray
-            let stmtOf ← withLocalDeclD `sv σTy fun sv => do
-              mkLambdaFVars #[sv] (← want sv)
-            let congr ← mkAppM ``congrArg #[stmtOf, tupleEq]
-            mkLambdaFVars #[N, hP] (← mkAppM ``Eq.mpr #[congr, mkAppN component restProjs])
-      -- hspec: compositional (proof-mode walk of `cb`) at the **literal invariant state**
-      -- `⟨emb f₀, cs⟩` — projection/application steps reduce definitionally there — then
-      -- repackaged under `P`
-      let hspecPrf ← do
-        let comp ← withLocalDeclsD stateDecls fun cs => do
-          let tup := mkTupleE rd.stateTys.toList (embs.toList ++ cs.toList)
-          let penv : Env := { Op, Opc := opcExt, opWrap := wrapBase, SOp, F := kcExt,
-                              V := denoteV, subst := [], defs, pfDefs, inFlight,
-                              pending, recVerdicts, recBodies, noSpill := true, pf := true,
-                              recMode := true, recTps := some (rd.σTp, ρTp) }
-          let (_, pf?) ←
-            if fnCount == 0 then penv.walkTop ρTp (cbH.beta #[tup])
-            else
-              -- walk at the **kf-tuple** (the embedding stand-in is an unmapped fvar, so
-              -- projections stay closed and feed through directly); the kernel reconciles the
-              -- shape difference against `bodyCode` by beta/iota at the literal state
-              withLocalDeclD `kf rd.stateTys[0]! fun kf => do
-              let tupK := mkTupleE rd.stateTys.toList (#[kf] ++ cs).toList
-              let src := ((cb.beta (hosts ++ #[kf])).headBeta).beta #[tupK]
-              -- the components self-map so the walk makes the *same* reification choices as
-              -- the abstract walk at a symbolic state (partial ops must line up)
-              let csSelf := cs.toList.map fun c => (c.fvarId!, c)
-              let penv2 := { penv with subst :=
-                (hosts[0]!.fvarId!, kf) :: (csSelf ++ penv.subst) }
-              let r ← penv2.walkTop ρTp src
-              -- restore the embedding for the walking device in the built proof
-              pure (r.1, r.2.map fun pf =>
-                { pf with e := pf.e.replaceFVar kf embs[0]! })
-          let some proof := pf? | throwError "reflect%: internal: rec hspec produced no proof"
-          unless proof.isEq do throwError "reflect%: internal: rec hspec must be an equality"
-          let want ← mkEq (mkApp2 denC ρTp (mkApp bodyCode tup))
-            (← mkAppM ``ofFree #[mkApp cbH tup])
-          mkLambdaFVars cs (← mkExpectedTypeHint proof.e want)
-        repackage comp fun N => do
-          mkEq (mkApp2 denC ρTp (mkApp bodyCode N)) (← mkAppM ``ofFree #[mkApp cbH N])
-      let hrunPrf ← do
-        let stmt ← withLocalDeclsD stateDecls fun cs => do
-          let tup := mkTupleE rd.stateTys.toList (embs.toList ++ cs.toList)
-          mkForallFVars cs (← mkEq (← mkAppM ``runSrc #[fW, mkApp cbH tup]) (mkApp fW tup))
-        let tac ← `(by intro $[$compIds]*
-                       rcases $recId:ident with _ | m <;>
-                         first | rfl | exact Freigen.Free.bind_pure _)
-        let comp ← elabTermEnsuringType tac (some stmt)
-        repackage comp fun N => do
-          mkEq (← mkAppM ``runSrc #[fW, mkApp cbH N]) (mkApp fW N)
-      let hclPrf ← do
-        let stmt ← withLocalDeclsD stateDecls fun cs => do
-          let tup := mkTupleE rd.stateTys.toList (embs.toList ++ cs.toList)
-          mkForallFVars cs
-            (← mkAppM ``callsLtP #[μE, Papp, mkApp μE tup, mkApp cbH tup])
-        let tac ← `(by intro $[$compIds]*
-                       rcases $recId:ident with _ | m <;>
-                         (repeat' first | apply And.intro | intro _) <;>
-                         (try simp only []) <;> (first | omega | rfl | trivial))
-        let comp ← elabTermEnsuringType tac (some stmt)
-        repackage comp fun N => mkAppM ``callsLtP #[μE, Papp, mkApp μE N, mkApp cbH N]
-      -- the totalization bridge: `goT ⟨states⟩ = source states hyps` (induction on the recursion
-      -- component; each case is `rfl`-strength — `Nat.rec` iota + the source's own equation +
-      -- proof irrelevance across the differing `Fin.mk` proofs).  Only needed when hypotheses
-      -- exist (else `fW` *is* the source).
-      let bridgePrf ← if !hasHyps then pure (Expr.const ``Unit.unit []) else do
-        let stmt ← withLocalDeclsD stateDecls fun cs => do
-          withRecTelescope shape sig.cName sig.cValInst sig.fArgs (hosts ++ cs) fun hs vals => do
-            let tup := mkTupleE rd.stateTys.toList (embs.toList ++ cs.toList)
-            mkForallFVars (cs ++ hs) (← mkEq (mkApp goTH tup) (mkAppN sig.cValInst vals))
-        let cId := mkIdent sig.cName
-        let hypIds := (Array.range rd.hypPos.size).map fun i => mkIdent (Name.mkSimple s!"h{i}")
-        let otherIds := ((Array.range kSt).filter (· ≥ fnCount)).filterMap fun i =>
-          if i == rd.recIdx then none else some (mkIdent (Name.mkSimple s!"c{i}"))
-        let introHyps : Array (TSyntax `tactic) ←
-          if hypIds.isEmpty then pure #[] else pure #[← `(tactic| intro $[$hypIds]*)]
-        let zeroSeq ← `(Lean.Parser.Tactic.tacticSeq|
-          $[$introHyps]*
-          first | rfl | rw [$cId:ident])
-        let succSeq ← `(Lean.Parser.Tactic.tacticSeq|
-          $[$introHyps]*
-          rw [$cId:ident]
-          first | apply ih | rfl)
-        let tac ←
-          if otherIds.isEmpty then
-            `(by intro $[$compIds]*
-                 induction $recId:ident with
-                 | zero => $zeroSeq
-                 | succ m ih => $succSeq)
+            let csSelf := cs.toList.map fun c => (c.fvarId!, c)
+            let penv1 := { penv with subst := csSelf }
+            penv1.walkTop ρTp (cbH.beta #[tup])
           else
-            `(by intro $[$compIds]*
-                 induction $recId:ident generalizing $[$otherIds]* with
-                 | zero => $zeroSeq
-                 | succ m ih => $succSeq)
-        elabTermEnsuringType tac (some stmt)
-      -- `mrec` adequacy at this monomorphisation, and the call-site subroutine + equation
-      let recSoundApp ← mkAppOptM ``recSoundP
-        #[Op, SOp, rd.σTp, ρTp, μE, Papp, bodyCode, cbH, fW, hspecPrf, hrunPrf, hclPrf]
+            -- walk at the **kf-tuple** (the embedding stand-in is an unmapped fvar, so it can
+            -- be an atom); the components self-map so the walk makes the *same* reification
+            -- choices as the abstract walk at a symbolic state (partial ops must line up)
+            withLocalDeclD `kf rd.stateTys[0]! fun kf => do
+            let tupK := mkTupleE rd.stateTys.toList (#[kf] ++ cs).toList
+            let src := ((cb.beta (hosts ++ #[kf])).headBeta).beta #[tupK]
+            let csSelf := cs.toList.map fun c => (c.fvarId!, c)
+            let penv2 := { penv with subst :=
+              (hosts[0]!.fvarId!, kf) :: (csSelf ++ penv.subst) }
+            let r ← penv2.walkTop ρTp src
+            -- restore the embedding for the walking device in the built proof
+            pure (r.1, r.2.map fun pf =>
+              { pf with e := pf.e.replaceFVar kf embs[0]! })
+        let some proof := pf? | throwError "reflect%: internal: rec hspec produced no proof"
+        unless proof.isEq do throwError "reflect%: internal: rec hspec must be an equality"
+        -- `mrec bodyD tup = interp bodyD (ofFree (cb tup))` — the LHS unfolds to
+        -- `interp bodyD (bodyD tup)` definitionally, then rewrites by the walk's equality
+        let treeTy ← inferType (← mkAppM ``ofFree #[mkApp cbH tup])
+        let interpFn ← withLocalDeclD `t treeTy fun t => do
+          mkLambdaFVars #[t] (← mkAppM ``ITree.interp #[bodyD, t])
+        let lifted ← mkAppM ``congrArg #[interpFn, ← mkExpectedTypeHint proof.e
+          (← mkEq (mkApp bodyD tup) (← mkAppM ``ofFree #[mkApp cbH tup]))]
+        let want ← mkEq (← mkAppM ``ITree.mrec #[bodyD, tup])
+          (← mkAppM ``ITree.interp #[bodyD, ← mkAppM ``ofFree #[mkApp cbH tup]])
+        mkLambdaFVars cs (← mkExpectedTypeHint lifted want)
+      -- the equation seeded for call sites, by the source's own functional induction:
+      -- `∀ (value args) (hyps), mrec bodyD ⟨emb f₀, args⟩ ≈ ofFree (pure (go args))` —
+      -- `fun_induction` supplies the per-recursive-call adequacy facts *with their proofs*,
+      -- each case closing by one `mrec` unfolding (`hspecComp`) and leaf-wise plugging
+      let hspecStmt ← inferType hspecComp
+      let (coreStmt, corePending) ← do
+        let mut binders : Array (Name × (Array Expr → TermElabM Expr)) := #[]
+        let mut fullArgs := sig.fArgs
+        -- rebuild the source telescope: mono/fn-host positions fixed, the rest fresh binders
+        let mut varying : Array (Nat × Bool) := #[]  -- (fArg position, isHyp)
+        for j in [0:sig.valuePos.size] do
+          if j < fnCount then
+            fullArgs := fullArgs.set! (sig.valuePos[j]!) hosts[j]!
+          else
+            varying := varying.push (sig.valuePos[j]!, false)
+        for h in rd.hypPos do varying := varying.push (h, true)
+        let varying' := varying.qsort (·.1 < ·.1)
+        let fullArgs0 := fullArgs
+        let fnTy ← inferType sig.cValInst
+        let stmt ← withLocalDeclsD (varying'.map fun (j, _) =>
+            (Name.mkSimple s!"z{j}", fun prev => do
+              let mut fa := fullArgs0
+              for i in [0:prev.size] do fa := fa.set! (varying'[i]!.1) prev[i]!
+              -- the parameter's *declared* type at the (partially abstracted) earlier args
+              let rest ← instantiateForall fnTy (fa.extract 0 j)
+              pure rest.bindingDomain!)) fun zs => do
+          let mut fa := fullArgs0
+          for i in [0:zs.size] do fa := fa.set! (varying'[i]!.1) zs[i]!
+          -- the object state at these arguments (fn slots: the embeddings)
+          let stateVals := (Array.range kSt).map fun i =>
+            if i < fnCount then embs[i]! else fa[sig.valuePos[i]!]!
+          let tup := mkTupleE rd.stateTys.toList stateVals.toList
+          let srcApp := mkAppN sig.cValInst fa
+          let srcTree ←
+            if sig.isPure then
+              mkAppOptM ``FreeE.pure #[εEK, arityEK, SOp, rd.ρValTy, srcApp]
+            else pure srcApp
+          let lhs ← mkAppM ``ITree.mrec #[bodyD, tup]
+          let rhs ← mkAppM ``ofFree #[srcTree]
+          mkForallFVars zs (← mkAppM ``ITree.Eutt #[lhs, rhs])
+        pure (← mkArrow hspecStmt stmt, varying')
+      let cId := mkIdent sig.cName
+      let zIds := (Array.range corePending.size).map fun i => mkIdent (Name.mkSimple s!"z{i}")
+      let tac ← `(by intro hcomp $[$zIds]*
+                     fun_induction $cId:ident <;>
+                     · simp only [$cId:ident]
+                       rw [hcomp]
+                       refine Freigen.adeqPlug ?_
+                       repeat first
+                         | assumption
+                         | apply Freigen.Plug.pure
+                         | apply Freigen.Plug.callTail _ (by assumption)
+                         | apply Freigen.Plug.call _ (by assumption)
+                         | apply Freigen.Plug.op
+                         | apply Freigen.Plug.hop
+                         | intro _
+                         | split)
+      let core := mkApp (← elabTermEnsuringType tac (some coreStmt)) hspecComp
+      -- the call-site subroutine, and `core` repackaged over the tupled `HList` argument (the
+      -- state/`core`-conclusion mismatch — `⟨emb f₀, projections⟩` vs the site's tuple — is a
+      -- deferred hint: definitional once the enclosing `lam` node instantiates the fn atom)
       let hlistTy ← mkAppM ``HList #[denoteV, sig.asList]
       let cf ← withLocalDeclD `args hlistTy fun hargs => do
-        let bodyFn ← withLocalDeclD `s (mkApp denoteV rd.σTp) fun s => do
-          mkLambdaFVars #[s] (mkApp2 denC ρTp (mkApp bodyCode s))
         mkLambdaFVars #[hargs]
-          (← mkAppM ``ITree.mrec #[bodyFn, ← mkAppM ``HList.head #[hargs]])
-      -- the call-site equation `cf args ≈ ret v` (pure) / `≈ ofFree (go …)` (`Free`)
-      let εE := mkApp (Lean.mkConst ``Effect []) Op
-      let arityE := mkApp (Lean.mkConst ``Effect.arity []) Op
-      let endpointOf (v : Expr) : MetaM Expr :=
-        if sig.isPure then mkAppOptM ``ITree.ret #[εE, arityE, rd.ρValTy, v]
-        else mkAppM ``ofFree #[v]
+          (← mkAppM ``ITree.mrec #[bodyD, ← mkAppM ``HList.head #[hargs]])
       let bodyProofLam ← withLocalDeclD `args hlistTy fun hargs => do
         let sE ← mkAppM ``HList.head #[hargs]
         let projs := (mkTupleProjs rd.stateTys.toList sE).toArray
         let stateVals := (Array.range kSt).map fun i =>
           if i < fnCount then hosts[i]! else projs[i]!
         withRecTelescope shape sig.cName sig.cValInst sig.fArgs stateVals fun hs vals => do
+          let coreArgs := corePending.map fun (j, isHyp) =>
+            if isHyp then hs[rd.hypPos.idxOf j]!
+            else projs[sig.valuePos.idxOf j]!
           let goApp := mkAppN sig.cValInst vals
-          -- the invariant at the call site: the tuple's fn atom *is* the embedding once the
-          -- enclosing `lam` node instantiates it — a deferred hint
-          let hPsite ←
-            if fnCount == 0 then pure (Lean.mkConst ``True.intro)
-            else do
-              let proj0 ← mkAppM ``Prod.fst #[sE]
-              mkExpectedTypeHint (← mkEqRefl proj0) (← mkEq proj0 embs[0]!)
-          let a1 := mkApp2 recSoundApp sE hPsite
-          let endTy ← mkAppM ``ITree.Eutt #[← pfLhs a1, ← endpointOf goApp]
-          if hasHyps then
-            let bridgeApp := mkAppN bridgePrf (projs.extract fnCount projs.size ++ hs)
-            let congrFn ← withLocalDeclD `v ρTy fun v => do
-              if sig.isPure then
-                mkLambdaFVars #[v] (← mkAppOptM ``ITree.ret #[εE, arityE, rd.ρValTy, v])
-              else
-                mkLambdaFVars #[v] (← mkAppM ``ofFree #[v])
-            let e2 ← mkAppM ``ITree.Eutt.of_eq #[← mkAppM ``congrArg #[congrFn, bridgeApp]]
-            let e2' ← mkExpectedTypeHint e2
-              (← mkAppM ``ITree.Eutt #[← pfRhs a1, ← endpointOf goApp])
-            let prf ← mkAppM ``ITree.Eutt.trans #[a1, e2']
-            mkLambdaFVars (#[hargs] ++ hs) prf
-          else
-            -- `fW` is the source itself: the adequacy *is* the equation (endpoint by defeq)
-            mkLambdaFVars (#[hargs] ++ hs) (← mkExpectedTypeHint a1 endTy)
+          let endp ←
+            if sig.isPure then
+              mkAppOptM ``ITree.ret #[εEK, arityEK, rd.ρValTy, goApp]
+            else mkAppM ``ofFree #[goApp]
+          let want ← mkAppM ``ITree.Eutt #[← mkAppM ``ITree.mrec #[bodyD, sE], endp]
+          mkLambdaFVars (#[hargs] ++ hs)
+            (← mkExpectedTypeHint (mkAppN core coreArgs) want)
       pfDefs.modify (·.push { name := sig.cName, asList := sig.asList, retTp := ρTp, cf,
                               bodyProof := ← mkLambdaFVars hosts bodyProofLam,
                               bodyProofEq := false, key := sig.monoArgs })

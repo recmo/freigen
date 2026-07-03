@@ -45,8 +45,8 @@ namespace Freigen
 /-- info: 'Freigen.ITree.Eutt.trans' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms ITree.Eutt.trans
 
-/-- info: 'Freigen.recSound' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs in #print axioms recSound
+/-- info: 'Freigen.adeqPlug' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms adeqPlug
 
 /-- info: 'Freigen.ITree.interp_bind' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms ITree.interp_bind

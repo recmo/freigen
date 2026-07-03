@@ -9,7 +9,8 @@ whose worker `go` is a structural `0`/`succ` recursion over `Array.push`, carryi
 hypothesis.  Because it is *not named* `Vector.ofFn`, the reflector's `vgen` arm does not fire:
 instead the recursion itself reflects — `go` spills as a **`rec_` definition over `push`**
 (the hypothesis erased, `f`/`n`/`α` monomorphised, the state `(acc, i)` tupled, adequacy by
-`recSound` + the totalization bridge), and the size proof carries into the `arr-to-vec` upcast. -/
+the source's own functional induction + `adeqPlug`), and the size proof carries into the
+`arr-to-vec` upcast. -/
 
 namespace Freigen
 

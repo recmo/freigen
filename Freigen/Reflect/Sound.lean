@@ -470,91 +470,46 @@ section RecAdequacy
 open Freigen.ITree
 variable {σ ρ : Type}
 
-/-- Run a call-body with the source `e` plugged in at each call (base events pass through; a
-    scoped block's own calls are plugged too). -/
-def runSrc (e : σ → Free X SOp ρ) :
-    {γ : Type} → FreeC X σ ρ SOp γ → Free X SOp γ
-  | _, .pure a => .pure a
-  | _, .op (.inl ev) c => FreeE.op ev (fun x => runSrc e (c x))
-  | _, .op (.inr s) c => FreeE.bind (e s) (fun v => runSrc e (c v))
-  | _, .hop s b c => .hop s (runSrc e b) (fun x => runSrc e (c x))
+/-- A **leaf-wise plugging derivation**: the lifted body `t` (call events at its leaves) is
+    related to the source tree `u` obtained by replacing every call event with a source
+    computation *already known adequate at that state*.  No measure and no invariant appear:
+    the per-leaf adequacy facts arrive from the source function's own induction principle
+    (`fun_induction`), which quantifies them exactly at the recursive-call states — proofs
+    included. -/
+inductive Plug (body : σ → CompC X σ ρ ρ) :
+    {γ : Type} → FreeC X σ ρ SOp γ → Free X SOp γ → Prop
+  | pure {γ : Type} (a : γ) : Plug body (FreeE.pure a) (FreeE.pure a)
+  | op {γ : Type} (ev : Effect X) {c : _ → FreeC X σ ρ SOp γ} {c' : _ → Free X SOp γ} :
+      (∀ x, Plug body (c x) (c' x)) → Plug body (FreeE.op (.inl ev) c) (FreeE.op ev c')
+  | call {γ : Type} (s : σ) {m : Free X SOp ρ} {c : ρ → FreeC X σ ρ SOp γ}
+      {c' : ρ → Free X SOp γ} :
+      ITree.mrec body s ≈ ofFree m → (∀ x, Plug body (c x) (c' x)) →
+      Plug body (FreeE.op (.inr s) c) (FreeE.bind m c')
+  | hop {γ β : Type} (so : SOp β) {b : FreeC X σ ρ SOp β} {b' : Free X SOp β}
+      {c : β → FreeC X σ ρ SOp γ} {c' : β → Free X SOp γ} :
+      Plug body b b' → (∀ x, Plug body (c x) (c' x)) → Plug body (FreeE.hop so b c) (FreeE.hop so b' c')
 
-/-- Every call argument in the body has measure `μ` strictly below `bound`. -/
-def callsLt (μ : σ → Nat) (bound : Nat) : {γ : Type} → FreeC X σ ρ SOp γ → Prop
-  | _, .pure _ => True
-  | _, .op (.inl _) c => ∀ x, callsLt μ bound (c x)
-  | _, .op (.inr s) c => μ s < bound ∧ ∀ x, callsLt μ bound (c x)
-  | _, .hop _ b c => callsLt μ bound b ∧ ∀ x, callsLt μ bound (c x)
+/-- A **tail** call: the call's value is returned directly. -/
+theorem Plug.callTail {body : σ → CompC X σ ρ ρ} (s : σ) {m : Free X SOp ρ}
+    (hm : ITree.mrec body s ≈ ofFree m) : Plug body (FreeE.op (.inr s) FreeE.pure) m :=
+  Free.bind_pure m ▸ Plug.call s hm (fun x => Plug.pure x)
 
-/-- **The adequacy step.** Interpreting a call-body is `≈` to running it with the source plugged
-    in, given the source is adequate below `bound` and the body only calls below `bound`. -/
-theorem adeqBody (body : σ → CompC X σ ρ ρ) (e : σ → Free X SOp ρ) (μ : σ → Nat)
-    (bound : Nat) (Ho : ∀ k, μ k < bound → mrec body k ≈ ofFree (e k)) :
-    ∀ {γ : Type} (t : FreeC X σ ρ SOp γ), callsLt μ bound t →
-      interp body (ofFree t) ≈ ofFree (runSrc e t) := by
-  intro γ t
-  induction t with
-  | pure a => intro _; simp only [ofFree, runSrc, interp_ret]; exact eutt_refl _
-  | op ev c ih =>
-      cases ev with
-      | inl ev' =>
-          intro h
-          simp only [ofFree, runSrc, interp_vis_base]
-          exact eutt_vis_cong _ (fun x => ih x (h x))
-      | inr s =>
-          intro h
-          simp only [ofFree, runSrc, interp_vis_call, interp_bind, ofFree_bind]
-          refine eutt_tau_left ?_
-          exact eutt_bind_cong (Ho s h.1) (fun x => ih x (h.2 x))
-  | hop s b c ihb ihc =>
-      intro h
-      simp only [ofFree, runSrc, interp_bind]
-      exact eutt_bind_cong (ihb h.1) (fun x => ihc x (h.2 x))
-
-/-- **`mrec` adequacy (strong-induction shell on the measure)** over `ofFree`. -/
-theorem mrec_adequacy (body : σ → CompC X σ ρ ρ) (e : σ → Free X SOp ρ) (μ : σ → Nat)
-    (Hstep : ∀ N, (∀ k, μ k < μ N → mrec body k ≈ ofFree (e k)) → mrec body N ≈ ofFree (e N)) :
-    ∀ N, mrec body N ≈ ofFree (e N) := by
-  suffices H : ∀ n N, μ N ≤ n → mrec body N ≈ ofFree (e N) from fun N => H (μ N) N (Nat.le_refl _)
-  intro n
-  induction n with
-  | zero =>
-      intro N hN
-      exact Hstep N (fun k hk => absurd (Nat.lt_of_lt_of_le hk hN) (Nat.not_lt_zero _))
-  | succ n ih =>
-      intro N hN
-      exact Hstep N (fun k hk => ih k (Nat.le_of_lt_succ (Nat.lt_of_lt_of_le hk hN)))
-
-/-- `adeqBody` with the `runSrc = e` bridge folded in. -/
-theorem adeqBody' (body : σ → CompC X σ ρ ρ) (e : σ → Free X SOp ρ) (μ : σ → Nat)
-    (N : σ) (t : FreeC X σ ρ SOp ρ)
-    (IH : ∀ k, μ k < μ N → mrec body k ≈ ofFree (e k)) (hcl : callsLt μ (μ N) t)
-    (hrun : runSrc e t = e N) :
-    interp body (ofFree t) ≈ ofFree (e N) := by
-  rw [← hrun]; exact adeqBody body e μ (μ N) IH t hcl
-
-/-- **Generic recursion soundness** — what `reflect%` emits.  Given the reflected call-body
-    `body` (a `Code` over the call-extended vocabulary) and the source `f`, provided each call's
-    measure is below its argument's (`hcl`) and running the body with `f` plugged in recovers
-    `f` (`hrun`), the `mrec` denotation is `≈ ofFree ∘ f`. -/
-theorem recSound {σT ρT : Tp} (μ : Tp.denote X σT → Nat)
-    (body : Tp.denote X σT →
-      Code X (CallOp (OpT X) σT ρT) SOp
-        (KCE X (Effect X ⊕ Tp.denote X σT) (callBr Effect.arity (Tp.denote X ρT)))
-        (Tp.denote X) ρT)
-    (cb : Tp.denote X σT → FreeC X (Tp.denote X σT) (Tp.denote X ρT) SOp (Tp.denote X ρT))
-    (f : Tp.denote X σT → Free X SOp (Tp.denote X ρT))
-    (hspec : ∀ N, denoteC ((injD X).withCall σT ρT) (body N) = ofFree (cb N))
-    (hrun : ∀ N, runSrc f (cb N) = f N)
-    (hcl : ∀ N, callsLt μ (μ N) (cb N)) :
-    ∀ N, mrec (fun s => denoteC ((injD X).withCall σT ρT) (body s)) N ≈ ofFree (f N) := by
-  have hbody : (fun s => denoteC ((injD X).withCall σT ρT) (body s))
-      = fun s => ofFree (cb s) := funext hspec
-  intro N
-  rw [hbody]
-  refine mrec_adequacy _ f μ ?_ N
-  intro M IH
-  exact adeqBody' _ _ μ _ _ IH (hcl M) (hrun M)
+/-- **The plugging adequacy step**: interpreting a lifted body is `≈` to any leaf-wise
+    plugging of it. -/
+theorem adeqPlug {body : σ → CompC X σ ρ ρ} {γ : Type}
+    {t : FreeC X σ ρ SOp γ} {u : Free X SOp γ} (h : Plug body t u) :
+    interp body (ofFree t) ≈ ofFree u := by
+  induction h with
+  | pure a => simp only [ofFree, interp_ret]; exact eutt_refl _
+  | op ev _ ih =>
+      simp only [ofFree, interp_vis_base]
+      exact eutt_vis_cong _ ih
+  | call s hm _ ih =>
+      simp only [ofFree, interp_vis_call, interp_bind, ofFree_bind]
+      exact eutt_tau_left (eutt_bind_cong hm ih)
+  | hop so _ _ ihb ihc =>
+      simp only [ofFree, interp_bind]
+      exact eutt_bind_cong ihb ihc
 
 end RecAdequacy
 
@@ -728,108 +683,6 @@ theorem sc_appC {a b α : Tp} (f : Tp.denote X (.fn a b)) (x : Tp.denote X a)
   rw [hf, sumL_ret, bind_ret]
 
 end RecBody
-
-/-! ## Invariant-relativized recursion adequacy
-
-A recursion whose state carries **function values that the recursion never modifies** (they
-pass through every self-call unchanged) is proved adequate *relative to the invariant* that
-those components are embeddings of fixed pure functions — the source function then never has to
-be applied at an arbitrary Kleisli value.  These mirror the unrelativized block with every
-hypothesis guarded by `P` (preserved by calls, by construction of the lifted body). -/
-
-section RecAdequacyP
-open Freigen.ITree
-variable {σ ρ : Type}
-
-/-- `p.1 = a` pins the whole pair (used to repackage component-form obligations to `P`-form). -/
-theorem fst_eq_tuple {A B : Type} {p : A × B} {a : A} (h : p.fst = a) : p = (a, p.snd) := by
-  cases p; cases h; rfl
-
-/-- Every call argument satisfies `P` and has measure strictly below `bound`. -/
-def callsLtP (μ : σ → Nat) (P : σ → Prop) (bound : Nat) :
-    {γ : Type} → FreeC X σ ρ SOp γ → Prop
-  | _, .pure _ => True
-  | _, .op (.inl _) c => ∀ x, callsLtP μ P bound (c x)
-  | _, .op (.inr s) c => (μ s < bound ∧ P s) ∧ ∀ x, callsLtP μ P bound (c x)
-  | _, .hop _ b c => callsLtP μ P bound b ∧ ∀ x, callsLtP μ P bound (c x)
-
-/-- The adequacy step, `P`-relativized. -/
-theorem adeqBodyP (body : σ → CompC X σ ρ ρ) (e : σ → Free X SOp ρ) (μ : σ → Nat)
-    (P : σ → Prop) (bound : Nat)
-    (Ho : ∀ k, μ k < bound → P k → mrec body k ≈ ofFree (e k)) :
-    ∀ {γ : Type} (t : FreeC X σ ρ SOp γ), callsLtP μ P bound t →
-      interp body (ofFree t) ≈ ofFree (runSrc e t) := by
-  intro γ t
-  induction t with
-  | pure a => intro _; simp only [ofFree, runSrc, interp_ret]; exact eutt_refl _
-  | op ev c ih =>
-      cases ev with
-      | inl ev' =>
-          intro h
-          simp only [ofFree, runSrc, interp_vis_base]
-          exact eutt_vis_cong _ (fun x => ih x (h x))
-      | inr s =>
-          intro h
-          simp only [ofFree, runSrc, interp_vis_call, interp_bind, ofFree_bind]
-          refine eutt_tau_left ?_
-          exact eutt_bind_cong (Ho s h.1.1 h.1.2) (fun x => ih x (h.2 x))
-  | hop s b c ihb ihc =>
-      intro h
-      simp only [ofFree, runSrc, interp_bind]
-      exact eutt_bind_cong (ihb h.1) (fun x => ihc x (h.2 x))
-
-/-- `mrec` adequacy, `P`-relativized (strong induction on the measure). -/
-theorem mrec_adequacyP (body : σ → CompC X σ ρ ρ) (e : σ → Free X SOp ρ) (μ : σ → Nat)
-    (P : σ → Prop)
-    (Hstep : ∀ N, P N → (∀ k, μ k < μ N → P k → mrec body k ≈ ofFree (e k)) →
-      mrec body N ≈ ofFree (e N)) :
-    ∀ N, P N → mrec body N ≈ ofFree (e N) := by
-  suffices H : ∀ n N, P N → μ N ≤ n → mrec body N ≈ ofFree (e N) from
-    fun N hP => H (μ N) N hP (Nat.le_refl _)
-  intro n
-  induction n with
-  | zero =>
-      intro N hP hN
-      exact Hstep N hP (fun k hk _ => absurd (Nat.lt_of_lt_of_le hk hN) (Nat.not_lt_zero _))
-  | succ n ih =>
-      intro N hP hN
-      exact Hstep N hP (fun k hk hPk => ih k hPk (Nat.le_of_lt_succ (Nat.lt_of_lt_of_le hk hN)))
-
-/-- `adeqBodyP` with the `runSrc = e` bridge folded in. -/
-theorem adeqBodyP' (body : σ → CompC X σ ρ ρ) (e : σ → Free X SOp ρ) (μ : σ → Nat)
-    (P : σ → Prop) (N : σ) (t : FreeC X σ ρ SOp ρ)
-    (IH : ∀ k, μ k < μ N → P k → mrec body k ≈ ofFree (e k)) (hcl : callsLtP μ P (μ N) t)
-    (hrun : runSrc e t = e N) :
-    interp body (ofFree t) ≈ ofFree (e N) := by
-  rw [← hrun]; exact adeqBodyP body e μ P (μ N) IH t hcl
-
-/-- **Invariant-relativized recursion soundness**: as `recSound`, with every obligation
-    available only at `P`-states, and the conclusion likewise. -/
-theorem recSoundP {σT ρT : Tp} (μ : Tp.denote X σT → Nat) (P : Tp.denote X σT → Prop)
-    (body : Tp.denote X σT →
-      Code X (CallOp (OpT X) σT ρT) SOp
-        (KCE X (Effect X ⊕ Tp.denote X σT) (callBr Effect.arity (Tp.denote X ρT)))
-        (Tp.denote X) ρT)
-    (cb : Tp.denote X σT → FreeC X (Tp.denote X σT) (Tp.denote X ρT) SOp (Tp.denote X ρT))
-    (f : Tp.denote X σT → Free X SOp (Tp.denote X ρT))
-    (hspec : ∀ N, P N → denoteC ((injD X).withCall σT ρT) (body N) = ofFree (cb N))
-    (hrun : ∀ N, P N → runSrc f (cb N) = f N)
-    (hcl : ∀ N, P N → callsLtP μ P (μ N) (cb N)) :
-    ∀ N, P N →
-      mrec (fun s => denoteC ((injD X).withCall σT ρT) (body s)) N ≈ ofFree (f N) := by
-  intro N hP
-  -- the body agrees with the lifted intermediary at every `P`-state (`hspec`), and calls stay
-  -- in `P`, so the adequacy induction only ever sees agreeing states
-  refine mrec_adequacyP _ f μ P ?_ N hP
-  intro M hPM IH
-  have h1 : mrec (fun s => denoteC ((injD X).withCall σT ρT) (body s)) M
-      = interp (fun s => denoteC ((injD X).withCall σT ρT) (body s)) (ofFree (cb M)) := by
-    show interp _ (denoteC ((injD X).withCall σT ρT) (body M)) = _
-    rw [hspec M hPM]
-  rw [h1]
-  exact adeqBodyP' _ f μ P M (cb M) IH (hcl M hPM) (hrun M hPM)
-
-end RecAdequacyP
 
 
 end Freigen
