@@ -33,9 +33,9 @@ namespace Freigen
 
 /-- The per-DSL data `serialize` needs: how to name each first-order op and each scoped construct.
     One `instance` per signature replaces threading `name`/`sname` through every call site. -/
-class DSL (Op : Type → Type → Type 1) (SOp : Type → Type) where
+class DSL (Op : TpF → TpF → Type) (SOp : Type → Type) where
   /-- Print a first-order op (`Op I R`) as its surface name, e.g. `assert`. -/
-  opName : {I R : Type} → Op I R → String
+  opName : {I R : TpF} → Op I R → String
   /-- Print a scoped construct (`SOp β`) as its surface name, e.g. `hint`. -/
   scopeName : {β : Type} → SOp β → String
 

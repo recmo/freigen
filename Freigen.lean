@@ -12,6 +12,7 @@ import Freigen.Examples.Circuit.Basic
 import Freigen.Examples.Storage
 import Freigen.Examples.Recursion
 import Freigen.Examples.OfFnClone
+import Freigen.Examples.FirstClass
 
 /-!
 # Freigen — the root module

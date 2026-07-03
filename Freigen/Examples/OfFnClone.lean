@@ -37,60 +37,80 @@ theorem MyArray.size_ofFn {α : Type} {n : Nat} (f : Fin n → α) : (MyArray.of
 def MyVector.ofFn {α : Type} {n : Nat} (f : Fin n → α) : Vector α n :=
   ⟨MyArray.ofFn f, MyArray.size_ofFn f⟩
 
-/-- Index (by a program input) into a vector built by the clone: the whole chain —
-    `MyVector.ofFn → Vector.mk → arr-to-vec ∘ MyArray.ofFn → go` — reflects structurally, `go`
-    spilling as a recursive definition over `push` (never unrolled, never evaluated into a
-    literal). -/
+/-- Index (by a program input) into a vector built by the clone: the whole chain reflects
+    structurally — **every source definition survives, fully generic**: `go` as a recursive
+    definition over `push` whose state *carries the function* (`f` is invariant through the
+    recursion, so the adequacy is relativized to embedded states), the wrappers as `def`s with
+    real `(fn …)` parameters, and `main` building the lambda once. -/
 def useOfFn (i : Fin 4) : Free NoOp NoScope Nat :=
   pure ((MyVector.ofFn (fun j => j.val * 2))[i])
 
 reflect_def useOfFnC := useOfFn
 /-- info: Freigen.useOfFnC_sound (i : Fin 4) :
-  ITree.Eutt (denoteProg (useOfFnC (KC NoOp) Tp.denote) (HList.cons i HList.nil)) (ofFree (useOfFn i)) -/
+  ITree.Eutt (denoteProg (useOfFnC (KC NoOp) (Tp.denote NoOp)) (HList.cons i HList.nil)) (ofFree (useOfFn i)) -/
 #guard_msgs (whitespace := lax) in
 #check useOfFnC_sound
 
-/-- info:
-(program
-  (rec go ((x0 (prod (array nat) nat))) (array nat)
+/-- info: (program
+  (rec go ((x0 (prod (fn (fin 4) nat) (prod (array nat) nat)))) (array nat)
     (block
-      (let v1 nat (snd x0))
-      (let v2 nat (lit 0))
-      (let v3 bool (eq v1 v2))
-      (if v3
+      (let v1 (fn (fin 4) nat) (fst x0))
+      (let v2 (prod (array nat) nat) (snd x0))
+      (let v3 nat (snd v2))
+      (let v4 nat (lit 0))
+      (let v5 bool (eq v3 v4))
+      (if v5
         (block
-          (let v4 (array nat) (fst x0))
-          (ret v4))
+          (let v6 (prod (array nat) nat) (snd x0))
+          (let v7 (array nat) (fst v6))
+          (ret v7))
         (block
-          (let v5 (array nat) (fst x0))
-          (let v6 nat (lit 4))
-          (let v7 nat (snd x0))
-          (let v8 nat (lit 1))
-          (let v9 nat (sub v7 v8))
-          (let v10 nat (sub v6 v9))
-          (let v11 nat (lit 1))
-          (let v12 nat (sub v10 v11))
-          (let v13 (fin 4) (nat-to-fin 4 v12))
-          (let v14 nat (fin-val v13))
-          (let v15 nat (lit 2))
-          (let v16 nat (mul v14 v15))
-          (let v17 (array nat) (push v5 v16))
-          (let v18 nat (snd x0))
-          (let v19 nat (lit 1))
-          (let v20 nat (sub v18 v19))
-          (let v21 (prod (array nat) nat) (pair v17 v20))
-          (let v22 (array nat) (self v21))
-          (ret v22)))))
-  (main ((x23 (fin 4))) nat
+          (let v8 (prod (array nat) nat) (snd x0))
+          (let v9 (array nat) (fst v8))
+          (let v10 nat (lit 4))
+          (let v11 (prod (array nat) nat) (snd x0))
+          (let v12 nat (snd v11))
+          (let v13 nat (lit 1))
+          (let v14 nat (sub v12 v13))
+          (let v15 nat (sub v10 v14))
+          (let v16 nat (lit 1))
+          (let v17 nat (sub v15 v16))
+          (let v18 (fin 4) (nat-to-fin 4 v17))
+          (let v19 nat (app v1 v18))
+          (let v20 (array nat) (push v9 v19))
+          (let v21 (prod (array nat) nat) (snd x0))
+          (let v22 nat (snd v21))
+          (let v23 nat (lit 1))
+          (let v24 nat (sub v22 v23))
+          (let v25 (prod (array nat) nat) (pair v20 v24))
+          (let v26 (prod (fn (fin 4) nat) (prod (array nat) nat)) (pair v1 v25))
+          (let v27 (array nat) (self v26))
+          (ret v27)))))
+  (def ofFn ((x28 (fn (fin 4) nat))) (array nat)
     (block
-      (let v24 (array nat) (lit ()))
-      (let v25 nat (lit 4))
-      (let v26 (prod (array nat) nat) (pair v24 v25))
-      (let v27 (array nat) (call go v26))
-      (let v28 (vec nat 4) (arr-to-vec 4 v27))
-      (let v29 nat (fin-val x23))
-      (let v30 nat (vget v28 v29))
-      (ret v30))))
+      (let v29 (array nat) (lit ()))
+      (let v30 nat (lit 4))
+      (let v31 (prod (array nat) nat) (pair v29 v30))
+      (let v32 (prod (fn (fin 4) nat) (prod (array nat) nat)) (pair x28 v31))
+      (let v33 (array nat) (call go v32))
+      (ret v33)))
+  (def ofFn_2 ((x34 (fn (fin 4) nat))) (vec nat 4)
+    (block
+      (let v35 (array nat) (call ofFn x34))
+      (let v36 (vec nat 4) (arr-to-vec 4 v35))
+      (ret v36)))
+  (main ((x37 (fin 4))) nat
+    (block
+      (let v42 (fn (fin 4) nat) (lam ((x38 (fin 4)))
+        (block
+          (let v39 nat (fin-val x38))
+          (let v40 nat (lit 2))
+          (let v41 nat (mul v39 v40))
+          (ret v41))))
+      (let v43 (vec nat 4) (call ofFn_2 v42))
+      (let v44 nat (fin-val x37))
+      (let v45 nat (vget v43 v44))
+      (ret v45))))
 -/
 #guard_msgs (whitespace := lax) in #eval IO.println (serialize useOfFnC)
 
@@ -101,48 +121,59 @@ def pushLoop (x : Nat) : Free NoOp NoScope (Array Nat) :=
 
 reflect_def pushLoopC := pushLoop
 /-- info: Freigen.pushLoopC_sound (x : ℕ) :
-  ITree.Eutt (denoteProg (pushLoopC (KC NoOp) Tp.denote) (HList.cons x HList.nil)) (ofFree (pushLoop x)) -/
+  ITree.Eutt (denoteProg (pushLoopC (KC NoOp) (Tp.denote NoOp)) (HList.cons x HList.nil)) (ofFree (pushLoop x)) -/
 #guard_msgs (whitespace := lax) in
 #check pushLoopC_sound
 
-/-- info:
-(program
-  (rec go ((x0 (prod (array nat) nat))) (array nat)
+/-- info: (program
+  (rec go ((x0 (prod (fn (fin 4) nat) (prod (array nat) nat)))) (array nat)
     (block
-      (let v1 nat (snd x0))
-      (let v2 nat (lit 0))
-      (let v3 bool (eq v1 v2))
-      (if v3
+      (let v1 (fn (fin 4) nat) (fst x0))
+      (let v2 (prod (array nat) nat) (snd x0))
+      (let v3 nat (snd v2))
+      (let v4 nat (lit 0))
+      (let v5 bool (eq v3 v4))
+      (if v5
         (block
-          (let v4 (array nat) (fst x0))
-          (ret v4))
+          (let v6 (prod (array nat) nat) (snd x0))
+          (let v7 (array nat) (fst v6))
+          (ret v7))
         (block
-          (let v5 (array nat) (fst x0))
-          (let v6 nat (lit 4))
-          (let v7 nat (snd x0))
-          (let v8 nat (lit 1))
-          (let v9 nat (sub v7 v8))
-          (let v10 nat (sub v6 v9))
-          (let v11 nat (lit 1))
-          (let v12 nat (sub v10 v11))
-          (let v13 (fin 4) (nat-to-fin 4 v12))
-          (let v14 nat (fin-val v13))
-          (let v15 nat (lit 2))
-          (let v16 nat (mul v14 v15))
-          (let v17 (array nat) (push v5 v16))
-          (let v18 nat (snd x0))
-          (let v19 nat (lit 1))
-          (let v20 nat (sub v18 v19))
-          (let v21 (prod (array nat) nat) (pair v17 v20))
-          (let v22 (array nat) (self v21))
-          (ret v22)))))
-  (main ((x23 nat)) (array nat)
+          (let v8 (prod (array nat) nat) (snd x0))
+          (let v9 (array nat) (fst v8))
+          (let v10 nat (lit 4))
+          (let v11 (prod (array nat) nat) (snd x0))
+          (let v12 nat (snd v11))
+          (let v13 nat (lit 1))
+          (let v14 nat (sub v12 v13))
+          (let v15 nat (sub v10 v14))
+          (let v16 nat (lit 1))
+          (let v17 nat (sub v15 v16))
+          (let v18 (fin 4) (nat-to-fin 4 v17))
+          (let v19 nat (app v1 v18))
+          (let v20 (array nat) (push v9 v19))
+          (let v21 (prod (array nat) nat) (snd x0))
+          (let v22 nat (snd v21))
+          (let v23 nat (lit 1))
+          (let v24 nat (sub v22 v23))
+          (let v25 (prod (array nat) nat) (pair v20 v24))
+          (let v26 (prod (fn (fin 4) nat) (prod (array nat) nat)) (pair v1 v25))
+          (let v27 (array nat) (self v26))
+          (ret v27)))))
+  (main ((x28 nat)) (array nat)
     (block
-      (let v24 (array nat) (arr x23))
-      (let v25 nat (lit 4))
-      (let v26 (prod (array nat) nat) (pair v24 v25))
-      (let v27 (array nat) (call go v26))
-      (ret v27))))
+      (let v33 (fn (fin 4) nat) (lam ((x29 (fin 4)))
+        (block
+          (let v30 nat (fin-val x29))
+          (let v31 nat (lit 2))
+          (let v32 nat (mul v30 v31))
+          (ret v32))))
+      (let v34 (array nat) (arr x28))
+      (let v35 nat (lit 4))
+      (let v36 (prod (array nat) nat) (pair v34 v35))
+      (let v37 (prod (fn (fin 4) nat) (prod (array nat) nat)) (pair v33 v36))
+      (let v38 (array nat) (call go v37))
+      (ret v38))))
 -/
 #guard_msgs (whitespace := lax) in #eval IO.println (serialize pushLoopC)
 

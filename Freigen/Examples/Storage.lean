@@ -13,23 +13,23 @@ is a plain first-order free monad and never carries a `hop` node — yet it reus
 namespace Freigen
 
 /-- Store operations: read/write a `Nat` cell addressed by a `Nat`. -/
-inductive StoreOp : Type → Type → Type 1
-  | get : StoreOp Nat Nat
-  | set : StoreOp (Nat × Nat) Unit
+inductive StoreOp : TpF → TpF → Type
+  | get : StoreOp .nat .nat
+  | set : StoreOp (.prod .nat .nat) .unit
 
-def get (a : Nat) : Free StoreOp NoScope Nat := Free.perform StoreOp.get a
-def set (a v : Nat) : Free StoreOp NoScope Unit := Free.perform StoreOp.set (a, v)
+def get (a : Nat) : Free StoreOp NoScope Nat := Free.op StoreOp.get a .pure
+def set (a v : Nat) : Free StoreOp NoScope Unit := Free.op StoreOp.set (a, v) .pure
 
 /-- Operational semantics into a state monad (the store is a function `Nat → Nat`).  There are no
     scoped ops (`NoScope`), so the scoped handler is vacuous. -/
 def runStore {α} (p : Free StoreOp NoScope α) : StateM (Nat → Nat) α :=
-  p.run (fun o i => match o, i with
-    | .get, a      => fun s => (s a, s)
-    | .set, (a, v) => fun s => ((), fun x => if x == a then v else s x))
+  p.run (fun e => match e with
+    | .mk .get a      => fun s => (s a, s)
+    | .mk .set (a, v) => fun s => ((), fun x => if x == a then v else s x))
     (fun s _ => s.elim)
 
 /-- Op names for the serializer. -/
-def storeName {I R : Type} : StoreOp I R → String | .get => "get" | .set => "set"
+def storeName {I R : TpF} : StoreOp I R → String | .get => "get" | .set => "set"
 
 /-- The DSL instance: `NoScope` has no scoped constructs, so `scopeName` is vacuous. -/
 instance : DSL StoreOp NoScope where
@@ -45,7 +45,7 @@ def storeProg : Free StoreOp NoScope Nat := do
 
 /-- The same `reflect%` pipeline; no `hop` nodes, soundness for free. -/
 reflect_def storeC := storeProg
-/-- info: Freigen.storeC_sound : ITree.Eutt (denoteProg (storeC (KC StoreOp) Tp.denote) HList.nil) (ofFree storeProg) -/
+/-- info: Freigen.storeC_sound : ITree.Eutt (denoteProg (storeC (KC StoreOp) (Tp.denote StoreOp)) HList.nil) (ofFree storeProg) -/
 #guard_msgs (whitespace := lax) in
 #check storeC_sound
 

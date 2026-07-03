@@ -23,8 +23,8 @@ golden test.
 namespace Freigen
 
 /-- The circuit signature: constrain a boolean.  Witnesses come from `hint`, a scoped construct. -/
-inductive CircOp : Type → Type → Type 1
-  | assert : CircOp Bool Unit
+inductive CircOp : TpF → TpF → Type
+  | assert : CircOp .bool .unit
 
 /-- The `hint` scoped signature: for every block type `β`, exactly one `hint` op. -/
 abbrev HintS : Type → Type := fun _ => Unit
@@ -35,11 +35,11 @@ abbrev HintS : Type → Type := fun _ => Unit
 def hint {β} (b : Free CircOp HintS β) : Free CircOp HintS β := .hop () b .pure
 
 /-- Smart constructor for `assert`. -/
-def assert (b : Bool) : Free CircOp HintS Unit := Free.perform CircOp.assert b
+def assert (b : Bool) : Free CircOp HintS Unit := Free.op CircOp.assert b .pure
 
 /-- **Witness generation** into `Option`: `assert false` fails; a `hint` *runs* its block. -/
 def runCirc {α} (p : Free CircOp HintS α) : Option α :=
-  p.run (fun o i => match o, i with | .assert, b => if b then some () else none)
+  p.run (fun e => match e with | .mk .assert b => if b then some () else none)
         (fun _ mb => mb)                         -- hint: use the block's value
 
 /-- The predicate-transformer monad for the constrained semantics. -/
@@ -51,11 +51,11 @@ instance : Monad PredT where
 /-- **Constrained** semantics: `assert b` conjoins `b`; a `hint` introduces a fresh existential and
     *erases* its block (the handler ignores it).  It's the generic `run` at `PredT`. -/
 def conCirc {α} (p : Free CircOp HintS α) : (α → Prop) → Prop :=
-  p.run (M := PredT) (fun o i => match o, i with | .assert, b => fun c => b = true ∧ c ())
+  p.run (M := PredT) (fun e => match e with | .mk .assert b => fun c => b = true ∧ c ())
         (fun _ _ c => ∃ x, c x)                  -- hint: fresh existential, block erased
 
 /-- Op names for the serializer. -/
-def circName {I R : Type} : CircOp I R → String | .assert => "assert"
+def circName {I R : TpF} : CircOp I R → String | .assert => "assert"
 
 /-- The DSL instance: op/scope naming for `serialize` and `#compile`. -/
 instance : DSL CircOp HintS where
@@ -77,7 +77,7 @@ example : conCirc circ (fun _ => True) := ⟨7, rfl, trivial⟩
 
 reflect_def circC := circ
 example : Closed CircOp HintS [] .unit := circC
-/-- info: Freigen.circC_sound : ITree.Eutt (denoteProg (circC (KC CircOp) Tp.denote) HList.nil) (ofFree circ) -/
+/-- info: Freigen.circC_sound : ITree.Eutt (denoteProg (circC (KC CircOp) (Tp.denote CircOp)) HList.nil) (ofFree circ) -/
 #guard_msgs (whitespace := lax) in
 #check circC_sound
 
@@ -111,7 +111,7 @@ def circ2 : Free CircOp HintS Unit := do
   assert (q == 12)
 
 reflect_def circ2C := circ2
-/-- info: Freigen.circ2C_sound : ITree.Eutt (denoteProg (circ2C (KC CircOp) Tp.denote) HList.nil) (ofFree circ2) -/
+/-- info: Freigen.circ2C_sound : ITree.Eutt (denoteProg (circ2C (KC CircOp) (Tp.denote CircOp)) HList.nil) (ofFree circ2) -/
 #guard_msgs (whitespace := lax) in
 #check circ2C_sound
 
@@ -151,7 +151,7 @@ def checkSquare (x : Nat) : Free CircOp HintS Unit := do
 
 reflect_def checkSquareC := checkSquare
 /-- info: Freigen.checkSquareC_sound (x : ℕ) :
-  ITree.Eutt (denoteProg (checkSquareC (KC CircOp) Tp.denote) (HList.cons x HList.nil)) (ofFree (checkSquare x)) -/
+  ITree.Eutt (denoteProg (checkSquareC (KC CircOp) (Tp.denote CircOp)) (HList.cons x HList.nil)) (ofFree (checkSquare x)) -/
 #guard_msgs (whitespace := lax) in
 #check checkSquareC_sound
 
@@ -185,7 +185,7 @@ def monoExample (a : ZMod 5) (b : ZMod 7) (c : ZMod 5) : Free CircOp HintS (ZMod
 
 reflect_def monoC := monoExample
 /-- info: Freigen.monoC_sound (a : ZMod 5) (b : ZMod 7) (c : ZMod 5) :
-  ITree.Eutt (denoteProg (monoC (KC CircOp) Tp.denote) (HList.cons a (HList.cons b (HList.cons c HList.nil))))
+  ITree.Eutt (denoteProg (monoC (KC CircOp) (Tp.denote CircOp)) (HList.cons a (HList.cons b (HList.cons c HList.nil))))
     (ofFree (monoExample a b c)) -/
 #guard_msgs (whitespace := lax) in
 #check monoC_sound
@@ -222,7 +222,7 @@ def multiExample (a b : ZMod 5) : Free CircOp HintS (ZMod 5) := do
 
 reflect_def multiC := multiExample
 /-- info: Freigen.multiC_sound (a b : ZMod 5) :
-  ITree.Eutt (denoteProg (multiC (KC CircOp) Tp.denote) (HList.cons a (HList.cons b HList.nil)))
+  ITree.Eutt (denoteProg (multiC (KC CircOp) (Tp.denote CircOp)) (HList.cons a (HList.cons b HList.nil)))
     (ofFree (multiExample a b)) -/
 #guard_msgs (whitespace := lax) in
 #check multiC_sound
@@ -251,7 +251,7 @@ reflect_def multiC := multiExample
 def vecConst : Free CircOp HintS (Vector Nat 3) := pure ⟨#[1, 2, 3], rfl⟩
 
 reflect_def vecC := vecConst
-/-- info: Freigen.vecC_sound : ITree.Eutt (denoteProg (vecC (KC CircOp) Tp.denote) HList.nil) (ofFree vecConst) -/
+/-- info: Freigen.vecC_sound : ITree.Eutt (denoteProg (vecC (KC CircOp) (Tp.denote CircOp)) HList.nil) (ofFree vecConst) -/
 #guard_msgs (whitespace := lax) in
 #check vecC_sound
 
@@ -285,7 +285,7 @@ def vgetSym (v : Vector Nat 3) (j : Nat) (h : j < 3) : Free CircOp HintS Nat := 
 reflect_def vgetSymC := vgetSym
 -- `h` is quantified in the soundness statement but is **absent** from the reflected `main`.
 /-- info: Freigen.vgetSymC_sound (v : Vector ℕ 3) (j : ℕ) (h : j < 3) :
-  ITree.Eutt (denoteProg (vgetSymC (KC CircOp) Tp.denote) (HList.cons v (HList.cons j HList.nil)))
+  ITree.Eutt (denoteProg (vgetSymC (KC CircOp) (Tp.denote CircOp)) (HList.cons v (HList.cons j HList.nil)))
     (ofFree (vgetSym v j h)) -/
 #guard_msgs (whitespace := lax) in
 #check vgetSymC_sound
@@ -310,7 +310,7 @@ def vsetSym (v : Vector Nat 3) (j : Nat) (h : j < 3) (x : Nat) : Free CircOp Hin
 
 reflect_def vsetSymC := vsetSym
 /-- info: Freigen.vsetSymC_sound (v : Vector ℕ 3) (j : ℕ) (h : j < 3) (x : ℕ) :
-  ITree.Eutt (denoteProg (vsetSymC (KC CircOp) Tp.denote) (HList.cons v (HList.cons j (HList.cons x HList.nil))))
+  ITree.Eutt (denoteProg (vsetSymC (KC CircOp) (Tp.denote CircOp)) (HList.cons v (HList.cons j (HList.cons x HList.nil))))
     (ofFree (vsetSym v j h x)) -/
 #guard_msgs (whitespace := lax) in
 #check vsetSymC_sound
@@ -331,7 +331,7 @@ def agetSym (a : Array Nat) (j : Nat) (h : j < a.size) : Free CircOp HintS Nat :
 
 reflect_def agetSymC := agetSym
 /-- info: Freigen.agetSymC_sound (a : Array ℕ) (j : ℕ) (h : j < a.size) :
-  ITree.Eutt (denoteProg (agetSymC (KC CircOp) Tp.denote) (HList.cons a (HList.cons j HList.nil)))
+  ITree.Eutt (denoteProg (agetSymC (KC CircOp) (Tp.denote CircOp)) (HList.cons a (HList.cons j HList.nil)))
     (ofFree (agetSym a j h)) -/
 #guard_msgs (whitespace := lax) in
 #check agetSymC_sound
@@ -355,7 +355,7 @@ def arrRW (a : Array Nat) (i : Nat) (h : i < a.size) (x : Nat) : Free CircOp Hin
 
 reflect_def arrRWC := arrRW
 /-- info: Freigen.arrRWC_sound (a : Array ℕ) (i : ℕ) (h : i < a.size) (x : ℕ) :
-  ITree.Eutt (denoteProg (arrRWC (KC CircOp) Tp.denote) (HList.cons a (HList.cons i (HList.cons x HList.nil))))
+  ITree.Eutt (denoteProg (arrRWC (KC CircOp) (Tp.denote CircOp)) (HList.cons a (HList.cons i (HList.cons x HList.nil))))
     (ofFree (arrRW a i h x)) -/
 #guard_msgs (whitespace := lax) in
 #check arrRWC_sound
@@ -386,7 +386,7 @@ def twice (v : Vector Nat 4) : Free CircOp HintS Nat := do
 
 reflect_def twiceC := twice
 /-- info: Freigen.twiceC_sound (v : Vector ℕ 4) :
-  ITree.Eutt (denoteProg (twiceC (KC CircOp) Tp.denote) (HList.cons v HList.nil)) (ofFree (twice v)) -/
+  ITree.Eutt (denoteProg (twiceC (KC CircOp) (Tp.denote CircOp)) (HList.cons v HList.nil)) (ofFree (twice v)) -/
 #guard_msgs (whitespace := lax) in
 #check twiceC_sound
 
@@ -417,7 +417,7 @@ def deepArr (a : Array Nat) (j : Nat) (h : j < a.size) (b : Bool) : Free CircOp 
 
 reflect_def deepArrC := deepArr
 /-- info: Freigen.deepArrC_sound (a : Array ℕ) (j : ℕ) (h : j < a.size) (b : Bool) :
-  ITree.Eutt (denoteProg (deepArrC (KC CircOp) Tp.denote) (HList.cons a (HList.cons j (HList.cons b HList.nil))))
+  ITree.Eutt (denoteProg (deepArrC (KC CircOp) (Tp.denote CircOp)) (HList.cons a (HList.cons j (HList.cons b HList.nil))))
     (ofFree (deepArr a j h b)) -/
 #guard_msgs (whitespace := lax) in
 #check deepArrC_sound
@@ -446,7 +446,7 @@ def viaHelper (v : Vector Nat 3) (j : Nat) (h : j < 3) : Free CircOp HintS Unit 
 
 reflect_def viaHelperC := viaHelper
 /-- info: Freigen.viaHelperC_sound (v : Vector ℕ 3) (j : ℕ) (h : j < 3) :
-  ITree.Eutt (denoteProg (viaHelperC (KC CircOp) Tp.denote) (HList.cons v (HList.cons j HList.nil)))
+  ITree.Eutt (denoteProg (viaHelperC (KC CircOp) (Tp.denote CircOp)) (HList.cons v (HList.cons j HList.nil)))
     (ofFree (viaHelper v j h)) -/
 #guard_msgs (whitespace := lax) in
 #check viaHelperC_sound
@@ -485,7 +485,7 @@ def vdouble (v : Vector Nat 3) : Free CircOp HintS (Vector Nat 3) :=
 
 reflect_def vdoubleC := vdouble
 /-- info: Freigen.vdoubleC_sound (v : Vector ℕ 3) :
-  ITree.Eutt (denoteProg (vdoubleC (KC CircOp) Tp.denote) (HList.cons v HList.nil)) (ofFree (vdouble v)) -/
+  ITree.Eutt (denoteProg (vdoubleC (KC CircOp) (Tp.denote CircOp)) (HList.cons v HList.nil)) (ofFree (vdouble v)) -/
 #guard_msgs (whitespace := lax) in
 #check vdoubleC_sound
 
@@ -518,7 +518,7 @@ def castAV (arr : Array Nat) (h : arr.size = 3) : Free CircOp HintS (Vector Nat 
 
 reflect_def castAVC := castAV
 /-- info: Freigen.castAVC_sound (arr : Array ℕ) (h : arr.size = 3) :
-  ITree.Eutt (denoteProg (castAVC (KC CircOp) Tp.denote) (HList.cons arr HList.nil)) (ofFree (castAV arr h)) -/
+  ITree.Eutt (denoteProg (castAVC (KC CircOp) (Tp.denote CircOp)) (HList.cons arr HList.nil)) (ofFree (castAV arr h)) -/
 #guard_msgs (whitespace := lax) in
 #check castAVC_sound
 
@@ -537,7 +537,7 @@ def castNF (k : Nat) (h : k < 5) (i : Fin 5) : Free CircOp HintS (Fin 5 × Nat) 
 
 reflect_def castNFC := castNF
 /-- info: Freigen.castNFC_sound (k : ℕ) (h : k < 5) (i : Fin 5) :
-  ITree.Eutt (denoteProg (castNFC (KC CircOp) Tp.denote) (HList.cons k (HList.cons i HList.nil)))
+  ITree.Eutt (denoteProg (castNFC (KC CircOp) (Tp.denote CircOp)) (HList.cons k (HList.cons i HList.nil)))
     (ofFree (castNF k h i)) -/
 #guard_msgs (whitespace := lax) in
 #check castNFC_sound
@@ -555,11 +555,11 @@ reflect_def castNFC := castNF
 
 open Freigen.ITree in
 /-- The partial upcasts fail on a mismatch, directly. -/
-example : denote (Op := CircOp) (SOp := HintS)
+example : denote (X := CircOp) (SOp := HintS)
     (Code.pop (.arrToVec (a := .nat) (n := 3)) (.cons (#[10, 20] : Array Nat) .nil)
       (fun v => .ret v)) = fail := rfl
 open Freigen.ITree in
-example : denote (Op := CircOp) (SOp := HintS)
+example : denote (X := CircOp) (SOp := HintS)
     (Code.pop (.natToFin (n := 5)) (.cons 7 .nil) (fun i => .ret i)) = fail := rfl
 
 /-! ### The failing denotation, directly
@@ -570,19 +570,19 @@ reflector's soundness relies on the source proof to rule out.  (`Array` shares t
 
 open Freigen.ITree in
 /-- An out-of-range `vget` denotes to `fail`. -/
-example : denote (Op := CircOp) (SOp := HintS)
+example : denote (X := CircOp) (SOp := HintS)
     (Code.pop (.vget (a := .nat) (n := 3)) (.cons ⟨#[10, 20, 30], rfl⟩ (.cons 5 .nil))
       (fun x => .ret x)) = fail := by
-  simp only [denote, POp.denote, Nat.reduceLT, reduceDIte]
+  simp only [denote, denoteI, POp.denote, Nat.reduceLT, reduceDIte]
 
 open Freigen.ITree in
 /-- An in-range `aget` returns the element; an out-of-range one fails. -/
-example : denote (Op := CircOp) (SOp := HintS)
+example : denote (X := CircOp) (SOp := HintS)
     (Code.pop (.aget (a := .nat)) (.cons (#[10, 20, 30] : Array Nat) (.cons 1 .nil))
       (fun x => .ret x)) = ret 20 := rfl
 
 open Freigen.ITree in
-example : denote (Op := CircOp) (SOp := HintS)
+example : denote (X := CircOp) (SOp := HintS)
     (Code.pop (.aget (a := .nat)) (.cons (#[10, 20, 30] : Array Nat) (.cons 7 .nil))
       (fun x => .ret x)) = fail := rfl
 
@@ -600,7 +600,7 @@ def sumChecked (v : Vector Nat 3) : Free CircOp HintS Nat :=
 
 reflect_def sumCheckedC := sumChecked
 /-- info: Freigen.sumCheckedC_sound (v : Vector ℕ 3) :
-  ITree.Eutt (denoteProg (sumCheckedC (KC CircOp) Tp.denote) (HList.cons v HList.nil)) (ofFree (sumChecked v)) -/
+  ITree.Eutt (denoteProg (sumCheckedC (KC CircOp) (Tp.denote CircOp)) (HList.cons v HList.nil)) (ofFree (sumChecked v)) -/
 #guard_msgs (whitespace := lax) in
 #check sumCheckedC_sound
 
@@ -633,7 +633,7 @@ def hintLoop : Free CircOp HintS Nat :=
 
 reflect_def hintLoopC := hintLoop
 /-- info: Freigen.hintLoopC_sound :
-  ITree.Eutt (denoteProg (hintLoopC (KC CircOp) Tp.denote) HList.nil) (ofFree hintLoop) -/
+  ITree.Eutt (denoteProg (hintLoopC (KC CircOp) (Tp.denote CircOp)) HList.nil) (ofFree hintLoop) -/
 #guard_msgs (whitespace := lax) in
 #check hintLoopC_sound
 

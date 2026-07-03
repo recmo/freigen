@@ -8,7 +8,7 @@ import Freigen.Examples.Circuit.Basic
 
 namespace Freigen
 
-inductive NoOp : Type → Type → Type 1
+inductive NoOp : TpF → TpF → Type
 
 /-- The DSL instance: both `NoOp` and `NoScope` are empty, so both namers are vacuous. -/
 instance : DSL NoOp NoScope where
@@ -28,7 +28,7 @@ reflect_def countdownC := countdown
 /-- The closed `Prog` (a `rec_` + `main`). -/
 example : Closed NoOp NoScope [.nat] .nat := countdownC
 /-- info: Freigen.countdownC_sound (a0 : ℕ) :
-  ITree.Eutt (denoteProg (countdownC (KC NoOp) Tp.denote) (HList.cons a0 HList.nil)) (ofFree (countdown a0)) -/
+  ITree.Eutt (denoteProg (countdownC (KC NoOp) (Tp.denote NoOp)) (HList.cons a0 HList.nil)) (ofFree (countdown a0)) -/
 #guard_msgs (whitespace := lax) in
 #check countdownC_sound
 
@@ -63,7 +63,7 @@ def sm : Nat → Free NoOp NoScope Nat
 
 reflect_def smC := sm
 /-- info: Freigen.smC_sound (a0 : ℕ) :
-  ITree.Eutt (denoteProg (smC (KC NoOp) Tp.denote) (HList.cons a0 HList.nil)) (ofFree (sm a0)) -/
+  ITree.Eutt (denoteProg (smC (KC NoOp) (Tp.denote NoOp)) (HList.cons a0 HList.nil)) (ofFree (sm a0)) -/
 #guard_msgs (whitespace := lax) in
 #check smC_sound
 
@@ -105,7 +105,7 @@ def sumAcc : Nat → Nat → Free NoOp NoScope Nat
 
 reflect_def sumAccC := sumAcc
 /-- info: Freigen.sumAccC_sound (a0 a1 : ℕ) :
-  ITree.Eutt (denoteProg (sumAccC (KC NoOp) Tp.denote) (HList.cons a0 (HList.cons a1 HList.nil)))
+  ITree.Eutt (denoteProg (sumAccC (KC NoOp) (Tp.denote NoOp)) (HList.cons a0 (HList.cons a1 HList.nil)))
     (ofFree (sumAcc a0 a1)) -/
 #guard_msgs (whitespace := lax) in
 #check sumAccC_sound
@@ -154,7 +154,7 @@ def countAsserts : Nat → Bool → Free CircOp HintS Nat
 
 reflect_def countAssertsC := countAsserts
 /-- info: Freigen.countAssertsC_sound (a0 : ℕ) (a1 : Bool) :
-  ITree.Eutt (denoteProg (countAssertsC (KC CircOp) Tp.denote) (HList.cons a0 (HList.cons a1 HList.nil)))
+  ITree.Eutt (denoteProg (countAssertsC (KC CircOp) (Tp.denote CircOp)) (HList.cons a0 (HList.cons a1 HList.nil)))
     (ofFree (countAsserts a0 a1)) -/
 #guard_msgs (whitespace := lax) in
 #check countAssertsC_sound

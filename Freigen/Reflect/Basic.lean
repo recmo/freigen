@@ -54,6 +54,7 @@ open Lean Lean.Meta Lean.Elab.Term
 /-- Reify a Lean type into a `Tp` (matching the head *before* `whnf`, so `ZMod n` stays `ZMod n`). -/
 partial def reifyTp (T : Expr) : MetaM (Option Expr) := do
   match_expr T with
+  | Tp.denote _ t => return some t
   | Bool     => return some (.const ``Tp.bool [])
   | Nat      => return some (.const ``Tp.nat [])
   | ZMod n   => return some (mkApp (.const ``Tp.zmod []) n)
@@ -78,8 +79,14 @@ partial def reifyTp (T : Expr) : MetaM (Option Expr) := do
       if let .forallE _ A B _ := T then
         if B.hasLooseBVars then return none
         let some a ← reifyTp A | return none
-        let some b ← reifyTp B | return none
-        return some (mkApp2 (.const ``Tp.fn []) a b)
+        -- a Kleisli arrow (the denotation of `.fn`) reifies through its result type
+        match_expr B with
+        | ITree.CompE _ _ R =>
+            let some b ← reifyTp R | return none
+            return some (mkApp2 (.const ``Tp.fn []) a b)
+        | _ =>
+          let some b ← reifyTp B | return none
+          return some (mkApp2 (.const ``Tp.fn []) a b)
       else match ← unfoldDefinition? T with
         | some T' => reifyTp T'
         | none    => return none
@@ -123,6 +130,12 @@ structure RecData where
   hypPos   : Array Nat
   /-- Index of the structural-recursion component *among the state components*. -/
   recIdx   : Nat
+  /-- The first `fnStateCount` state components are function-valued — **invariant** through the
+      recursion (every self-call passes them unchanged); the adequacy is relativized to states
+      where they are embeddings of fixed pure functions. -/
+  fnStateCount : Nat := 0
+  /-- Host (pure-function) types of the fn state components. -/
+  fnHostTys : Array Expr := #[]
   /-- Host types / reified `Tp`s of the state components. -/
   stateTys : Array Expr
   stateTps : Array Expr
@@ -163,8 +176,14 @@ structure CallSig where
   /-- A pure helper (result reifies to a `Tp` directly) vs a `Free` computation. -/
   isPure    : Bool
   /-- The **monomorphisation key**: the non-value arguments baked into the spilled body (types,
-      instances, function values).  Two sites share a spill only if these are defeq. -/
+      instances, demoted function values).  Two sites share a spill only if these are defeq. -/
   monoArgs  : Array Expr := #[]
+  /-- Indices *into the value-argument list* that are function-typed — genuine first-class
+      parameters of the spilled definition. -/
+  fnArgPos  : Array Nat := #[]
+  /-- This signature's function arguments were **demoted** to monomorphisation (the body reaches
+      a recursion that must specialize over them); a nullary spill is then still allowed. -/
+  fnDemoted : Bool := false
   /-- A recursive helper's synthesis (`none` for plain helpers). -/
   rec?      : Option RecData := none
   deriving Inhabited
@@ -190,7 +209,19 @@ structure PfDefEntry where
     post-order — callees precede callers, as `Prog.def_` scoping requires), the in-flight set (for
     cycle detection), on the build pass the resolved `F`-names, and the walk **mode** (`pf`). -/
 structure Env where
+  /-- The DSL signature `X : TpF → TpF → Type`. -/
   Op : Expr
+  /-- The code-level op vocabulary (`OpT X` for ordinary code; `CallOp (OpT X) σ ρ` inside a
+      `rec_` body). -/
+  Opc : Expr
+  /-- Wrap a lifted DSL op (`OpT.mk o : OpT X I.tp R.tp`, given the `Tp` exprs) into the
+      vocabulary — identity normally, `CallOp.base` inside a `rec_` body. -/
+  opWrap : Expr → Expr → Expr → Expr
+  /-- Inside a `rec_` body: proof steps use the `sc_*C` lemma set (`scn`), which carries two
+      extra implicit `Tp` arguments (`scx`). -/
+  recMode : Bool := false
+  /-- Inside a `rec_` body: the recursion's state/result `Tp` exprs. -/
+  recTps : Option (Expr × Expr) := none
   SOp : Expr
   F : Expr
   V : Expr
@@ -216,6 +247,21 @@ structure Env where
   /-- Reflected `rec_` bodies, one per monomorphised recursive helper — shared between the
       abstract build and proof mode, so the two are *definitionally* the same term. -/
   recBodies : IO.Ref (Array (CallSig × Expr))
+
+/-- The (★)-lemma name for the current walk mode (`sc_*` vs the rec-body `sc_*C` set). -/
+def Env.scn (env : Env) (n : Name) : Name :=
+  if env.recMode then n.appendAfter "C" else n
+
+/-- The extra arguments of the rec-body lemma set (the recursion's `σT ρT`). -/
+def Env.scx (env : Env) : Array (Option Expr) :=
+  match env.recMode, env.recTps with
+  | true, some (σTp, ρTp) => #[some σTp, some ρTp]
+  | _, _ => #[]
+
+/-- Apply a (★)-step lemma in the current mode: base `sc_*` set or the rec-body `sc_*C` set
+    (which carries two extra inferable implicits). -/
+def Env.mkSc (env : Env) (n : Name) (rest : Array (Option Expr)) : MetaM Expr :=
+  mkAppOptM (env.scn n) (#[some env.Op, some env.SOp] ++ env.scx ++ rest)
 
 /-- A proof-mode step: the proof term, tagged with its **mode** — `isEq = true` is the equality
     invariant (★); `false` is the weakened eutt invariant (★≈), entered when the step passed
@@ -244,7 +290,7 @@ def Env.mkLitBind (env : Env) (a αTp : Expr) (k : Expr → MetaM CodePf) : Meta
   withLocalDeclD `v (mkApp env.V αTp) fun vx => do
     let (kcode, _) ← k vx
     let lam ← mkLambdaFVars #[vx] kcode
-    return (← mkAppOptM ``Code.lit #[env.Op, env.SOp, env.F, env.V, αTp, none, a, lam], none)
+    return (← mkAppOptM ``Code.lit #[env.Op, env.Opc, env.SOp, env.F, env.V, none, αTp, a, lam], none)
 
 /-- Build the argument tuple `HList V [tps]` from already-reflected atoms. -/
 def Env.mkArgHList (env : Env) (atoms : List Expr) : MetaM Expr := do
@@ -282,25 +328,38 @@ def finIndexToNat (i : Expr) : MetaM (Expr × Option Expr) := do
 /-- Emit a `call cf args k`, binding the result atom for the continuation. -/
 def Env.emitCall (env : Env) (cf asList retTp hl : Expr) (k : Expr → MetaM Expr) : MetaM Expr := do
   let contLam ← withLocalDeclD `r (mkApp env.V retTp) fun vr => do mkLambdaFVars #[vr] (← k vr)
-  mkAppOptM ``Code.call #[env.Op, env.SOp, env.F, env.V, none, asList, retTp, cf, hl, contLam]
+  mkAppOptM ``Code.call #[env.Op, env.Opc, env.SOp, env.F, env.V, none, asList, retTp, cf, hl, contLam]
 
 /-- `denote code` as an `Expr`. -/
 private def denoteE (c : Expr) : MetaM Expr := mkAppM ``denote #[c]
 
+/-- `denote code` in the current walk mode: the base `denote`, or `denoteC` at the call-extended
+    events inside a `rec_` body. -/
+def Env.denE (env : Env) (c : Expr) : MetaM Expr := do
+  if env.recMode then
+    let some (σTp, ρTp) := env.recTps
+      | throwError "reflect%: internal: rec walk without state types"
+    let denoteV := mkApp (Lean.mkConst ``Tp.denote []) env.Op
+    mkAppOptM ``denoteC
+      #[env.Op, env.Opc, env.SOp, mkApp denoteV σTp, mkApp denoteV ρTp,
+        ← mkAppM ``Inj.withCall #[← mkAppM ``injD #[env.Op], σTp, ρTp], none, c]
+  else
+    mkAppM ``denote #[c]
+
 /-- A `ret` continuation with the result `Tp` given **explicitly** — needed at `V := Tp.denote`,
     where `α` cannot be recovered from a raw-typed atom by unifying `Tp.denote ?α`. -/
 def Env.mkRetT (env : Env) (resTp : Expr) : Expr → MetaM Expr := fun atom =>
-  mkAppOptM ``Code.ret #[env.Op, env.SOp, env.F, env.V, resTp, atom]
+  mkAppOptM ``Code.ret #[env.Op, env.Opc, env.SOp, env.F, env.V, resTp, atom]
 
 /-- `Kf := fun (r : X) => denote (k r)` — the reflected continuation's denotation. -/
-private def mkKf (_V : Expr) (X : Expr) (k : Expr → MetaM Expr) : MetaM Expr :=
-  withLocalDeclD `r X fun r => do mkLambdaFVars #[r] (← denoteE (← k r))
+private def mkKf (env : Env) (X : Expr) (k : Expr → MetaM Expr) : MetaM Expr :=
+  withLocalDeclD `r X fun r => do mkLambdaFVars #[r] (← env.denE (← k r))
 
 /-- Lift a code-only continuation to a `CodePf` one; in proof mode its step is `rfl`
     (`denote (k atom) = denote (k atom)`). -/
 def Env.liftK (env : Env) (k : Expr → MetaM Expr) : Expr → MetaM CodePf := fun atom => do
   let c ← k atom
-  if env.pf then return (c, some ⟨← mkEqRefl (← denoteE c), true⟩)
+  if env.pf then return (c, some ⟨← mkEqRefl (← env.denE c), true⟩)
   else return (c, none)
 
 /-- Bind the host-side placeholder for a continuation result: in proof mode the atom variable *is*
@@ -320,7 +379,7 @@ private def mkArgHListT (V : Expr) : List Expr → List Expr → MetaM Expr
 
 /-- The result Lean type `X` of a source `e : Free Op SOp X`. -/
 private def freeResult (e : Expr) : MetaM Expr := do
-  let_expr Free _ _ X := (← whnf (← inferType e)) | throwError "reflect%: not a `Free`{indentExpr e}"
+  let_expr FreeE _ _ _ X := (← whnf (← inferType e)) | throwError "reflect%: not a `Free`{indentExpr e}"
   pure X
 
 /-- `Eq.trans` tolerant of a *definitional* mismatch at the shared point: the `denote`-of-a-node steps
@@ -335,7 +394,7 @@ private def eqTransD (h1 h2 : Expr) : MetaM Expr := do
 private def pfRhs (h : Expr) : MetaM Expr := do
   match_expr ← inferType h with
   | Eq _ _ b => pure b
-  | ITree.Eutt _ _ _ b => pure b
+  | ITree.Eutt _ _ _ _ b => pure b
   | HasEquiv.Equiv _ _ _ b => pure b
   | _ => throwError "reflect%: not an Eq/Eutt proof{indentExpr h}"
 
@@ -343,7 +402,7 @@ private def pfRhs (h : Expr) : MetaM Expr := do
 private def pfLhs (h : Expr) : MetaM Expr := do
   match_expr ← inferType h with
   | Eq _ a _ => pure a
-  | ITree.Eutt _ _ a _ => pure a
+  | ITree.Eutt _ _ _ a _ => pure a
   | HasEquiv.Equiv _ _ a _ => pure a
   | _ => throwError "reflect%: not an Eq/Eutt proof{indentExpr h}"
 
@@ -372,13 +431,13 @@ def analyzeCall (e : Expr) : MetaM (Option CallSig) := do
   let resTy ← inferType e
   let (retTp?, isPure) ← do
     match_expr ← whnf resTy with
-    | Free _ _ R => pure (← reifyTp R, false)
+    | FreeE _ _ _ R => pure (← reifyTp R, false)
     | _ => pure (← reifyTp resTy, true)     -- reify *before* whnf, so `ZMod n` stays `ZMod n`
   let some retTp := retTp? | return none
   unless isPure do
     match_expr ← whnf (cValInst.beta fArgs) with
-    | Free.op _ _ _ _ _ _ _ _ => return none      -- effect smart-constructors (→ `op`) inline
-    | Free.hop _ _ _ _ _ _ _   => return none      -- scoped constructs (→ `scope`) inline
+    | FreeE.op _ _ _ _ _ _ => return none         -- effect smart-constructors (→ `op`) inline
+    | FreeE.hop _ _ _ _ _ _ _ _ => return none    -- scoped constructs (→ `scope`) inline
     | _ => pure ()
   let valuePos ← forallTelescope (← inferType fn) fun xs cod => do
     let mut vps : Array Nat := #[]
@@ -389,15 +448,17 @@ def analyzeCall (e : Expr) : MetaM (Option CallSig) := do
       unless dep do vps := vps.push i
     pure vps
   if valuePos.size == 0 then return none
-  -- a *function-typed* argument cannot be a runtime value (the AST has no application op):
-  -- it **monomorphises** — baked into the spilled body, part of the signature key
+  -- a *function-typed* argument is a genuine first-class parameter (a `(fn …)`-typed slot);
+  -- if the body turns out to reach a recursion over it, discovery **demotes** it to
+  -- monomorphisation (`CallSig.demoteFnArgs`)
   let mut vPos : Array Nat := #[]
+  let mut fnArgPos : Array Nat := #[]
   let mut argTys : Array Expr := #[]
   let mut argTps : Array Expr := #[]
   for p in valuePos do
     let ty ← inferType fArgs[p]!
     let some t ← reifyTp ty | return none
-    if t.isAppOf ``Tp.fn then continue
+    if t.isAppOf ``Tp.fn then fnArgPos := fnArgPos.push vPos.size
     vPos := vPos.push p
     argTys := argTys.push ty
     argTps := argTps.push t
@@ -407,7 +468,32 @@ def analyzeCall (e : Expr) : MetaM (Option CallSig) := do
     if vPos.contains j then none else some fArgs[j]!
   let asList ← mkListLit (.const ``Tp []) argTps.toList
   return some { cName, cValInst, fArgs, valuePos := vPos, valueArgs, argTys, argTps, asList,
-                retTp, isPure, monoArgs }
+                retTp, isPure, monoArgs, fnArgPos }
+
+/-- Demote a signature's function-typed value arguments to monomorphisation (bake them into the
+    body): used when the helper's body reaches a recursion that must specialize over them.  The
+    baked values must then be program-independent. -/
+def CallSig.demoteFnArgs (sig : CallSig) (env : Env) : MetaM CallSig := do
+  let mut vPos : Array Nat := #[]
+  let mut argTys : Array Expr := #[]
+  let mut argTps : Array Expr := #[]
+  let mut valueArgs : List Expr := []
+  for h : i in [0:sig.valuePos.size] do
+    if sig.fnArgPos.contains i then
+      let v := sig.fArgs[sig.valuePos[i]!]!
+      if v.hasAnyFVar (fun fid => (env.subst.lookup fid).isSome) then
+        throwError "reflect%: `{sig.cName}`'s function argument reaches a recursion (which must \
+                    specialize over it), but the value captures program variables{indentExpr v}"
+    else
+      vPos := vPos.push sig.valuePos[i]!
+      argTys := argTys.push sig.argTys[i]!
+      argTps := argTps.push sig.argTps[i]!
+      valueArgs := valueArgs ++ [sig.fArgs[sig.valuePos[i]!]!]
+  let monoArgs := (Array.range sig.fArgs.size).filterMap fun j =>
+    if vPos.contains j then none else some sig.fArgs[j]!
+  let asList ← mkListLit (.const ``Tp []) argTps.toList
+  return { sig with valuePos := vPos, valueArgs, argTys, argTps, asList, monoArgs,
+                    fnArgPos := #[], fnDemoted := true }
 
 /-- Two spill signatures match: same helper, defeq (monomorphised) argument/result `Tp`s, and
     defeq monomorphisation keys (baked-in types/instances/function values). -/
@@ -492,6 +578,16 @@ private def succPatVar? (e : Expr) : Option Expr :=
       | _ => none
   | _ => none
 
+/-- The signature actually spilled for this call site: discovery may have **demoted** the
+    function arguments (a body that reaches a recursion); later passes must follow suit. -/
+def Env.resolveVariant (env : Env) (sig : CallSig) (sigEq : CallSig → CallSig → MetaM Bool) :
+    MetaM CallSig := do
+  if (← (← env.defs.get).findM? (sigEq · sig)).isSome then return sig
+  if sig.fnArgPos.isEmpty then return sig
+  let some sig' ← (try some <$> sig.demoteFnArgs env catch _ => pure none) | return sig
+  if (← (← env.defs.get).findM? (sigEq · sig')).isSome then return sig'
+  return sig
+
 /-- Recognise `cName` as a **spillable structural recursion**: a definition with exactly two
     equations whose left-hand sides differ from plain variables at exactly one (shared) `Nat`
     position — one `0`, one `succ m` — the `succ` side self-referential, the base not, and a pure
@@ -517,7 +613,7 @@ def analyzeRecShape (cName : Name) : MetaM (Option RecShape) := do
     for i in [0:arity] do
       if hypPos.contains i then continue
       let ty ← inferType xs[i]!
-      let mut mono := cod.containsFVar xs[i]!.fvarId! || (← whnf ty).isForall || ty.isSort
+      let mut mono := cod.containsFVar xs[i]!.fvarId! || ty.isSort
       for j in [0:arity] do
         if j != i && !hypPos.contains j then
           if (← inferType xs[j]!).containsFVar xs[i]!.fvarId! then mono := true
@@ -652,11 +748,13 @@ def withInstEqn {α} (shape : RecShape) (eqn : Name) (fArgs : Array Expr)
         vals := vals.push fArgs[j]!
     k hypFVars (rhs.replaceFVars fvars vals)
 
-/-- Rewrite a **pure body with self-calls** into a `Free (CallOp Op σ ρ)` computation: the
-    innermost self-call becomes the `call` effect at the re-tupled state (dropping mono and
-    hypothesis arguments); a non-tail context binds the result. -/
+/-- Rewrite a **pure body with self-calls** into a `FreeC` computation: the innermost self-call
+    becomes the call event (`Sum.inr`) at the re-tupled state (dropping mono and hypothesis
+    arguments); a non-tail context binds the result. -/
 partial def Env.liftPureBody (env : Env) (shape : RecShape) (cName : Name)
-    (callOp σTy ρTy : Expr) (stateTys : List Expr) (t : Expr) : MetaM Expr := do
+    (εExt brExt σTy ρTy : Expr) (stateTys : List Expr) (statePos : Array Nat)
+    (fnPairs : Array (Expr × Expr)) (t : Expr) : MetaM Expr := do
+  let εE := mkApp (Lean.mkConst ``Effect []) env.Op
   let isSelf (x : Expr) : Bool :=
     x.getAppFn.isConstOf cName && x.getAppArgs.size == shape.arity
   let rec innermost (x : Expr) : Option Expr :=
@@ -667,101 +765,163 @@ partial def Env.liftPureBody (env : Env) (shape : RecShape) (cName : Name)
         | some deeper => some deeper
         | none => some c
   match innermost t with
-  | none => mkAppOptM ``Free.pure #[callOp, env.SOp, ρTy, t]
+  | none => mkAppOptM ``FreeE.pure #[εExt, brExt, env.SOp, ρTy, t]
   | some c =>
       let cArgs := c.getAppArgs
-      let tuple := mkTupleE stateTys (shape.statePos.toList.map (cArgs[·]!))
-      let callC := mkAppN (.const ``ITree.CallOp.call []) #[env.Op, σTy, ρTy]
-      let pureC ← mkAppOptM ``Free.pure #[callOp, env.SOp, ρTy]
-      let callE ← mkAppM ``Free.op #[callC, tuple, pureC]
+      let mut slots : List Expr := []
+      for i in [0:statePos.size] do
+        let arg := cArgs[statePos[i]!]!
+        if h : i < fnPairs.size then
+          -- **invariance**: a function-valued state component must pass through unchanged
+          unless arg == fnPairs[i].1 do
+            throwError "reflect%: recursive helper `{cName}` modifies its function-valued \
+                        state — only invariant function state is supported{indentExpr c}"
+          slots := slots ++ [fnPairs[i].2]
+        else
+          slots := slots ++ [arg]
+      let tuple := mkTupleE stateTys slots
+      let inrEv := mkApp3 (Lean.mkConst ``Sum.inr [.zero, .zero]) εE σTy tuple
+      let pureC ← mkAppOptM ``FreeE.pure #[εExt, brExt, env.SOp, ρTy]
+      let callE ← mkAppOptM ``FreeE.op #[εExt, brExt, env.SOp, ρTy, inrEv, pureC]
       if t == c then return callE
       withLocalDeclD `r ρTy fun r => do
         let t' := t.replace (fun x => if x == c then some r else none)
-        let rest ← env.liftPureBody shape cName callOp σTy ρTy stateTys t'
-        mkAppM ``Free.bind #[callE, ← mkLambdaFVars #[r] rest]
+        let rest ← env.liftPureBody shape cName εExt brExt σTy ρTy stateTys statePos fnPairs t'
+        mkAppM ``FreeE.bind #[callE, ← mkLambdaFVars #[r] rest]
 
-/-- Rewrite a **`Free`-valued body with self-calls** over the call-extended signature: self-calls
-    become the `call` effect at the re-tupled state (dropping mono/hypothesis arguments), external
-    effects relabel to `base`, `pure`/`bind`/`bif`/`hop` rebuild structurally. -/
+/-- Rewrite a **`Free`-valued body with self-calls** over the call-extended events: self-calls
+    become the call event at the re-tupled state (dropping mono/hypothesis arguments), DSL
+    events relabel along `Sum.inl`, `pure`/`bind`/`bif`/`hop` rebuild structurally. -/
 partial def Env.liftFreeBody (env : Env) (shape : RecShape) (cName : Name)
-    (callOp σTy ρTy : Expr) (stateTys : List Expr) (t0 : Expr) : MetaM Expr := do
+    (εExt brExt σTy ρTy : Expr) (stateTys : List Expr) (statePos : Array Nat)
+    (fnPairs : Array (Expr × Expr)) (t0 : Expr) : MetaM Expr := do
+  let εE := mkApp (Lean.mkConst ``Effect []) env.Op
   let rec go (t : Expr) : MetaM Expr := do
     let t := t.consumeMData.headBeta
     if let .letE _ _ v b _ := t then return ← go (b.instantiate1 v)
     if t.getAppFn.isConstOf cName && t.getAppArgs.size == shape.arity then
       let cArgs := t.getAppArgs
-      let tuple := mkTupleE stateTys (shape.statePos.toList.map (cArgs[·]!))
-      let callC := mkAppN (.const ``ITree.CallOp.call []) #[env.Op, σTy, ρTy]
-      let pureC ← mkAppOptM ``Free.pure #[callOp, env.SOp, ρTy]
-      return ← mkAppM ``Free.op #[callC, tuple, pureC]
+      let mut slots : List Expr := []
+      for i in [0:statePos.size] do
+        let arg := cArgs[statePos[i]!]!
+        if h : i < fnPairs.size then
+          unless arg == fnPairs[i].1 do
+            throwError "reflect%: recursive helper `{cName}` modifies its function-valued \
+                        state — only invariant function state is supported{indentExpr t}"
+          slots := slots ++ [fnPairs[i].2]
+        else
+          slots := slots ++ [arg]
+      let tuple := mkTupleE stateTys slots
+      let inrEv := mkApp3 (Lean.mkConst ``Sum.inr [.zero, .zero]) εE σTy tuple
+      let pureC ← mkAppOptM ``FreeE.pure #[εExt, brExt, env.SOp, ρTy]
+      return ← mkAppOptM ``FreeE.op #[εExt, brExt, env.SOp, ρTy, inrEv, pureC]
     let doBind (x f : Expr) : MetaM Expr := do
-      let .forallE _ X _ _ := (← whnf (← inferType f))
+      let .forallE _ A _ _ := (← whnf (← inferType f))
         | throwError "reflect%: bind cont not a function{indentExpr f}"
       let xC ← go x
-      let fC ← withLocalDeclD `a X fun ha => do mkLambdaFVars #[ha] (← go (f.beta #[ha]))
-      mkAppM ``Free.bind #[xC, fC]
+      let fC ← withLocalDeclD `a A fun ha => do mkLambdaFVars #[ha] (← go (f.beta #[ha]))
+      mkAppM ``FreeE.bind #[xC, fC]
+    let relabel (e cont : Expr) : MetaM Expr := do
+      let inlEv := mkApp3 (Lean.mkConst ``Sum.inl [.zero, .zero]) εE σTy e
+      let R ← do
+        let .forallE _ R _ _ := (← whnf (← inferType cont))
+          | throwError "reflect%: op cont not a function{indentExpr cont}"
+        pure R
+      let kC ← withLocalDeclD `x R fun hx => do mkLambdaFVars #[hx] (← go (cont.beta #[hx]))
+      mkAppOptM ``FreeE.op #[εExt, brExt, env.SOp, none, inlEv, kC]
     match_expr t with
-    | Free.pure _ _ _ r => mkAppOptM ``Free.pure #[callOp, env.SOp, none, r]
-    | Pure.pure _ _ _ r => mkAppOptM ``Free.pure #[callOp, env.SOp, none, r]
+    | FreeE.pure _ _ _ _ r => mkAppOptM ``FreeE.pure #[εExt, brExt, env.SOp, none, r]
+    | Pure.pure _ _ _ r => mkAppOptM ``FreeE.pure #[εExt, brExt, env.SOp, none, r]
     | Bind.bind _ _ _ _ x f => doBind x f
-    | Free.bind _ _ _ _ x f => doBind x f
+    | FreeE.bind _ _ _ _ _ x f => doBind x f
     | cond _ c m1 m2 => do mkAppM ``cond #[c, ← go m1, ← go m2]
     | Free.op _ _ _ I R o i k => do
-        let baseO := mkAppN (.const ``ITree.CallOp.base []) #[env.Op, σTy, ρTy, I, R, o]
-        let kC ← withLocalDeclD `x R fun hx => do mkLambdaFVars #[hx] (← go (k.beta #[hx]))
-        mkAppM ``Free.op #[baseO, i, kC]
-    | Free.hop _ _ _ β s b k => do
+        relabel (← mkAppOptM ``Effect.mk #[env.Op, I, R, o, i]) k
+    | FreeE.op _ _ _ _ e k => relabel e k
+    | FreeE.hop _ _ _ _ β s b k => do
         let bC ← go b
         let kC ← withLocalDeclD `x β fun hx => do mkLambdaFVars #[hx] (← go (k.beta #[hx]))
-        mkAppM ``Free.hop #[s, bC, kC]
+        mkAppM ``FreeE.hop #[s, bC, kC]
     | _ =>
         match ← unfoldDefinition? t with
         | some t' => go t'
         | none => throwError "reflect%: cannot lift recursion body{indentExpr t}"
   go t0
 
-/-- The CallOp-lifted totalized body
+/-- The **embedding** of a pure host function into the Kleisli slot: `fun x => ret (h x)`.
+    Only unary function state is supported (`ofFn`-shaped). -/
+def mkEmbOf (εE arityE : Expr) (host : Expr) : MetaM Expr := do
+  let .forallE _ dom cod _ ← whnf (← inferType host)
+    | throwError "reflect%: not a function-typed state component{indentExpr host}"
+  if cod.hasLooseBVars || (← whnf cod).isForall then
+    throwError "reflect%: curried function-valued recursion state is not supported{indentExpr host}"
+  withLocalDeclD `x dom fun x => do
+    mkLambdaFVars #[x] (← mkAppOptM ``ITree.ret #[εE, arityE, cod, mkApp host x])
+
+/-- The lifted totalized body
     `cb := fun s => bif sᵣ == 0 then base[s] else step[s]` — the reflectable mirror of the
     source recursion over the tupled state (`isPure`: a pure body wraps in `pure` / extracts
     self-calls; a `Free` body relabels structurally). -/
 def Env.buildCb (env : Env) (shape : RecShape) (cName : Name) (fArgs : Array Expr)
-    (stateTys : Array Expr) (σTy ρValTy : Expr) (recIdx : Nat) (isPure : Bool) : MetaM Expr := do
-  let callOp := mkAppN (.const ``ITree.CallOp []) #[env.Op, σTy, ρValTy]
+    (stateTys : Array Expr) (statePos : Array Nat) (fnHostTys : Array Expr)
+    (σTy ρValTy : Expr) (recIdx : Nat) (isPure : Bool) : MetaM Expr := do
+  let εE := mkApp (Lean.mkConst ``Effect []) env.Op
+  let εExt := mkApp2 (Lean.mkConst ``Sum [.zero, .zero]) εE σTy
+  let arityE := mkApp (Lean.mkConst ``Effect.arity []) env.Op
+  let brExt ← mkAppOptM ``ITree.callBr #[εE, σTy, arityE, ρValTy]
+  -- the invariant fn components enter as **pure host binders** (`cb` computes with them
+  -- directly — the tree never applies a Kleisli value); self-call tuples carry their embeddings
+  let hostDecls : Array (Name × (Array Expr → MetaM Expr)) :=
+    (Array.range fnHostTys.size).map fun i =>
+      (Name.mkSimple s!"f{i}", fun _ => pure fnHostTys[i]!)
+  let kfDecls : Array (Name × (Array Expr → MetaM Expr)) :=
+    (Array.range fnHostTys.size).map fun i =>
+      (Name.mkSimple s!"kf{i}", fun _ => pure stateTys[i]!)
+  withLocalDeclsD hostDecls fun hosts => do
+  withLocalDeclsD kfDecls fun kfs => do
+  let fnPairs := hosts.zip kfs
   let lift (rhs : Expr) : MetaM Expr :=
-    if isPure then env.liftPureBody shape cName callOp σTy ρValTy stateTys.toList rhs
-    else env.liftFreeBody shape cName callOp σTy ρValTy stateTys.toList rhs
+    if isPure then
+      env.liftPureBody shape cName εExt brExt σTy ρValTy stateTys.toList statePos fnPairs rhs
+    else
+      env.liftFreeBody shape cName εExt brExt σTy ρValTy stateTys.toList statePos fnPairs rhs
   withLocalDeclD `s σTy fun s => do
     let projs := (mkTupleProjs stateTys.toList s).toArray
     let recProj := projs[recIdx]!
-    let baseE ← withInstEqn shape shape.baseEqn fArgs projs none fun hyps rhs => do
+    let stateVals := (Array.range stateTys.size).map fun i =>
+      if h : i < hosts.size then hosts[i] else projs[i]!
+    let baseE ← withInstEqn shape shape.baseEqn fArgs stateVals none fun hyps rhs => do
       env.elimHyps hyps (← lift rhs)
     let km1 ← mkAppM ``HSub.hSub #[recProj, mkNatLit 1]
-    let stepE ← withInstEqn shape shape.stepEqn fArgs projs (some km1) fun hyps rhs => do
+    let stepE ← withInstEqn shape shape.stepEqn fArgs stateVals (some km1) fun hyps rhs => do
       env.elimHyps hyps (← lift rhs)
     let condE ← mkAppM ``BEq.beq #[recProj, mkNatLit 0]
-    mkLambdaFVars #[s] (← mkAppM ``cond #[condE, baseE, stepE])
+    mkLambdaFVars (hosts ++ kfs ++ #[s]) (← mkAppM ``cond #[condE, baseE, stepE])
 
 /-- The totalized `Nat.rec` twin `goT : σ → ρ`: recursion on the `Nat` component, the other
     state components threading through the motive.  Definitionally reduces on `0`/`succ` — that
     (plus proof irrelevance) is what makes the `bridge` induction close by `rfl`. -/
 partial def Env.buildGoT (env : Env) (shape : RecShape) (cName : Name) (fArgs : Array Expr)
-    (stateTys : Array Expr) (σTy ρTy : Expr) (recIdx : Nat) : MetaM Expr := do
+    (stateTys : Array Expr) (statePos : Array Nat) (fnHostTys : Array Expr)
+    (σTy ρTy : Expr) (recIdx : Nat) : MetaM Expr := do
+  let fnCount := fnHostTys.size
   let restTys := (stateTys.toList.zipIdx.filterMap fun (t, i) =>
-    if i == recIdx then none else some t)
+    if i == recIdx || i < fnCount then none else some t)
   let natTy : Expr := .const ``Nat []
-  -- state-order values from (m?, rest-projections)
-  let stateValsOf (m : Expr) (restVals : List Expr) : Array Expr := Id.run do
+  -- state-order values from (hosts, m?, rest-projections)
+  let stateValsOf (hosts : Array Expr) (m : Expr) (restVals : List Expr) : Array Expr := Id.run do
     let mut vals : Array Expr := #[]
     let mut rest := restVals
     for i in [0:stateTys.size] do
-      if i == recIdx then vals := vals.push m
+      if h : i < fnCount then vals := vals.push hosts[i]!
+      else if i == recIdx then vals := vals.push m
       else
         vals := vals.push rest.head!
         rest := rest.tail
     return vals
   -- rewrite self-calls `go args ↦ ih ⟨rest-of-args⟩` (innermost-first; the recursion argument
   -- must be *exactly* the pattern variable — structural recursion)
-  let rewriteSelf (m ih : Expr) (t0 : Expr) : MetaM Expr := do
+  let rewriteSelf (hosts : Array Expr) (m ih : Expr) (t0 : Expr) : MetaM Expr := do
     let isSelf (x : Expr) : Bool :=
       x.getAppFn.isConstOf cName && x.getAppArgs.size == shape.arity
     let rec loop (t : Expr) (fuel : Nat) : MetaM Expr := do
@@ -779,45 +939,54 @@ partial def Env.buildGoT (env : Env) (shape : RecShape) (cName : Name) (fArgs : 
           unless cArgs[shape.recPos]! == m do
             throwError "reflect%: recursive helper `{cName}`: a self-call's recursion argument \
                         is not the structural predecessor{indentExpr c}"
-          let restArgs := shape.statePos.toList.filterMap fun j =>
-            if j == shape.recPos then none else some cArgs[j]!
+          for i in [0:fnCount] do
+            unless cArgs[statePos[i]!]! == hosts[i]! do
+              throwError "reflect%: recursive helper `{cName}` modifies its function-valued \
+                          state — only invariant function state is supported{indentExpr c}"
+          let restArgs := statePos.toList.zipIdx.filterMap fun (j, i) =>
+            if j == shape.recPos || i < fnCount then none else some cArgs[j]!
           let repl := if restTys.isEmpty then ih else mkApp ih (mkTupleE restTys restArgs)
           loop (t.replace (fun x => if x == c then some repl else none)) (fuel - 1)
     loop t0 32
+  let hostDecls : Array (Name × (Array Expr → MetaM Expr)) :=
+    (Array.range fnHostTys.size).map fun i =>
+      (Name.mkSimple s!"f{i}", fun _ => pure fnHostTys[i]!)
+  withLocalDeclsD hostDecls fun hosts => do
   withLocalDeclD `s σTy fun s => do
     let projs := (mkTupleProjs stateTys.toList s).toArray
     let recProj := projs[recIdx]!
     let restProjs := projs.toList.zipIdx.filterMap fun (p, i) =>
-      if i == recIdx then none else some p
+      if i == recIdx || i < fnCount then none else some p
     if restTys.isEmpty then
       let motive ← withLocalDeclD `n natTy fun n => mkLambdaFVars #[n] ρTy
-      let base ← withInstEqn shape shape.baseEqn fArgs (stateValsOf (mkNatLit 0) []) none
+      let base ← withInstEqn shape shape.baseEqn fArgs (stateValsOf hosts (mkNatLit 0) []) none
         fun hyps rhs => env.elimHyps hyps rhs
       let step ← withLocalDeclD `m natTy fun m =>
         withLocalDeclD `ih ρTy fun ih => do
-          withInstEqn shape shape.stepEqn fArgs (stateValsOf m []) (some m) fun hyps rhs => do
-            let rhs ← rewriteSelf m ih rhs
-            mkLambdaFVars #[m, ih] (← env.elimHyps hyps rhs)
+          withInstEqn shape shape.stepEqn fArgs (stateValsOf hosts m []) (some m)
+            fun hyps rhs => do
+              let rhs ← rewriteSelf hosts m ih rhs
+              mkLambdaFVars #[m, ih] (← env.elimHyps hyps rhs)
       let recApp ← mkAppOptM ``Nat.rec #[motive, base, step, recProj]
-      mkLambdaFVars #[s] recApp
+      mkLambdaFVars (hosts ++ #[s]) recApp
     else
       let restTy := mkProdTy restTys
       let motTy ← mkArrow restTy ρTy
       let motive ← withLocalDeclD `n natTy fun n => mkLambdaFVars #[n] motTy
       let base ← withLocalDeclD `rest restTy fun rest => do
         let rps := (mkTupleProjs restTys rest).toArray
-        withInstEqn shape shape.baseEqn fArgs (stateValsOf (mkNatLit 0) rps.toList) none
+        withInstEqn shape shape.baseEqn fArgs (stateValsOf hosts (mkNatLit 0) rps.toList) none
           fun hyps rhs => do mkLambdaFVars #[rest] (← env.elimHyps hyps rhs)
       let step ← withLocalDeclD `m natTy fun m =>
         withLocalDeclD `ih motTy fun ih =>
         withLocalDeclD `rest restTy fun rest => do
           let rps := (mkTupleProjs restTys rest).toArray
-          withInstEqn shape shape.stepEqn fArgs (stateValsOf m rps.toList) (some m)
+          withInstEqn shape shape.stepEqn fArgs (stateValsOf hosts m rps.toList) (some m)
             fun hyps rhs => do
-              let rhs ← rewriteSelf m ih rhs
+              let rhs ← rewriteSelf hosts m ih rhs
               mkLambdaFVars #[m, ih, rest] (← env.elimHyps hyps rhs)
       let recApp ← mkAppOptM ``Nat.rec #[motive, base, step, recProj]
-      mkLambdaFVars #[s] (mkApp recApp (mkTupleE restTys restProjs))
+      mkLambdaFVars (hosts ++ #[s]) (mkApp recApp (mkTupleE restTys restProjs))
 
 /-- Analyze a call to a **recursive pure helper** at this site: recognise the shape, require the
     monomorphisation arguments closed, and produce the spill signature — reusing an existing
@@ -836,38 +1005,60 @@ def Env.analyzeRecCall (env : Env) (e : Expr) : MetaM (Option CallSig) := do
                   program variables — a spilled recursive definition is closed, so it must be \
                   program-independent{indentExpr fArgs[j]!}"
   let monoArgs := shape.monoPos.map (fArgs[·]!)
-  let stateArgs := shape.statePos.map (fArgs[·]!)
-  let stateTys ← stateArgs.mapM inferType
-  let stateTps ← stateTys.mapM reifyTpOrThrow
+  -- reorder the state **function components first** (the adequacy invariant pins them as
+  -- embeddings, and the repackaging peels the tuple from the front)
+  let mut fnState : Array Nat := #[]
+  let mut foState : Array Nat := #[]
+  for j in shape.statePos do
+    if (← whnf (← inferType fArgs[j]!)).isForall then fnState := fnState.push j
+    else foState := foState.push j
+  let statePos := fnState ++ foState
+  let stateArgs := statePos.map (fArgs[·]!)
+  let fnHostTys ← fnState.mapM (fun j => inferType fArgs[j]!)
+  let mut stateTys : Array Expr := #[]
+  let mut stateTps : Array Expr := #[]
+  for i in [0:stateArgs.size] do
+    let hostTy ← inferType stateArgs[i]!
+    let tp ← reifyTpOrThrow hostTy
+    stateTps := stateTps.push tp
+    -- a function component's σ-slot is the *object* (Kleisli) type, not the host type
+    if i < fnState.size then
+      stateTys := stateTys.push (mkApp2 (Lean.mkConst ``Tp.denote []) env.Op tp)
+    else
+      stateTys := stateTys.push hostTy
   let σTy := mkProdTy stateTys.toList
   let σTp := prodTpOf stateTps.toList
   let ρTy ← inferType e
   let (ρValTy, isPure) ←
     match_expr ← whnf ρTy with
-    | Free _ _ R => pure (R, false)
+    | FreeE _ _ _ R => pure (R, false)
     | _ => pure (ρTy, true)
   let some ρTp ← reifyTp ρValTy | return none
-  let some recIdx := shape.statePos.findIdx? (· == shape.recPos)
+  let some recIdx := statePos.findIdx? (· == shape.recPos)
     | throwError "reflect%: internal: recursion position not in state"
   let asList ← mkListLit (.const ``Tp []) [σTp]
   let sig0 : CallSig := {
-    cName, cValInst := fn, fArgs, valuePos := shape.statePos,
+    cName, cValInst := fn, fArgs, valuePos := statePos,
     valueArgs := stateArgs.toList, argTys := stateTys, argTps := stateTps,
     asList, retTp := ρTp, isPure, monoArgs }
   if let some hit ← (← env.defs.get).findM? (sigsMatch · sig0) then
     return some { sig0 with rec? := hit.rec? }
   if env.resolved.isSome || env.pf then
     throwError "reflect%: internal: recursive helper `{cName}` was not discovered"
-  let cb ← env.buildCb shape cName fArgs stateTys σTy ρValTy recIdx isPure
+  if fnState.size > 1 then
+    throwError "reflect%: recursive helper `{cName}`: more than one function-valued state \
+                component is not yet supported"
+  let cb ← env.buildCb shape cName fArgs stateTys statePos fnHostTys σTy ρValTy recIdx isPure
   -- the `Nat.rec` twin (and its bridge) exist only to *totalize* — hypothesis-free sources are
   -- total over the state already and stand in for themselves
   let goT ←
     if shape.hypPos.isEmpty then pure (Expr.const ``Unit.unit [])
-    else env.buildGoT shape cName fArgs stateTys σTy ρTy recIdx
+    else env.buildGoT shape cName fArgs stateTys statePos fnHostTys σTy ρTy recIdx
   let μ ← withLocalDeclD `s σTy fun s =>
     mkLambdaFVars #[s] (mkTupleProjs stateTys.toList s).toArray[recIdx]!
-  let rd : RecData := { statePos := shape.statePos, hypPos := shape.hypPos,
-                        recIdx, stateTys, stateTps, σTy, σTp, ρTy, ρValTy, cb, goT, μ }
+  let rd : RecData := { statePos, hypPos := shape.hypPos,
+                        recIdx, stateTys, stateTps, σTy, σTp, ρTy, ρValTy, cb, goT, μ,
+                        fnStateCount := fnState.size, fnHostTys }
   return some { sig0 with rec? := some rd }
 
 mutual
@@ -894,6 +1085,7 @@ mutual
         return ← env.atom resTp (b.instantiate1 v) k
     if let .fvar fid := a then
       if let some atom := env.subst.lookup fid then return ← k atom
+    if a.isLambda then return ← env.emitLam resTp a k
     if !(a.hasAnyFVar fun fid => (env.subst.lookup fid).isSome) then
       -- …except when the closed value contains a recursive helper: a recursion must reflect
       -- structurally (a `rec_` spill), not evaluate into a literal — fall through to the arms
@@ -945,11 +1137,11 @@ mutual
         | Tp.vec aTp nExpr =>
             env.emitPop resTp a (mkApp2 (.const ``POp.vget []) aTp nExpr) aTp
               [mkApp2 (.const ``Tp.vec []) aTp nExpr, natT] [coll, natIdx]
-              (fun klam => mkAppOptM ``sc_vget #[env.Op, env.SOp, resTp, aTp, none, coll, natIdx, klam, hSrc]) k
+              (fun klam => env.mkSc ``sc_vget #[resTp, aTp, none, coll, natIdx, klam, hSrc]) k
         | Tp.array aTp =>
             env.emitPop resTp a (mkApp (.const ``POp.aget []) aTp) aTp
               [mkApp (.const ``Tp.array []) aTp, natT] [coll, natIdx]
-              (fun klam => mkAppOptM ``sc_aget #[env.Op, env.SOp, resTp, aTp, coll, natIdx, klam, hSrc]) k
+              (fun klam => env.mkSc ``sc_aget #[resTp, aTp, coll, natIdx, klam, hSrc]) k
         | _ => throwError "reflect%: get on a non-collection value{indentExpr coll}"
     | Vector.ofFn nExpr elemTy f =>
         -- the lane dimension is a **kept loop** (a `vgen` node), not unrolled
@@ -961,7 +1153,7 @@ mutual
             let vecT := mkApp2 (.const ``Tp.vec []) aTp nExpr
             env.emitPop resTp a (mkApp2 (.const ``POp.vset []) aTp nExpr) vecT
               [vecT, .const ``Tp.nat [], aTp] [coll, i, x]
-              (fun klam => mkAppOptM ``sc_vset #[env.Op, env.SOp, resTp, aTp, none, coll, i, x, klam, h]) k
+              (fun klam => env.mkSc ``sc_vset #[resTp, aTp, none, coll, i, x, klam, h]) k
         | _ => throwError "reflect%: `Vector.set` on a non-vector{indentExpr coll}"
     | Array.set _ coll i x h =>
         match_expr ← reifyTpOrThrow (← inferType coll) with
@@ -969,7 +1161,7 @@ mutual
             let arrT := mkApp (.const ``Tp.array []) aTp
             env.emitPop resTp a (mkApp (.const ``POp.aset []) aTp) arrT
               [arrT, .const ``Tp.nat [], aTp] [coll, i, x]
-              (fun klam => mkAppOptM ``sc_aset #[env.Op, env.SOp, resTp, aTp, coll, i, x, klam, h]) k
+              (fun klam => env.mkSc ``sc_aset #[resTp, aTp, coll, i, x, klam, h]) k
         | _ => throwError "reflect%: `Array.set` on a non-array{indentExpr coll}"
     | Vector.mk _ nExpr arr h =>
         match_expr ← reifyTpOrThrow (← inferType a) with
@@ -980,7 +1172,7 @@ mutual
             | none       =>
                 env.emitPop resTp a (mkApp2 (.const ``POp.arrToVec []) aTp nExpr)
                   (mkApp2 (.const ``Tp.vec []) aTp nExpr) [mkApp (.const ``Tp.array []) aTp] [arr]
-                  (fun klam => mkAppOptM ``sc_arrToVec #[env.Op, env.SOp, resTp, aTp, nExpr, arr, klam, h]) k
+                  (fun klam => env.mkSc ``sc_arrToVec #[resTp, aTp, nExpr, arr, klam, h]) k
         | _ => throwError "reflect%: `Vector.mk` at a non-vector type{indentExpr a}"
     | List.toArray _ lst =>
         let some elems := seqLitElems lst
@@ -991,7 +1183,7 @@ mutual
     | Fin.mk nExpr m h =>
         env.emitPop resTp a (mkApp (.const ``POp.natToFin []) nExpr)
           (mkApp (.const ``Tp.fin []) nExpr) [.const ``Tp.nat []] [m]
-          (fun klam => mkAppOptM ``sc_natToFin #[env.Op, env.SOp, resTp, nExpr, m, klam, h]) k
+          (fun klam => env.mkSc ``sc_natToFin #[resTp, nExpr, m, klam, h]) k
     | Vector.toArray A nExpr v =>                                            -- total downcast `v.toArray`
         let aTp ← reifyTpOrThrow A
         env.emitUn resTp (mkApp2 (.const ``Un.toArray []) aTp nExpr) (mkApp (.const ``Tp.array []) aTp) v k
@@ -1020,11 +1212,18 @@ mutual
     | _ => do
         -- a *pure helper application*: spill it as a `def_` — definitions are **kept folded**;
         -- a *recursive* one spills as a `rec_`; anything unspillable unfolds and retries
+        if a.isApp then
+          let hd := a.getAppFn
+          if hd.isFVar && (env.subst.lookup hd.fvarId!).isSome then
+            if let some t ← reifyTp (← inferType hd) then
+              if t.isAppOf ``Tp.fn then
+                return ← env.emitApps resTp hd a.getAppArgs k
         if !env.noSpill then
           if let some sig ← env.analyzeRecCall a then
             return ← env.emitCallPure resTp sig k
           if let some sig ← analyzeCall a then
             if sig.isPure then
+              let sig ← env.resolveVariant sig sigsMatch
               return ← env.emitCallPure resTp sig k
         match ← unfoldDefinition? a with
         | some a' => env.atom resTp a' k
@@ -1040,9 +1239,9 @@ mutual
     withLocalDeclD `v (mkApp env.V cTp) fun vc => do
       let (kcode, kpf?) ← k vc
       let node ← mkAppOptM ``Code.bin
-        #[env.Op, env.SOp, env.F, env.V, none, none, none, none, binOp, ax, ay, ← mkLambdaFVars #[vc] kcode]
+        #[env.Op, env.Opc, env.SOp, env.F, env.V, none, none, none, none, binOp, ax, ay, ← mkLambdaFVars #[vc] kcode]
       let pf? ← kpf?.mapM fun kp =>
-        return { kp with e := kp.e.replaceFVar vc (← mkAppM ``Bin.denote #[binOp, ax, ay]) }
+        return { kp with e := kp.e.replaceFVar vc (← mkAppOptM ``Bin.denote #[env.Op, none, none, none, binOp, ax, ay]) }
       return (node, pf?)
 
   /-- Unary primitive: as `emitBin`, with `vc ↦ Un.denote o x`. -/
@@ -1051,9 +1250,9 @@ mutual
     withLocalDeclD `v (mkApp env.V cTp) fun vc => do
       let (kcode, kpf?) ← k vc
       let node ← mkAppOptM ``Code.un
-        #[env.Op, env.SOp, env.F, env.V, none, none, none, unOp, ax, ← mkLambdaFVars #[vc] kcode]
+        #[env.Op, env.Opc, env.SOp, env.F, env.V, none, none, none, unOp, ax, ← mkLambdaFVars #[vc] kcode]
       let pf? ← kpf?.mapM fun kp =>
-        return { kp with e := kp.e.replaceFVar vc (← mkAppM ``Un.denote #[unOp, ax]) }
+        return { kp with e := kp.e.replaceFVar vc (← mkAppOptM ``Un.denote #[env.Op, none, none, unOp, ax]) }
       return (node, pf?)
 
   /-- A **partial primitive** (`Code.pop`): reflect the arguments, bind the result as a fresh var,
@@ -1070,7 +1269,7 @@ mutual
         let (kcode, kpf?) ← k vc
         let klam ← mkLambdaFVars #[vc] kcode
         let node ← mkAppOptM ``Code.pop
-          #[env.Op, env.SOp, env.F, env.V, none, asList, retTp, popOp, argsHL, klam]
+          #[env.Op, env.Opc, env.SOp, env.F, env.V, none, asList, retTp, popOp, argsHL, klam]
         let pf? ← kpf?.mapM fun kp => do
           pfTransD ⟨← mkScStep klam, true⟩ { kp with e := kp.e.replaceFVar vc src }
         return (node, pf?)
@@ -1101,13 +1300,13 @@ mutual
       let (kcode, kpf?) ← k vc
       let klam ← mkLambdaFVars #[vc] kcode
       let node ← mkAppOptM ``Code.fold
-        #[env.Op, env.SOp, env.F, env.V, none, aTp, nExpr, ainit, bodyLam, klam]
+        #[env.Op, env.Opc, env.SOp, env.F, env.V, none, aTp, nExpr, ainit, bodyLam, klam]
       let pf? ← kpf?.mapM fun kp => do
         let some hb := hb? | throwError "reflect%: internal: missing fold body proof"
         let scStep : Pf ←
           if hb.isEq then
-            pure ⟨← mkAppOptM ``sc_fold
-              #[env.Op, env.SOp, resTp, aTp, nExpr, init, f, bodyLam, klam, hb.e], true⟩
+            pure ⟨← env.mkSc ``sc_fold
+              #[resTp, aTp, nExpr, init, f, bodyLam, klam, hb.e], true⟩
           else
             pure ⟨← mkAppOptM ``sc_foldE
               #[env.Op, env.SOp, resTp, aTp, nExpr, init, f, bodyLam, klam, hb.e], false⟩
@@ -1132,13 +1331,13 @@ mutual
       let (kcode, kpf?) ← k vc
       let klam ← mkLambdaFVars #[vc] kcode
       let node ← mkAppOptM ``Code.vgen
-        #[env.Op, env.SOp, env.F, env.V, none, aTp, nExpr, bodyLam, klam]
+        #[env.Op, env.Opc, env.SOp, env.F, env.V, none, aTp, nExpr, bodyLam, klam]
       let pf? ← kpf?.mapM fun kp => do
         let some hb := hb? | throwError "reflect%: internal: missing vgen body proof"
         let scStep : Pf ←
           if hb.isEq then
-            pure ⟨← mkAppOptM ``sc_vgen
-              #[env.Op, env.SOp, resTp, aTp, nExpr, f, bodyLam, klam, hb.e], true⟩
+            pure ⟨← env.mkSc ``sc_vgen
+              #[resTp, aTp, nExpr, f, bodyLam, klam, hb.e], true⟩
           else
             pure ⟨← mkAppOptM ``sc_vgenE
               #[env.Op, env.SOp, resTp, aTp, nExpr, f, bodyLam, klam, hb.e], false⟩
@@ -1191,13 +1390,13 @@ mutual
       let argsHL ← mkArgHListT env.V [cb, ta, ea] [boolT, aTp, aTp]
       let asList ← mkListLit (.const ``Tp []) [boolT, aTp, aTp]
       let node ← mkAppOptM ``Code.pop
-        #[env.Op, env.SOp, env.F, env.V, none, asList, aTp, mkApp (.const ``POp.select []) aTp,
+        #[env.Op, env.Opc, env.SOp, env.F, env.V, none, asList, aTp, mkApp (.const ``POp.select []) aTp,
           argsHL, klam]
       let pf? ← kpf?.mapM fun kp => do
-        let scStep ← mkAppOptM ``sc_select #[env.Op, env.SOp, resTp, aTp, cBoolSrc, t, e, klam]
+        let scStep ← env.mkSc ``sc_select #[resTp, aTp, cBoolSrc, t, e, klam]
         -- `bif ⟦c⟧ then t else e = ite c t e` under `denote ∘ klam`
         let congrFn ← withLocalDeclD `z (mkApp env.V aTp) fun z => do
-          mkLambdaFVars #[z] (← denoteE (mkApp klam z))
+          mkLambdaFVars #[z] (← env.denE (mkApp klam z))
         let congrStep ← mkAppM ``congrArg #[congrFn, ← mkAppM ``Eq.symm #[bridge]]
         pfTransD ⟨scStep, true⟩
           (← pfTransD ⟨congrStep, true⟩ { kp with e := kp.e.replaceFVar vc src })
@@ -1212,7 +1411,7 @@ mutual
       withLocalDeclD `v (mkApp env.V (mkApp2 (.const ``Tp.vec []) aTp nExpr)) fun vc => do
         let (kcode, kpf?) ← k vc
         let node ← mkAppOptM ``Code.vec
-          #[env.Op, env.SOp, env.F, env.V, none, aTp, nExpr, vecVal, ← mkLambdaFVars #[vc] kcode]
+          #[env.Op, env.Opc, env.SOp, env.F, env.V, none, aTp, nExpr, vecVal, ← mkLambdaFVars #[vc] kcode]
         return (node, kpf?.map (fun kp => { kp with e := kp.e.replaceFVar vc vecVal }))
 
   /-- **Array construction** `#[e₀,…]`: as `emitVec`, instantiating with `(#[atoms])`. -/
@@ -1223,7 +1422,7 @@ mutual
       withLocalDeclD `v (mkApp env.V (mkApp (.const ``Tp.array []) aTp)) fun vc => do
         let (kcode, kpf?) ← k vc
         let node ← mkAppOptM ``Code.arr
-          #[env.Op, env.SOp, env.F, env.V, none, aTp, lst, ← mkLambdaFVars #[vc] kcode]
+          #[env.Op, env.Opc, env.SOp, env.F, env.V, none, aTp, lst, ← mkLambdaFVars #[vc] kcode]
         let pf? ← kpf?.mapM fun kp =>
           return { kp with e := kp.e.replaceFVar vc (← mkAppM ``List.toArray #[lst]) }
         return (node, pf?)
@@ -1239,13 +1438,14 @@ mutual
     let e := e.consumeMData.headBeta
     if let .letE _ _ v b _ := e then return ← env.walk resTp (b.instantiate1 v) k
     match_expr e with
-    | Free.pure _ _ _ a       => env.walkPure resTp a k
+    | FreeE.pure _ _ _ _ a    => env.walkPure resTp a k
     | Pure.pure _ _ _ a       => env.walkPure resTp a k
     | Bind.bind _ _ _ _ x f   => env.walkBind resTp x f k
-    | Free.bind _ _ _ _ x f   => env.walkBind resTp x f k
+    | FreeE.bind _ _ _ _ _ x f => env.walkBind resTp x f k
     | cond _ c t el           => env.walkIte resTp c t el k
     | Free.op _ _ _ I R o i cont => env.walkOp resTp I R o i cont k
-    | Free.hop _ _ _ β s b cont  => env.walkScope resTp β s b cont k
+    | FreeE.op _ _ _ _ ev cont => env.walkOpE resTp ev cont k
+    | FreeE.hop _ _ _ _ β s b cont => env.walkScope resTp β s b cont k
     | Fin.foldlM _ elemTy _ nExpr f init =>
         -- a bounded loop with an *effectful* (`Free`-valued) body — the same body-agnostic node
         env.walkFold resTp elemTy nExpr f init k
@@ -1261,10 +1461,10 @@ mutual
     let (code, pA?) ← env.atom resTp a (env.liftK k)
     if !env.pf then return (code, none)
     let some pA := pA? | throwError "reflect%: internal: missing pure-atom proof"
-    let Kf ← mkKf env.V (← inferType a) k
+    let Kf ← mkKf env (← inferType a) k
     if pA.isEq then
-      return (code, some ⟨← mkAppOptM ``sc_pure
-        #[env.Op, env.SOp, none, resTp, a, ← denoteE code, Kf, pA.e], true⟩)
+      return (code, some ⟨← env.mkSc ``sc_pure
+        #[none, resTp, a, ← env.denE code, Kf, pA.e], true⟩)
     else
       return (code, some ⟨← mkAppOptM ``sc_pureE
         #[env.Op, env.SOp, none, resTp, a, ← denoteE code, Kf, pA.e], false⟩)
@@ -1273,7 +1473,7 @@ mutual
       return point; in proof mode compose `x`'s and `f`'s equations via `sc_bind`. -/
   partial def Env.walkBind (env : Env) (resTp x f : Expr) (k : Expr → MetaM Expr) : MetaM CodePf := do
     match_expr x.consumeMData.headBeta with
-    | Free.pure _ _ _ a => env.walk resTp (f.beta #[a]) k
+    | FreeE.pure _ _ _ _ a => env.walk resTp (f.beta #[a]) k
     | Pure.pure _ _ _ a => env.walk resTp (f.beta #[a]) k
     | _ =>
       -- the code continuation at each return point of `x`: walk `f` at the bound atom (in proof
@@ -1292,9 +1492,9 @@ mutual
       let some xproof := xpf? | throwError "reflect%: internal: missing bind proof"
       let Y ← freeResult x
       let X ← forallTelescope (← inferType f) fun _ cod => do
-        let_expr Free _ _ X := (← whnf cod) | throwError "reflect%: bind cont"
+        let_expr FreeE _ _ _ X := (← whnf cod) | throwError "reflect%: bind cont"
         pure X
-      let Kf ← mkKf env.V X k
+      let Kf ← mkKf env X k
       let (fproofLam, fpEq) ← withLocalDeclD `r Y fun vr => do
         let env' := { env with subst := (vr.fvarId!, vr) :: env.subst }
         let (_, fp?) ← env'.walk resTp (f.beta #[vr]) k
@@ -1304,32 +1504,34 @@ mutual
         -- xproof : denote xcode = bind (ofFree x) (fun r => denote (kInner r))
         let ofx ← mkAppM ``ofFree #[x]
         let hEq ← mkAppM ``funext #[fproofLam]      -- (fun r => denote (kInner r)) = (fun r => bind (ofFree (f r)) Kf)
-        let compTy ← inferType (← denoteE xcode)
+        let compTy ← inferType (← env.denE xcode)
         let fFun ← withLocalDeclD `kk (← mkArrow Y compTy) fun kk => do
           mkLambdaFVars #[kk] (← mkAppM ``ITree.bind #[ofx, kk])
         let congrStep ← mkAppM ``congrArg #[fFun, hEq]
         let hC ← eqTransD xproof.e congrStep
-        return (xcode, some ⟨← mkAppOptM ``sc_bind
-          #[env.Op, env.SOp, none, none, resTp, x, f, Kf, ← denoteE xcode, hC], true⟩)
+        return (xcode, some ⟨← env.mkSc ``sc_bind
+          #[none, none, resTp, x, f, Kf, ← env.denE xcode, hC], true⟩)
       else
         -- (★≈): the walked computation's step and the continuation's pointwise steps compose
         -- via `sc_bindE` (no `funext` fusion up to taus)
-        let K1 ← mkKf env.V Y kInner
+        let K1 ← mkKf env Y kInner
         let hC ← xproof.toEutt
         let ofx ← mkAppM ``ofFree #[x]
         let hC ← mkExpectedTypeHint hC
-          (← mkAppM ``ITree.Eutt #[← denoteE xcode, ← mkAppM ``ITree.bind #[ofx, K1]])
+          (← mkAppM ``ITree.Eutt #[← env.denE xcode, ← mkAppM ``ITree.bind #[ofx, K1]])
         let hK ← Pf.toEuttPointwise ⟨fproofLam, fpEq⟩
         return (xcode, some ⟨← mkAppOptM ``sc_bindE
-          #[env.Op, env.SOp, none, none, resTp, x, f, K1, Kf, ← denoteE xcode, hC, hK], false⟩)
+          #[env.Op, env.SOp, none, none, resTp, x, f, K1, Kf, ← env.denE xcode, hC, hK], false⟩)
 
-  /-- `op o i cont`: reflect the continuation (binding the result atom), then the input atom wrapping
-      the `op` node; in proof mode `sc_op` with the continuation's IH. -/
-  partial def Env.walkOp (env : Env) (resTp I R o i cont : Expr) (k : Expr → MetaM Expr) : MetaM CodePf := do
-    let ITp ← reifyTpOrThrow I
-    let RTp ← reifyTpOrThrow R
-    let .forallE _ Rt _ _ := (← whnf (← inferType cont))
-      | throwError "reflect%: expected an op continuation{indentExpr cont}"
+  /-- `Free.op o i cont` (a DSL effect, first-order signature indices `I R : TpF`): reflect the
+      continuation (binding the result atom), then the input atom wrapping the `op` node; in
+      proof mode `sc_op`/`sc_opBaseC` with the continuation's IH. -/
+  partial def Env.walkOp (env : Env) (resTp I R o i cont : Expr) (k : Expr → MetaM Expr) :
+      MetaM CodePf := do
+    let ITp := mkApp (Lean.mkConst ``TpF.tp []) I
+    let RTp := mkApp (Lean.mkConst ``TpF.tp []) R
+    let Rt := mkApp (Lean.mkConst ``TpF.denote []) R
+    let oLift := mkApp4 (Lean.mkConst ``OpT.mk []) env.Op I R o
     let (kbody, ih?) ← withLocalDeclD `v (mkApp env.V RTp) fun vx =>
       env.withHostVar Rt vx fun hx => do
         let env' := { env with subst := (hx.fvarId!, vx) :: env.subst }
@@ -1337,22 +1539,63 @@ mutual
         return (← mkLambdaFVars #[vx] rcode,
                 ← rpf?.mapM (fun p => do pure { p with e := ← mkLambdaFVars #[vx] p.e }))
     let (code, pI?) ← env.atom resTp i (env.liftK fun ia =>
-      mkAppOptM ``Code.op #[env.Op, env.SOp, env.F, env.V, none, ITp, RTp, o, ia, kbody])
+      mkAppOptM ``Code.op #[env.Op, env.Opc, env.SOp, env.F, env.V, none, ITp, RTp,
+                            env.opWrap ITp RTp oLift, ia, kbody])
     if !env.pf then return (code, none)
     let some pI := pI? | throwError "reflect%: internal: missing op-input proof"
     let some ih := ih? | throwError "reflect%: internal: missing op IH"
     let Xr ← forallTelescope (← inferType cont) fun _ cod => do
-      let_expr Free _ _ X := (← whnf cod) | throwError "reflect%: op cont"
+      let_expr FreeE _ _ _ X := (← whnf cod) | throwError "reflect%: op cont"
       pure X
-    let Kf ← mkKf env.V Xr k
+    let Kf ← mkKf env Xr k
     let scStep : Pf ←
       if ih.isEq then
-        pure ⟨← mkAppOptM ``sc_op
-          #[env.Op, env.SOp, ITp, RTp, resTp, none, o, i, cont, kbody, Kf, ih.e], true⟩
-      else
+        pure ⟨← mkAppOptM (if env.recMode then ``sc_opBaseC else ``sc_op) (#[some env.Op, some env.SOp] ++ env.scx ++
+          #[some I, some R, some resTp, none, some o, some i, some cont, some kbody,
+            some Kf, some ih.e]), true⟩
+      else do
+        if env.recMode then throwError "reflect%: internal: eutt step inside a rec body"
         pure ⟨← mkAppOptM ``sc_opE
-          #[env.Op, env.SOp, ITp, RTp, resTp, none, o, i, cont, kbody, Kf, ih.e], false⟩
+          #[env.Op, env.SOp, I, R, resTp, none, o, i, cont, kbody, Kf, ih.e], false⟩
     return (code, some (← pfTransD pI scStep))
+
+  /-- A raw event node `FreeE.op ev cont` — the shape of a `rec_` body's lifted intermediary:
+      `Sum.inl` a packaged DSL event, `Sum.inr` the self-call at the state. -/
+  partial def Env.walkOpE (env : Env) (resTp ev cont : Expr) (k : Expr → MetaM Expr) :
+      MetaM CodePf := do
+    match_expr ev with
+    | Sum.inl _ _ e => do
+        let_expr Effect.mk _ I R o i := e
+          | throwError "reflect%: unsupported event{indentExpr ev}"
+        env.walkOp resTp I R o i cont k
+    | Sum.inr _ _ st => do
+        unless env.recMode do throwError "reflect%: self-call outside a rec body"
+        let some (σTp, ρTp) := env.recTps
+          | throwError "reflect%: internal: rec walk without state types"
+        let callE := mkApp3 (Lean.mkConst ``CallOp.call [])
+          (mkApp (Lean.mkConst ``OpT []) env.Op) σTp ρTp
+        let hostTy := mkApp2 (Lean.mkConst ``Tp.denote []) env.Op ρTp
+        let (kbody, ih?) ← withLocalDeclD `v (mkApp env.V ρTp) fun vx =>
+          env.withHostVar hostTy vx fun hx => do
+            let env' := { env with subst := (hx.fvarId!, vx) :: env.subst }
+            let (rcode, rpf?) ← env'.walk resTp (cont.beta #[hx]) k
+            return (← mkLambdaFVars #[vx] rcode,
+                    ← rpf?.mapM (fun p => do pure { p with e := ← mkLambdaFVars #[vx] p.e }))
+        let (code, pS?) ← env.atom resTp st (env.liftK fun sa =>
+          mkAppOptM ``Code.op #[env.Op, env.Opc, env.SOp, env.F, env.V, none, σTp, ρTp,
+                                callE, sa, kbody])
+        if !env.pf then return (code, none)
+        let some pS := pS? | throwError "reflect%: internal: missing call-input proof"
+        let some ih := ih? | throwError "reflect%: internal: missing call IH"
+        let Xr ← forallTelescope (← inferType cont) fun _ cod => do
+          let_expr FreeE _ _ _ X := (← whnf cod) | throwError "reflect%: call cont"
+          pure X
+        let Kf ← mkKf env Xr k
+        unless ih.isEq do throwError "reflect%: internal: eutt step inside a rec body"
+        let scStep : Pf := ⟨← mkAppOptM ``sc_opCallC
+          #[env.Op, env.SOp, σTp, ρTp, resTp, none, st, cont, kbody, Kf, ih.e], true⟩
+        return (code, some (← pfTransD pS scStep))
+    | _ => throwError "reflect%: unsupported event{indentExpr ev}"
 
   /-- `hop s b cont`: reflect the block (ending in `ret`), then the tail; in proof mode `sc_scope`
       composes the block's equation (`walkTop`'s `denote B = ofFree b`) with the tail's IH. -/
@@ -1367,17 +1610,17 @@ mutual
         let (rcode, rpf?) ← env'.walk resTp (cont.beta #[hx]) k
         return (← mkLambdaFVars #[vx] rcode,
                 ← rpf?.mapM (fun p => do pure { p with e := ← mkLambdaFVars #[vx] p.e }))
-    let code ← mkAppOptM ``Code.scope #[env.Op, env.SOp, env.F, env.V, none, βTp, s, blockCode, kbody]
+    let code ← mkAppOptM ``Code.scope #[env.Op, env.Opc, env.SOp, env.F, env.V, none, βTp, s, blockCode, kbody]
     if !env.pf then return (code, none)
     let some hB := blockPf? | throwError "reflect%: internal: missing scope-block proof"
     let some ih := ih? | throwError "reflect%: internal: missing scope IH"
     let X ← forallTelescope (← inferType cont) fun _ cod => do
-      let_expr Free _ _ X := (← whnf cod) | throwError "reflect%: scope cont"
+      let_expr FreeE _ _ _ X := (← whnf cod) | throwError "reflect%: scope cont"
       pure X
-    let Kf ← mkKf env.V X k
+    let Kf ← mkKf env X k
     if hB.isEq && ih.isEq then
-      return (code, some ⟨← mkAppOptM ``sc_scope
-        #[env.Op, env.SOp, βTp, resTp, none, s, b, cont, blockCode, kbody, Kf, hB.e, ih.e], true⟩)
+      return (code, some ⟨← env.mkSc ``sc_scope
+        #[βTp, resTp, none, s, b, cont, blockCode, kbody, Kf, hB.e, ih.e], true⟩)
     else
       return (code, some ⟨← mkAppOptM ``sc_scopeE
         #[env.Op, env.SOp, βTp, resTp, none, s, b, cont, blockCode, kbody, Kf,
@@ -1389,16 +1632,16 @@ mutual
     let (tcode, tpf?) ← env.walk resTp t k
     let (ecode, epf?) ← env.walk resTp el k
     let (code, pC?) ← env.atom resTp c (env.liftK fun ca =>
-      mkAppOptM ``Code.ite #[env.Op, env.SOp, env.F, env.V, none, ca, tcode, ecode])
+      mkAppOptM ``Code.ite #[env.Op, env.Opc, env.SOp, env.F, env.V, none, ca, tcode, ecode])
     if !env.pf then return (code, none)
     let (some pC, some tproof, some eproof) := (pC?, tpf?, epf?)
       | throwError "reflect%: internal: missing ite proof"
     let X ← freeResult t
-    let Kf ← mkKf env.V X k
+    let Kf ← mkKf env X k
     let scStep : Pf ←
       if tproof.isEq && eproof.isEq then
-        pure ⟨← mkAppOptM ``sc_cond
-          #[env.Op, env.SOp, none, resTp, c, t, el, tcode, ecode, Kf, tproof.e, eproof.e], true⟩
+        pure ⟨← env.mkSc ``sc_cond
+          #[none, resTp, c, t, el, tcode, ecode, Kf, tproof.e, eproof.e], true⟩
       else
         pure ⟨← mkAppOptM ``sc_condE
           #[env.Op, env.SOp, none, resTp, c, t, el, tcode, ecode, Kf,
@@ -1427,14 +1670,14 @@ mutual
     let kbody ← withLocalDeclD `v (mkApp env.V aTp) fun vc => do
       mkLambdaFVars #[vc] (← k vc)
     let (code, pI?) ← env.atom resTp init (env.liftK fun ainit =>
-      mkAppOptM ``Code.fold #[env.Op, env.SOp, env.F, env.V, none, aTp, nExpr, ainit, bodyLam, kbody])
+      mkAppOptM ``Code.fold #[env.Op, env.Opc, env.SOp, env.F, env.V, none, aTp, nExpr, ainit, bodyLam, kbody])
     if !env.pf then return (code, none)
     let some pI := pI? | throwError "reflect%: internal: missing fold-init proof"
     let some hb := hb? | throwError "reflect%: internal: missing fold body proof"
     let scStep : Pf ←
       if hb.isEq then
-        pure ⟨← mkAppOptM ``sc_foldM
-          #[env.Op, env.SOp, resTp, aTp, nExpr, init, f, bodyLam, kbody, hb.e], true⟩
+        pure ⟨← env.mkSc ``sc_foldM
+          #[resTp, aTp, nExpr, init, f, bodyLam, kbody, hb.e], true⟩
       else
         pure ⟨← mkAppOptM ``sc_foldME
           #[env.Op, env.SOp, resTp, aTp, nExpr, init, f, bodyLam, kbody, hb.e], false⟩
@@ -1456,6 +1699,7 @@ mutual
     if let some sig ← env.analyzeRecCall e then
       return some (← env.callRecWalk resTp sig k)
     let some sig ← analyzeCall e | return none
+    let sig ← env.resolveVariant sig sigsMatch
     if env.pf then return some (← env.callWithProof resTp sig k)
     else env.callAbstract resTp sig k
 
@@ -1538,10 +1782,25 @@ mutual
               throwError "reflect%: recursive helper `{sig.cName}` cannot be spilled — only \
                           structural `0`/`succ` recursion at a `Nat` argument is supported"
             env.inFlight.modify (·.push sig.cName)
-            try
-              let _ ← env.rebuildBody sig       -- discovery: callees push first (post-order)
-            finally
-              env.inFlight.modify (·.filter (· != sig.cName))
+            let sig ←
+              try
+                let _ ← env.rebuildBody sig       -- discovery: callees push first (post-order)
+                pure sig
+              catch e =>
+                -- a body that reaches a recursion must *specialize* over its function
+                -- arguments: demote them to monomorphisation and retry
+                if sig.fnArgPos.isEmpty then
+                  env.inFlight.modify (·.filter (· != sig.cName))
+                  throw e
+                let some sig' ← (try some <$> sig.demoteFnArgs env catch _ => pure none)
+                  | env.inFlight.modify (·.filter (· != sig.cName)); throw e
+                try
+                  let _ ← env.rebuildBody sig'
+                  pure sig'
+                catch _ =>
+                  env.inFlight.modify (·.filter (· != sig.cName))
+                  throw e
+            env.inFlight.modify (·.filter (· != sig.cName))
             env.defs.modify (·.push sig)
         mkFreshExprMVar (mkApp2 env.F sig.asList sig.retTp)
 
@@ -1579,7 +1838,22 @@ mutual
         let decls : Array (Name × (Array Expr → MetaM Expr)) :=
           sig.argTys.map (fun ty => (`x, fun _ => pure ty))
         withLocalDeclsD decls fun pvs => do
-          let subst := (pvs.toList.map (fun p => (p.fvarId!, p))) ++ env.subst
+          -- a *function-typed* value argument gets a separate object-level atom (a Kleisli
+          -- binder): the host `pv` carries the source side of the equation, the atom `pa` the
+          -- code side; app-steps relate them by *deferred* hints, so both stay abstract until a
+          -- call site instantiates them consistently
+          let fnAtomDecls : Array (Name × (Array Expr → MetaM Expr)) :=
+            sig.fnArgPos.map (fun i => (`fa, fun _ => pure (mkApp env.V sig.argTps[i]!)))
+          withLocalDeclsD fnAtomDecls fun pas => do
+          let mut subst := env.subst
+          let mut atomOf : Array Expr := #[]
+          for i in [0:pvs.size] do
+            if let some fi := sig.fnArgPos.findIdx? (· == i) then
+              subst := (pvs[i]!.fvarId!, pas[fi]!) :: subst
+              atomOf := atomOf.push pas[fi]!
+            else
+              subst := (pvs[i]!.fvarId!, pvs[i]!) :: subst
+              atomOf := atomOf.push pvs[i]!
           let mut fullArgs := sig.fArgs
           for j in [0:sig.valuePos.size] do fullArgs := fullArgs.set! (sig.valuePos[j]!) pvs[j]!
           let env' := { env with subst }
@@ -1592,10 +1866,13 @@ mutual
           let some bproof := bpf? | throwError "reflect%: internal: missing call-body proof"
           let mut projs : Array Expr := #[]
           for j in [0:pvs.size] do projs := projs.push (← projHList hargs j)
-          let bcode' := bcode.replaceFVars pvs projs
-          let bproof' := bproof.e.replaceFVars pvs projs
+          let bcode' := bcode.replaceFVars atomOf projs
+          let bproof' := bproof.e.replaceFVars atomOf projs
+          -- the fn *hosts* stay abstracted (trailing binders): a call site betas them with its
+          -- actual source lambdas
+          let fnHosts := sig.fnArgPos.map (pvs[·]!)
           pure (← mkLambdaFVars #[hargs] (← denoteE bcode'),
-                Pf.mk (← mkLambdaFVars #[hargs] bproof') bproof.isEq)
+                Pf.mk (← mkLambdaFVars (#[hargs] ++ fnHosts) bproof') bproof.isEq)
       env.pfDefs.modify (·.push { name := sig.cName, asList := sig.asList, retTp := sig.retTp,
                                   cf, bodyProof := bodyProofLam.e, bodyProofEq := bodyProofLam.isEq,
                                   key := sig.monoArgs })
@@ -1612,11 +1889,15 @@ mutual
     env.atoms resTp sig.valueArgs fun atoms => do
       let argHList ← mkArgHListT env.V atoms sig.argTps.toList
       let callCode ← env.emitCall cf sig.asList sig.retTp argHList k
-      let hcf := bodyProofLam.e.beta #[argHList]
+      let fnSrcs := sig.fnArgPos.map (fun i => sig.valueArgs.toArray[i]!)
+      let hcf := bodyProofLam.e.beta (#[argHList] ++ fnSrcs)
       -- `m = ofFree (helper applied to *these* atoms)` — matches `hcf`'s RHS; a bin/get argument's
-      -- atom is a bound var here, later instantiated to the source value (so `m` becomes `ofFree e`).
+      -- atom is a bound var here, later instantiated to the source value (so `m` becomes `ofFree e`);
+      -- function arguments use the *source* lambda (matching the body proof's host side)
       let mut fullArgs := sig.fArgs
-      for j in [0:sig.valuePos.size] do fullArgs := fullArgs.set! (sig.valuePos[j]!) atoms.toArray[j]!
+      for j in [0:sig.valuePos.size] do
+        unless sig.fnArgPos.contains j do
+          fullArgs := fullArgs.set! (sig.valuePos[j]!) atoms.toArray[j]!
       let m ← mkAppM ``ofFree #[sig.cValInst.beta fullArgs]
       if bodyProofLam.isEq then
         let scStep ← mkAppOptM ``sc_call
@@ -1641,13 +1922,97 @@ mutual
           withLocalDeclD `p (mkApp env.V cTp) fun vp => do
             let (kcode, kpf?) ← k vp
             let node ← mkAppOptM ``Code.bin
-              #[env.Op, env.SOp, env.F, env.V, none, none, none, none, pairOp, a, tailAtom,
+              #[env.Op, env.Opc, env.SOp, env.F, env.V, none, none, none, none, pairOp, a, tailAtom,
                 ← mkLambdaFVars #[vp] kcode]
             let pf? ← kpf?.mapM fun kp =>
               return { kp with
-                e := kp.e.replaceFVar vp (← mkAppM ``Bin.denote #[pairOp, a, tailAtom]) }
+                e := kp.e.replaceFVar vp (← mkAppOptM ``Bin.denote #[env.Op, none, none, none, pairOp, a, tailAtom]) }
             return (node, pf?)
     | _, _ => throwError "reflect%: internal: tuple arity mismatch"
+
+  /-- A **function value**: reflect the lambda's body as a suspended block (`Code.lam`).  The
+      body is walked as ordinary code (a pure body wraps in `pure`); in proof mode `sc_lam`
+      identifies the suspended Kleisli arrow with the source's embedding `ofFree ∘ f`, and the
+      continuation is instantiated at that embedding. -/
+  partial def Env.emitLam (env : Env) (resTp a : Expr) (k : Expr → MetaM CodePf) :
+      MetaM CodePf := do
+    if env.recMode then
+      throwError "reflect%: a function value inside a recursive body is not supported{indentExpr a}"
+    let fnTp ← reifyTpOrThrow (← inferType a)
+    let (aTp, bTp) ← do
+      match_expr fnTp with
+      | Tp.fn x y => pure (x, y)
+      | _ => throwError "reflect%: not a function type{indentExpr fnTp}"
+    let .lam _ dom _ _ := a | throwError "reflect%: expected a lambda{indentExpr a}"
+    -- the Free-valued source: the lambda itself, or its pure body wrapped in `pure`
+    let bodyIsFree ← withLocalDeclD `x dom fun x => do
+      pure ((← whnf (← inferType (a.beta #[x]))).isAppOf ``FreeE)
+    let fW ←
+      if bodyIsFree then pure a
+      else withLocalDeclD `x dom fun x => do
+        mkLambdaFVars #[x] (← mkAppOptM ``FreeE.pure
+          #[mkApp (Lean.mkConst ``Effect []) env.Op,
+            mkApp (Lean.mkConst ``Effect.arity []) env.Op, env.SOp, none, a.beta #[x]])
+    let (bodyLam, hb?) ←
+      withLocalDeclD `x (mkApp env.V aTp) fun vx =>
+      env.withHostVar dom vx fun hx => do
+        let env' := { env with subst := (hx.fvarId!, vx) :: env.subst }
+        let (bcode, bpf?) ← env'.walkTop bTp (fW.beta #[hx])
+        pure (← mkLambdaFVars #[vx] bcode,
+              ← bpf?.mapM (fun p => do pure { p with e := ← mkLambdaFVars #[vx] p.e }))
+    withLocalDeclD `v (mkApp env.V fnTp) fun vc => do
+      let (kcode, kpf?) ← k vc
+      let klam ← mkLambdaFVars #[vc] kcode
+      let node ← mkAppOptM ``Code.lam
+        #[env.Op, env.Opc, env.SOp, env.F, env.V, none, aTp, bTp, bodyLam, klam]
+      let pf? ← kpf?.mapM fun kp => do
+        let some hb := hb? | throwError "reflect%: internal: missing lambda body proof"
+        unless hb.isEq do
+          throwError "reflect%: a function value's body may not call a recursive helper"
+        let scStep ← env.mkSc ``sc_lam #[aTp, bTp, resTp, fW, bodyLam, klam, hb.e]
+        let emb ← withLocalDeclD `x dom fun x => do
+          mkLambdaFVars #[x] (← mkAppM ``ofFree #[fW.beta #[x]])
+        pfTransD ⟨scStep, true⟩ { kp with e := kp.e.replaceFVar vc emb }
+      return (node, pf?)
+
+  /-- First-class **application** `f x …` (an atom-mapped function head): one `Code.app` node
+      per (curried) argument.  In proof mode the arrow's return equation is **deferred**: an
+      `id`-hinted `rfl` whose type becomes definitional only once the enclosing nodes
+      instantiate the function atom with its source embedding — the kernel checks the spliced,
+      fully-instantiated proof. -/
+  partial def Env.emitApps (env : Env) (resTp head : Expr) (args : Array Expr)
+      (k : Expr → MetaM CodePf) : MetaM CodePf := do
+    let εE := mkApp (Lean.mkConst ``Effect []) env.Op
+    let arityE := mkApp (Lean.mkConst ``Effect.arity []) env.Op
+    let rec go (fa src : Expr) (i : Nat) : MetaM CodePf := do
+      if i >= args.size then k fa
+      else do
+        let x := args[i]!
+        let fnTp ← reifyTpOrThrow (← inferType src)
+        let (aTp, bTp) ← do
+          match_expr fnTp with
+          | Tp.fn u v => pure (u, v)
+          | _ => throwError "reflect%: over-application of a function value{indentExpr src}"
+        let _ := aTp
+        env.atom resTp x fun xa => do
+          let src' := mkApp src x
+          withLocalDeclD `v (mkApp env.V bTp) fun vc => do
+            let (kcode, kpf?) ← go vc src' (i+1)
+            let klam ← mkLambdaFVars #[vc] kcode
+            let node ← mkAppOptM ``Code.app
+              #[env.Op, env.Opc, env.SOp, env.F, env.V, none, aTp, bTp, fa, xa, klam]
+            let pf? ← kpf?.mapM fun kp => do
+              let bden := mkApp2 (Lean.mkConst ``Tp.denote []) env.Op bTp
+              let retV ← mkAppOptM ``ITree.ret #[εE, arityE, bden, src']
+              let hfTy ← mkEq (mkApp fa xa) retV
+              -- **deferred**: the hint's type becomes definitional once the enclosing nodes
+              -- instantiate the atoms (the fn atom with its embedding) — the kernel checks the
+              -- spliced, fully-instantiated proof
+              let hf ← mkExpectedTypeHint (← mkEqRefl (mkApp fa xa)) hfTy
+              let scStep ← env.mkSc ``sc_app #[aTp, bTp, resTp, fa, xa, none, klam, hf]
+              pfTransD ⟨scStep, true⟩ { kp with e := kp.e.replaceFVar vc src' }
+            return (node, pf?)
+    env.atom resTp head fun fa => go fa head 0
 
   /-- A **recursive pure helper call** in atom position: the state atoms tuple up (`bin .pair`
       nodes) and a single-argument `call` targets the spilled `rec_`.  In proof mode the helper's
@@ -1668,20 +2033,23 @@ mutual
           let (kcode, kpf?) ← k vc
           let klam ← mkLambdaFVars #[vc] kcode
           let node ← mkAppOptM ``Code.call
-            #[env.Op, env.SOp, env.F, env.V, none, sig.asList, sig.retTp, cf, argHL, klam]
+            #[env.Op, env.Opc, env.SOp, env.F, env.V, none, sig.asList, sig.retTp, cf, argHL, klam]
           let pf? ← kpf?.mapM fun kp => do
             let some bp := bodyProofLam?
               | throwError "reflect%: internal: missing rec-call body proof"
             let hypArgs := rd.hypPos.map (sig.fArgs[·]!)
-            let hcf := bp.e.beta (#[argHL] ++ hypArgs)
+            -- invariant fn components: the equation's host binders take the *source* functions
+            let fnSrcs := (sig.valueArgs.take rd.fnStateCount).toArray
+            let hcf := bp.e.beta (fnSrcs ++ #[argHL] ++ hypArgs)
             let scStep ← mkAppOptM ``sc_callPureE
               #[env.Op, env.SOp, sig.asList, sig.retTp, resTp, cf, argHL, none, klam, hcf]
             -- the source at the tuple atom's projections (the atom is a bound var, tied to the
-            -- source values by the enclosing pair nodes)
+            -- source values by the enclosing pair nodes); fn components use the source function
             let projs := (mkTupleProjs rd.stateTys.toList tupAtom).toArray
             let mut fullArgs := sig.fArgs
             for j in [0:sig.valuePos.size] do
-              fullArgs := fullArgs.set! (sig.valuePos[j]!) projs[j]!
+              unless j < rd.fnStateCount do
+                fullArgs := fullArgs.set! (sig.valuePos[j]!) projs[j]!
             pfTransD ⟨scStep, false⟩
               { kp with e := kp.e.replaceFVar vc (mkAppN sig.cValInst fullArgs) }
           return (node, pf?)
@@ -1705,11 +2073,12 @@ mutual
         let (kcode, kpf?) ← k vc
         let klam ← mkLambdaFVars #[vc] kcode
         let node ← mkAppOptM ``Code.call
-          #[env.Op, env.SOp, env.F, env.V, none, sig.asList, sig.retTp, cf, argHList, klam]
+          #[env.Op, env.Opc, env.SOp, env.F, env.V, none, sig.asList, sig.retTp, cf, argHList, klam]
         let pf? ← kpf?.mapM fun kp => do
           let some bodyProofLam := bodyProofLam?
             | throwError "reflect%: internal: missing pure-call body proof"
-          let hcf := bodyProofLam.e.beta #[argHList]
+          let fnSrcs := sig.fnArgPos.map (fun i => sig.valueArgs.toArray[i]!)
+          let hcf := bodyProofLam.e.beta (#[argHList] ++ fnSrcs)
           let scStep : Pf ←
             if bodyProofLam.isEq then
               pure ⟨← mkAppOptM ``sc_callPure
@@ -1719,10 +2088,12 @@ mutual
               pure ⟨← mkAppOptM ``sc_callPureE
                 #[env.Op, env.SOp, sig.asList, sig.retTp, resTp, cf, argHList, none, klam, hcf],
                 false⟩
-          -- the value at *these* atoms (bound vars tied to sources by the enclosing nodes)
+          -- the value at *these* atoms (bound vars tied to sources by the enclosing nodes);
+          -- function arguments use the *source* lambda (matching the body proof's host side)
           let mut fullArgs := sig.fArgs
           for j in [0:sig.valuePos.size] do
-            fullArgs := fullArgs.set! (sig.valuePos[j]!) atoms.toArray[j]!
+            unless sig.fnArgPos.contains j do
+              fullArgs := fullArgs.set! (sig.valuePos[j]!) atoms.toArray[j]!
           pfTransD scStep { kp with e := kp.e.replaceFVar vc (sig.cValInst.beta fullArgs) }
         return (node, pf?)
 end
@@ -1769,9 +2140,9 @@ def elabRecKits (Op SOp : Expr) (defs : IO.Ref (Array CallSig))
       let prf ← elabTermEnsuringType (← `(by intros; first | omega | decide | trivial)) (some ty)
       m.assign prf
   pending.set #[]
-  let denoteV := Lean.mkConst ``Tp.denote []
+  let denoteV := mkApp (Lean.mkConst ``Tp.denote []) Op
   let tpTy := (.const ``Tp [] : Expr)
-  let fTy ← mkArrow (← mkAppM ``List #[tpTy]) (← mkArrow tpTy (mkSort (.succ (.succ .zero))))
+  let fTy ← mkArrow (← mkAppM ``List #[tpTy]) (← mkArrow tpTy (mkSort (.succ .zero)))
   let vTy ← mkArrow tpTy (mkSort (.succ .zero))
   for sig in (← defs.get) do
     let some rd := sig.rec? | continue
@@ -1784,148 +2155,239 @@ def elabRecKits (Op SOp : Expr) (defs : IO.Ref (Array CallSig))
     let ρTy := rd.ρTy
     let ρTp := sig.retTp
     let hasHyps := !rd.hypPos.isEmpty
-    let callOp := mkAppN (.const ``ITree.CallOp []) #[Op, σTy, rd.ρValTy]
-    let kcCallOp ← mkAppM ``KC #[callOp]
-    -- the shared `rec_` body, parametric in the value/function representations
-    let recBody ← withLocalDeclD `V0 vTy fun Vp0 => withLocalDeclD `F' fTy fun F' =>
-      withLocalDeclD `arg (mkApp Vp0 rd.σTp) fun argAtom => do
-        let codeT ← withLocalDeclD `s σTy fun s => do
-          let envB : Env := { Op := callOp, SOp, F := F', V := Vp0,
-                              subst := [(s.fvarId!, argAtom)], defs, pfDefs, inFlight,
-                              pending, recVerdicts, recBodies, noSpill := true }
-          Prod.fst <$> envB.walk ρTp (cb.beta #[s]) (envB.mkRetT ρTp)
-        mkLambdaFVars #[Vp0, F', argAtom] codeT
-    recBodies.modify (·.push (sig, recBody))
-    let bodyCode := recBody.beta #[denoteV, kcCallOp]
-    -- hspec: compositional (proof-mode walk of `cb`) — an equality (self-calls are plain ops)
-    let hspecPrf ← withLocalDeclD `N σTy fun N => do
-      let penv : Env := { Op := callOp, SOp, F := kcCallOp, V := denoteV,
-                          subst := [(N.fvarId!, N)], defs, pfDefs, inFlight,
-                          pending, recVerdicts, recBodies, noSpill := true, pf := true }
-      let (_, pf?) ← penv.walkTop ρTp (cb.beta #[N])
-      let some proof := pf? | throwError "reflect%: internal: rec hspec produced no proof"
-      unless proof.isEq do throwError "reflect%: internal: rec hspec must be an equality"
-      let want ← mkEq (← mkAppM ``denote #[mkApp bodyCode N]) (← mkAppM ``ofFree #[mkApp cb N])
-      mkLambdaFVars #[N] (← mkExpectedTypeHint proof.e want)
-    -- the total source over the tupled state: `goT` when the source is hypothesis-guarded,
-    -- else the source itself; a pure result wraps in `pure`
-    let fW ← withLocalDeclD `s σTy fun s => do
-      let projs := (mkTupleProjs rd.stateTys.toList s).toArray
-      let src ←
-        if hasHyps then pure (mkApp goT s)
-        else do
-          let mut fullArgs := sig.fArgs
-          for j in [0:sig.valuePos.size] do
-            fullArgs := fullArgs.set! (sig.valuePos[j]!) projs[j]!
-          pure (mkAppN sig.cValInst fullArgs)
-      if sig.isPure then
-        mkLambdaFVars #[s] (← mkAppOptM ``Free.pure #[Op, SOp, rd.ρValTy, src])
-      else
-        mkLambdaFVars #[s] src
-    -- hrun/hcl: proved in *component* form (plain `intro`s, no tuple patterns), repackaged
-    -- over the tupled `N` (surjective pairing is definitional)
-    let kSt := rd.stateTps.size
-    let compIds := (Array.range kSt).map fun i => mkIdent (Name.mkSimple s!"c{i}")
-    let recId := compIds[rd.recIdx]!
-    let stateDecls : Array (Name × (Array Expr → TermElabM Expr)) :=
-      (Array.range kSt).map fun i =>
-        (Name.mkSimple s!"c{i}", fun _ => pure rd.stateTys[i]!)
-    let repackage (component : Expr) (want : Expr → MetaM Expr) : MetaM Expr :=
-      withLocalDeclD `N σTy fun N => do
-        let projs := (mkTupleProjs rd.stateTys.toList N).toArray
-        mkLambdaFVars #[N] (← mkExpectedTypeHint (mkAppN component projs) (← want N))
-    let hrunPrf ← do
-      let stmt ← withLocalDeclsD stateDecls fun cs => do
-        let tup := mkTupleE rd.stateTys.toList cs.toList
-        mkForallFVars cs (← mkEq (← mkAppM ``runSrc #[fW, mkApp cb tup]) (mkApp fW tup))
-      let tac ← `(by intro $[$compIds]*
-                     rcases $recId:ident with _ | m <;>
-                       first | rfl | exact Freigen.Free.bind_pure _)
-      let comp ← elabTermEnsuringType tac (some stmt)
-      repackage comp fun N => do
-        mkEq (← mkAppM ``runSrc #[fW, mkApp cb N]) (mkApp fW N)
-    let hclPrf ← do
-      let stmt ← withLocalDeclsD stateDecls fun cs => do
-        let tup := mkTupleE rd.stateTys.toList cs.toList
-        mkForallFVars cs (← mkAppM ``callsLt #[μE, mkApp μE tup, mkApp cb tup])
-      let tac ← `(by intro $[$compIds]*
-                     rcases $recId:ident with _ | m <;>
-                       (repeat' first | apply And.intro | intro _) <;>
-                       (try simp only []) <;> (first | omega | trivial))
-      let comp ← elabTermEnsuringType tac (some stmt)
-      repackage comp fun N => mkAppM ``callsLt #[μE, mkApp μE N, mkApp cb N]
-    -- the totalization bridge: `goT ⟨states⟩ = source states hyps` (induction on the recursion
-    -- component; each case is `rfl`-strength — `Nat.rec` iota + the source's own equation +
-    -- proof irrelevance across the differing `Fin.mk` proofs).  Only needed when hypotheses
-    -- exist (else `fW` *is* the source).
-    let bridgePrf ← if !hasHyps then pure (Expr.const ``Unit.unit []) else do
-      let stmt ← withLocalDeclsD stateDecls fun cs => do
-        withRecTelescope shape sig.cName sig.cValInst sig.fArgs cs fun hs vals => do
-          let tup := mkTupleE rd.stateTys.toList cs.toList
-          mkForallFVars (cs ++ hs) (← mkEq (mkApp goT tup) (mkAppN sig.cValInst vals))
-      let cId := mkIdent sig.cName
-      let hypIds := (Array.range rd.hypPos.size).map fun i => mkIdent (Name.mkSimple s!"h{i}")
-      let otherIds := (Array.range kSt).filterMap fun i =>
-        if i == rd.recIdx then none else some compIds[i]!
-      let introHyps : Array (TSyntax `tactic) ←
-        if hypIds.isEmpty then pure #[] else pure #[← `(tactic| intro $[$hypIds]*)]
-      let zeroSeq ← `(Lean.Parser.Tactic.tacticSeq|
-        $[$introHyps]*
-        first | rfl | rw [$cId:ident])
-      let succSeq ← `(Lean.Parser.Tactic.tacticSeq|
-        $[$introHyps]*
-        rw [$cId:ident]
-        first | apply ih | rfl)
-      let tac ←
-        if otherIds.isEmpty then
-          `(by intro $[$compIds]*
-               induction $recId:ident with
-               | zero => $zeroSeq
-               | succ m ih => $succSeq)
-        else
-          `(by intro $[$compIds]*
-               induction $recId:ident generalizing $[$otherIds]* with
-               | zero => $zeroSeq
-               | succ m ih => $succSeq)
-      elabTermEnsuringType tac (some stmt)
-    -- `mrec` adequacy at this monomorphisation, and the call-site subroutine + equation
-    let recSoundApp ← mkAppOptM ``recSound
-      #[Op, SOp, rd.σTp, ρTp, μE, bodyCode, cb, fW, hspecPrf, hrunPrf, hclPrf]
-    let hlistTy ← mkAppM ``HList #[denoteV, sig.asList]
-    let cf ← withLocalDeclD `args hlistTy fun hargs => do
-      let bodyFn ← withLocalDeclD `s (mkApp denoteV rd.σTp) fun s => do
-        mkLambdaFVars #[s] (← mkAppM ``denote #[mkApp bodyCode s])
-      mkLambdaFVars #[hargs]
-        (← mkAppM ``ITree.mrec #[bodyFn, ← mkAppM ``HList.head #[hargs]])
-    -- the call-site equation `cf args ≈ ret v` (pure) / `≈ ofFree (go …)` (`Free`)
-    let endpointOf (v : Expr) : MetaM Expr :=
-      if sig.isPure then mkAppOptM ``ITree.ret #[Op, rd.ρValTy, v]
-      else mkAppM ``ofFree #[v]
-    let bodyProofLam ← withLocalDeclD `args hlistTy fun hargs => do
-      let sE ← mkAppM ``HList.head #[hargs]
-      let projs := (mkTupleProjs rd.stateTys.toList sE).toArray
-      withRecTelescope shape sig.cName sig.cValInst sig.fArgs projs fun hs vals => do
-        let goApp := mkAppN sig.cValInst vals
-        let a1 := mkApp recSoundApp sE
-        let endTy ← mkAppM ``ITree.Eutt #[← pfLhs a1, ← endpointOf goApp]
-        if hasHyps then
-          let bridgeApp := mkAppN bridgePrf (projs ++ hs)
-          let congrFn ← withLocalDeclD `v ρTy fun v => do
-            if sig.isPure then
-              mkLambdaFVars #[v] (← mkAppOptM ``ITree.ret #[Op, rd.ρValTy, v])
+    -- the call-extended vocabulary/events of this monomorphisation
+    let opcBase := mkApp (Lean.mkConst ``OpT []) Op
+    let opcExt := mkApp3 (Lean.mkConst ``CallOp []) opcBase rd.σTp ρTp
+    let wrapBase := fun (iT rT o : Expr) =>
+      mkApp6 (Lean.mkConst ``CallOp.base []) opcBase rd.σTp ρTp iT rT o
+    let kcExt ← mkAppM ``KCC #[Op, rd.σTp, ρTp]
+    let denC ← mkAppOptM ``denoteC
+      #[Op, opcExt, SOp, mkApp denoteV rd.σTp, mkApp denoteV ρTp,
+        ← mkAppM ``Inj.withCall #[← mkAppM ``injD #[Op], rd.σTp, ρTp]]
+    -- **invariant fn state**: everything below is built under pure-host binders (abstracted
+    -- into the stored equation at the end); the adequacy is relativized to states whose fn
+    -- component is the host's embedding
+    let fnCount := rd.fnStateCount
+    let εEK := mkApp (Lean.mkConst ``Effect []) Op
+    let arityEK := mkApp (Lean.mkConst ``Effect.arity []) Op
+    let hostDecls : Array (Name × (Array Expr → TermElabM Expr)) :=
+      (Array.range fnCount).map fun i =>
+        (Name.mkSimple s!"f{i}", fun _ => pure rd.fnHostTys[i]!)
+    let _ : Unit ← withLocalDeclsD hostDecls fun hosts => do
+      let embs ← hosts.mapM (fun h => (mkEmbOf εEK arityEK h : MetaM Expr))
+      let cbH := (cb.beta (hosts ++ embs)).headBeta
+      let goTH := (goT.beta hosts).headBeta
+      let Papp ← withLocalDeclD `sv σTy fun sv => do
+        if fnCount == 0 then mkLambdaFVars #[sv] (Lean.mkConst ``True)
+        else mkLambdaFVars #[sv] (← mkEq (← mkAppM ``Prod.fst #[sv]) embs[0]!)
+      -- the shared `rec_` body, parametric in the value/function representations; the fn state
+      -- component is projected to an atom up front, the host bound to it
+      let recBody ← withLocalDeclD `V0 vTy fun Vp0 => withLocalDeclD `F' fTy fun F' =>
+        withLocalDeclD `arg (mkApp Vp0 rd.σTp) fun argAtom => do
+          let codeT ← withLocalDeclD `s σTy fun s => do
+            let envB : Env := { Op, Opc := opcExt, opWrap := wrapBase, SOp, F := F', V := Vp0,
+                                subst := [(s.fvarId!, argAtom)], defs, pfDefs, inFlight,
+                                pending, recVerdicts, recBodies, noSpill := true,
+                                recMode := true, recTps := some (rd.σTp, ρTp) }
+            if fnCount == 0 then
+              Prod.fst <$> envB.walk ρTp (cbH.beta #[s]) (envB.mkRetT ρTp)
             else
-              mkLambdaFVars #[v] (← mkAppM ``ofFree #[v])
-          let e2 ← mkAppM ``ITree.Eutt.of_eq #[← mkAppM ``congrArg #[congrFn, bridgeApp]]
-          let e2' ← mkExpectedTypeHint e2
-            (← mkAppM ``ITree.Eutt #[← pfRhs a1, ← endpointOf goApp])
-          let prf ← mkAppM ``ITree.Eutt.trans #[a1, e2']
-          mkLambdaFVars (#[hargs] ++ hs) prf
+              -- `kf` stands in for the embedding in self-call tuples (a lambda cannot be an
+              -- atom inside a rec body); both it and the host route to the projected atom
+              withLocalDeclD `kf rd.stateTys[0]! fun kf => do
+              let src := ((cb.beta (hosts ++ #[kf])).headBeta).beta #[s]
+              Prod.fst <$> envB.atom ρTp (← mkAppM ``Prod.fst #[s]) (fun fa => do
+                let envB2 := { envB with
+                  subst := (hosts[0]!.fvarId!, fa) :: (kf.fvarId!, fa) :: envB.subst }
+                envB2.walk ρTp src (envB2.mkRetT ρTp))
+          mkLambdaFVars #[Vp0, F', argAtom] codeT
+      recBodies.modify (·.push (sig, recBody))
+      let bodyCode := recBody.beta #[denoteV, kcExt]
+      -- (hspec is built below, after the component-form machinery)
+      -- the total source over the tupled state: `goT` when the source is hypothesis-guarded,
+      -- else the source itself; fn components enter as the pure hosts (the σ-slot is ignored);
+      -- a pure result wraps in `pure`
+      let fW ← withLocalDeclD `s σTy fun s => do
+        let projs := (mkTupleProjs rd.stateTys.toList s).toArray
+        let src ←
+          if hasHyps then pure (mkApp goTH s)
+          else do
+            let mut fullArgs := sig.fArgs
+            for j in [0:sig.valuePos.size] do
+              fullArgs := fullArgs.set! (sig.valuePos[j]!)
+                (if j < fnCount then hosts[j]! else projs[j]!)
+            pure (mkAppN sig.cValInst fullArgs)
+        if sig.isPure then
+          mkLambdaFVars #[s] (← mkAppOptM ``FreeE.pure
+            #[mkApp (Lean.mkConst ``Effect []) Op, mkApp (Lean.mkConst ``Effect.arity []) Op,
+              SOp, rd.ρValTy, src])
         else
-          -- `fW` is the source itself: the adequacy *is* the equation (endpoint by defeq)
-          mkLambdaFVars (#[hargs] ++ hs) (← mkExpectedTypeHint a1 endTy)
-    pfDefs.modify (·.push { name := sig.cName, asList := sig.asList, retTp := ρTp, cf,
-                            bodyProof := bodyProofLam, bodyProofEq := false,
-                            key := sig.monoArgs })
+          mkLambdaFVars #[s] src
+      -- hrun/hcl: proved in *component* form (plain `intro`s, no tuple patterns; fn slots are
+      -- the hosts' embeddings, literally), repackaged over the tupled `N` under the invariant
+      -- (`fst_eq_tuple` pins the fn component; surjective pairing is definitional for the rest)
+      let kSt := rd.stateTps.size
+      let compIds := ((Array.range kSt).filter (· ≥ fnCount)).map fun i =>
+        mkIdent (Name.mkSimple s!"c{i}")
+      let recId := mkIdent (Name.mkSimple s!"c{rd.recIdx}")
+      let stateDecls : Array (Name × (Array Expr → TermElabM Expr)) :=
+        ((Array.range kSt).filter (· ≥ fnCount)).map fun i =>
+          (Name.mkSimple s!"c{i}", fun _ => pure rd.stateTys[i]!)
+      let repackage (component : Expr) (want : Expr → MetaM Expr) : MetaM Expr :=
+        withLocalDeclD `N σTy fun N =>
+        withLocalDeclD `hP (mkApp Papp N) fun hP => do
+          if fnCount == 0 then
+            let projs := (mkTupleProjs rd.stateTys.toList N).toArray
+            mkLambdaFVars #[N, hP] (← mkExpectedTypeHint (mkAppN component projs) (← want N))
+          else do
+            -- `N = (emb f₀, N.2)` by the invariant; the component instance is at the
+            -- projections of `N.2` (η-definitional)
+            let tupleEq ← mkAppM ``fst_eq_tuple #[hP]
+            let sndN ← mkAppM ``Prod.snd #[N]
+            let restProjs := (mkTupleProjs rd.stateTys.toList.tail sndN).toArray
+            let stmtOf ← withLocalDeclD `sv σTy fun sv => do
+              mkLambdaFVars #[sv] (← want sv)
+            let congr ← mkAppM ``congrArg #[stmtOf, tupleEq]
+            mkLambdaFVars #[N, hP] (← mkAppM ``Eq.mpr #[congr, mkAppN component restProjs])
+      -- hspec: compositional (proof-mode walk of `cb`) at the **literal invariant state**
+      -- `⟨emb f₀, cs⟩` — projection/application steps reduce definitionally there — then
+      -- repackaged under `P`
+      let hspecPrf ← do
+        let comp ← withLocalDeclsD stateDecls fun cs => do
+          let tup := mkTupleE rd.stateTys.toList (embs.toList ++ cs.toList)
+          let penv : Env := { Op, Opc := opcExt, opWrap := wrapBase, SOp, F := kcExt,
+                              V := denoteV, subst := [], defs, pfDefs, inFlight,
+                              pending, recVerdicts, recBodies, noSpill := true, pf := true,
+                              recMode := true, recTps := some (rd.σTp, ρTp) }
+          let (_, pf?) ←
+            if fnCount == 0 then penv.walkTop ρTp (cbH.beta #[tup])
+            else
+              -- walk at the **kf-tuple** (the embedding stand-in is an unmapped fvar, so
+              -- projections stay closed and feed through directly); the kernel reconciles the
+              -- shape difference against `bodyCode` by beta/iota at the literal state
+              withLocalDeclD `kf rd.stateTys[0]! fun kf => do
+              let tupK := mkTupleE rd.stateTys.toList (#[kf] ++ cs).toList
+              let src := ((cb.beta (hosts ++ #[kf])).headBeta).beta #[tupK]
+              -- the components self-map so the walk makes the *same* reification choices as
+              -- the abstract walk at a symbolic state (partial ops must line up)
+              let csSelf := cs.toList.map fun c => (c.fvarId!, c)
+              let penv2 := { penv with subst :=
+                (hosts[0]!.fvarId!, kf) :: (csSelf ++ penv.subst) }
+              let r ← penv2.walkTop ρTp src
+              -- restore the embedding for the walking device in the built proof
+              pure (r.1, r.2.map fun pf =>
+                { pf with e := pf.e.replaceFVar kf embs[0]! })
+          let some proof := pf? | throwError "reflect%: internal: rec hspec produced no proof"
+          unless proof.isEq do throwError "reflect%: internal: rec hspec must be an equality"
+          let want ← mkEq (mkApp2 denC ρTp (mkApp bodyCode tup))
+            (← mkAppM ``ofFree #[mkApp cbH tup])
+          mkLambdaFVars cs (← mkExpectedTypeHint proof.e want)
+        repackage comp fun N => do
+          mkEq (mkApp2 denC ρTp (mkApp bodyCode N)) (← mkAppM ``ofFree #[mkApp cbH N])
+      let hrunPrf ← do
+        let stmt ← withLocalDeclsD stateDecls fun cs => do
+          let tup := mkTupleE rd.stateTys.toList (embs.toList ++ cs.toList)
+          mkForallFVars cs (← mkEq (← mkAppM ``runSrc #[fW, mkApp cbH tup]) (mkApp fW tup))
+        let tac ← `(by intro $[$compIds]*
+                       rcases $recId:ident with _ | m <;>
+                         first | rfl | exact Freigen.Free.bind_pure _)
+        let comp ← elabTermEnsuringType tac (some stmt)
+        repackage comp fun N => do
+          mkEq (← mkAppM ``runSrc #[fW, mkApp cbH N]) (mkApp fW N)
+      let hclPrf ← do
+        let stmt ← withLocalDeclsD stateDecls fun cs => do
+          let tup := mkTupleE rd.stateTys.toList (embs.toList ++ cs.toList)
+          mkForallFVars cs
+            (← mkAppM ``callsLtP #[μE, Papp, mkApp μE tup, mkApp cbH tup])
+        let tac ← `(by intro $[$compIds]*
+                       rcases $recId:ident with _ | m <;>
+                         (repeat' first | apply And.intro | intro _) <;>
+                         (try simp only []) <;> (first | omega | rfl | trivial))
+        let comp ← elabTermEnsuringType tac (some stmt)
+        repackage comp fun N => mkAppM ``callsLtP #[μE, Papp, mkApp μE N, mkApp cbH N]
+      -- the totalization bridge: `goT ⟨states⟩ = source states hyps` (induction on the recursion
+      -- component; each case is `rfl`-strength — `Nat.rec` iota + the source's own equation +
+      -- proof irrelevance across the differing `Fin.mk` proofs).  Only needed when hypotheses
+      -- exist (else `fW` *is* the source).
+      let bridgePrf ← if !hasHyps then pure (Expr.const ``Unit.unit []) else do
+        let stmt ← withLocalDeclsD stateDecls fun cs => do
+          withRecTelescope shape sig.cName sig.cValInst sig.fArgs (hosts ++ cs) fun hs vals => do
+            let tup := mkTupleE rd.stateTys.toList (embs.toList ++ cs.toList)
+            mkForallFVars (cs ++ hs) (← mkEq (mkApp goTH tup) (mkAppN sig.cValInst vals))
+        let cId := mkIdent sig.cName
+        let hypIds := (Array.range rd.hypPos.size).map fun i => mkIdent (Name.mkSimple s!"h{i}")
+        let otherIds := ((Array.range kSt).filter (· ≥ fnCount)).filterMap fun i =>
+          if i == rd.recIdx then none else some (mkIdent (Name.mkSimple s!"c{i}"))
+        let introHyps : Array (TSyntax `tactic) ←
+          if hypIds.isEmpty then pure #[] else pure #[← `(tactic| intro $[$hypIds]*)]
+        let zeroSeq ← `(Lean.Parser.Tactic.tacticSeq|
+          $[$introHyps]*
+          first | rfl | rw [$cId:ident])
+        let succSeq ← `(Lean.Parser.Tactic.tacticSeq|
+          $[$introHyps]*
+          rw [$cId:ident]
+          first | apply ih | rfl)
+        let tac ←
+          if otherIds.isEmpty then
+            `(by intro $[$compIds]*
+                 induction $recId:ident with
+                 | zero => $zeroSeq
+                 | succ m ih => $succSeq)
+          else
+            `(by intro $[$compIds]*
+                 induction $recId:ident generalizing $[$otherIds]* with
+                 | zero => $zeroSeq
+                 | succ m ih => $succSeq)
+        elabTermEnsuringType tac (some stmt)
+      -- `mrec` adequacy at this monomorphisation, and the call-site subroutine + equation
+      let recSoundApp ← mkAppOptM ``recSoundP
+        #[Op, SOp, rd.σTp, ρTp, μE, Papp, bodyCode, cbH, fW, hspecPrf, hrunPrf, hclPrf]
+      let hlistTy ← mkAppM ``HList #[denoteV, sig.asList]
+      let cf ← withLocalDeclD `args hlistTy fun hargs => do
+        let bodyFn ← withLocalDeclD `s (mkApp denoteV rd.σTp) fun s => do
+          mkLambdaFVars #[s] (mkApp2 denC ρTp (mkApp bodyCode s))
+        mkLambdaFVars #[hargs]
+          (← mkAppM ``ITree.mrec #[bodyFn, ← mkAppM ``HList.head #[hargs]])
+      -- the call-site equation `cf args ≈ ret v` (pure) / `≈ ofFree (go …)` (`Free`)
+      let εE := mkApp (Lean.mkConst ``Effect []) Op
+      let arityE := mkApp (Lean.mkConst ``Effect.arity []) Op
+      let endpointOf (v : Expr) : MetaM Expr :=
+        if sig.isPure then mkAppOptM ``ITree.ret #[εE, arityE, rd.ρValTy, v]
+        else mkAppM ``ofFree #[v]
+      let bodyProofLam ← withLocalDeclD `args hlistTy fun hargs => do
+        let sE ← mkAppM ``HList.head #[hargs]
+        let projs := (mkTupleProjs rd.stateTys.toList sE).toArray
+        let stateVals := (Array.range kSt).map fun i =>
+          if i < fnCount then hosts[i]! else projs[i]!
+        withRecTelescope shape sig.cName sig.cValInst sig.fArgs stateVals fun hs vals => do
+          let goApp := mkAppN sig.cValInst vals
+          -- the invariant at the call site: the tuple's fn atom *is* the embedding once the
+          -- enclosing `lam` node instantiates it — a deferred hint
+          let hPsite ←
+            if fnCount == 0 then pure (Lean.mkConst ``True.intro)
+            else do
+              let proj0 ← mkAppM ``Prod.fst #[sE]
+              mkExpectedTypeHint (← mkEqRefl proj0) (← mkEq proj0 embs[0]!)
+          let a1 := mkApp2 recSoundApp sE hPsite
+          let endTy ← mkAppM ``ITree.Eutt #[← pfLhs a1, ← endpointOf goApp]
+          if hasHyps then
+            let bridgeApp := mkAppN bridgePrf (projs.extract fnCount projs.size ++ hs)
+            let congrFn ← withLocalDeclD `v ρTy fun v => do
+              if sig.isPure then
+                mkLambdaFVars #[v] (← mkAppOptM ``ITree.ret #[εE, arityE, rd.ρValTy, v])
+              else
+                mkLambdaFVars #[v] (← mkAppM ``ofFree #[v])
+            let e2 ← mkAppM ``ITree.Eutt.of_eq #[← mkAppM ``congrArg #[congrFn, bridgeApp]]
+            let e2' ← mkExpectedTypeHint e2
+              (← mkAppM ``ITree.Eutt #[← pfRhs a1, ← endpointOf goApp])
+            let prf ← mkAppM ``ITree.Eutt.trans #[a1, e2']
+            mkLambdaFVars (#[hargs] ++ hs) prf
+          else
+            -- `fW` is the source itself: the adequacy *is* the equation (endpoint by defeq)
+            mkLambdaFVars (#[hargs] ++ hs) (← mkExpectedTypeHint a1 endTy)
+      pfDefs.modify (·.push { name := sig.cName, asList := sig.asList, retTp := ρTp, cf,
+                              bodyProof := ← mkLambdaFVars hosts bodyProofLam,
+                              bodyProofEq := false, key := sig.monoArgs })
 
 /-- Reflect a program `foo : A₁ → … → Aₙ → Free Op SOp X` (`n ≥ 0`) into
     `{ g : Closed // ∀ args, denoteProg (g KC Tp.denote) ⟨value-args⟩ ≈ ofFree (foo args) }` — the
@@ -1946,8 +2408,10 @@ partial def reflectMain (foo : Expr) : TermElabM Expr := do
           namedTelescope (i+1) (body.instantiate1 x) (acc.push x) k
     | _ => k acc ty
   namedTelescope 0 (← inferType foo) #[] fun args codom => do
-    let_expr Free Op SOp X := (← whnf codom)
+    let_expr FreeE εE _ SOp X := (← whnf codom)
       | throwError "reflect%: the body must have type `Free Op SOp _`, got{indentExpr codom}"
+    let_expr Effect Op := εE
+      | throwError "reflect%: the program's events are not a DSL signature's{indentExpr εE}"
     let XTp ← reifyTpOrThrow X
     -- Classify each argument: those whose type reifies to a `Tp` are **program inputs**; the rest
     -- (e.g. an in-bounds proof `j < n` accompanying a symbolic index) are **erased** from the AST but
@@ -1958,6 +2422,9 @@ partial def reflectMain (foo : Expr) : TermElabM Expr := do
     let mut valueArgs : Array Expr := #[]
     for i in [0:args.size] do
       if let some t := argTpOpt[i]! then
+        if t.isAppOf ``Tp.fn then
+          throwError "reflect%: `main` may not take a function-typed input (function values \
+                      arise from lambdas inside the program)"
         mainArgTps := mainArgTps.push t; valueArgs := valueArgs.push args[i]!
     -- program inputs must be monomorphic and non-dependent (no type-parameter arguments); a *hypothesis*
     -- argument may freely depend on earlier value arguments (it is a proof *about* them).
@@ -1970,7 +2437,7 @@ partial def reflectMain (foo : Expr) : TermElabM Expr := do
                       {indentExpr (← inferType args[i]!)}"
     let tpTy := (.const ``Tp [] : Expr)
     let mainArgsList ← mkListLit tpTy mainArgTps.toList
-    let fTy ← mkArrow (← mkAppM ``List #[tpTy]) (← mkArrow tpTy (mkSort (.succ (.succ .zero))))
+    let fTy ← mkArrow (← mkAppM ``List #[tpTy]) (← mkArrow tpTy (mkSort (.succ .zero)))
     let vTy ← mkArrow tpTy (mkSort (.succ .zero))
     let defs ← IO.mkRef (#[] : Array CallSig)
     let pfDefs ← IO.mkRef (#[] : Array PfDefEntry)
@@ -1978,7 +2445,7 @@ partial def reflectMain (foo : Expr) : TermElabM Expr := do
     let pending ← IO.mkRef (#[] : Array MVarId)
     let recVerdicts ← IO.mkRef ([] : List (Name × Bool))
     let recBodies ← IO.mkRef (#[] : Array (CallSig × Expr))
-    let denoteV := Lean.mkConst ``Tp.denote []
+    let denoteV := mkApp (Lean.mkConst ``Tp.denote []) Op
     -- a *recursive* program keeps its definition folded — the walk spills it as a `rec_` and
     -- `main` becomes the call; anything else unfolds to expose the `Free` structure
     let topApp := foo.beta args
@@ -1992,7 +2459,8 @@ partial def reflectMain (foo : Expr) : TermElabM Expr := do
     let g ← withLocalDeclD `F fTy fun F => withLocalDeclD `V vTy fun V => do
       let hlistTy ← mkAppM ``HList #[V, mainArgsList]
       let mkEnv (resolved : Option (Array (CallSig × Expr))) (subst : List (FVarId × Expr)) : Env :=
-        { Op, SOp, F, V, subst, defs, pfDefs, inFlight, pending, recVerdicts, recBodies, resolved }
+        { Op, Opc := mkApp (Lean.mkConst ``OpT []) Op, opWrap := fun _ _ o => o, SOp, F, V,
+          subst, defs, pfDefs, inFlight, pending, recVerdicts, recBodies, resolved }
       -- walk `main` under an argument tuple `hargs`, substituting each host argument for its atom
       let walkMain (resolved : Option (Array (CallSig × Expr))) (hargs : Expr) : MetaM Expr := do
         let mut subst : List (FVarId × Expr) := []
@@ -2047,7 +2515,8 @@ partial def reflectMain (foo : Expr) : TermElabM Expr := do
     let mut argHList ← mkAppOptM ``HList.nil #[none, denoteV]
     for (a, t) in (valueArgs.zip mainArgTps).reverse do
       argHList ← mkAppOptM ``HList.cons #[none, denoteV, t, none, a, argHList]
-    let ofFreeFn ← mkAppOptM ``ofFree #[Op, SOp, X]
+    let ofFreeFn ← mkAppOptM ``ofFree
+      #[mkApp (Lean.mkConst ``Effect []) Op, mkApp (Lean.mkConst ``Effect.arity []) Op, SOp, X]
     -- soundness  fun g => ∀ args, denoteProg (g KC Tp.denote) ⟨args⟩ ≈ ofFree (foo args)
     -- — `denoteProg` lands in `Comp` *directly*; `ofFree` only embeds the source `Free`.
     let pred ← withLocalDeclD `g gTy fun gv => do
@@ -2064,7 +2533,8 @@ partial def reflectMain (foo : Expr) : TermElabM Expr := do
     -- No `simp`: the proof term mirrors the source structure.
     let mut psubst : List (FVarId × Expr) := []
     for va in valueArgs do psubst := (va.fvarId!, va) :: psubst
-    let penv : Env := { Op, SOp, F := kc, V := denoteV, subst := psubst, defs, pfDefs, inFlight,
+    let penv : Env := { Op, Opc := mkApp (Lean.mkConst ``OpT []) Op, opWrap := fun _ _ o => o,
+                        SOp, F := kc, V := denoteV, subst := psubst, defs, pfDefs, inFlight,
                         pending, recVerdicts, recBodies, pf := true }
     let (_, pf?) ← penv.walkTop XTp topBody
     let some proof := pf? | throwError "reflect%: internal: proof mode produced no proof"
