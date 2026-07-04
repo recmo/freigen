@@ -188,6 +188,77 @@ theorem main_sound :
         ITree.bind (hE () (h == s)) fun _ => ITree.ret h)
   exact eutt_bind_cong (sumSq_sound hE hB 3) fun s => eutt_refl _
 
+/-! ## Top-down reflection: discovering the AST by `apply`
+
+Instead of writing the AST and proving it sound after the fact, construct — for a given source
+computation — *the pair* of an AST and its soundness proof, top-down: the AST component is a
+metavariable, and each `apply` of a `reflect_*` lemma emits one AST node while consuming one
+source node.  Two disciplines make the trace work:
+
+* a **pure node binds a fresh atom together with its defining equation**
+  (`∀ vc, vc = … → _`): after `intro`, every continuation metavariable is only ever applied to
+  *variables*, so unification stays in the higher-order pattern fragment and `apply` keeps
+  assigning continuations correctly;
+* **value side-conditions** (an effect's input, a returned value must match the source's host
+  value) are discharged by rewriting with the accumulated defining equations.
+
+This is the manual prototype of the reflector's soundness-carrying walk. -/
+
+/-- Reflect `pure`: emit `ret` on an atom whose defining equation matches the source value. -/
+theorem reflect_ret {α : Tp} (v : Tp.denote (CompE ε br) α) {v' : Tp.denote (CompE ε br) α}
+    (h : v = v') :
+    Eutt (Expr.denote hE hB
+        (.ret v : Expr CircE CircB (Tp.denote (CompE ε br)) none α))
+      (evalC hE hB (.pure v')) :=
+  Eutt.of_eq (by rw [h]; rfl)
+
+/-- Reflect a host primitive: emit a `bin` node binding a fresh atom `vc` with its defining
+    equation; the source is untouched (`t` is arbitrary — a pure step costs nothing). -/
+theorem reflect_bin {a b c α : Tp} (o : Bin a b c)
+    (va : Tp.denote (CompE ε br) a) (vb : Tp.denote (CompE ε br) b)
+    {k : Tp.denote (CompE ε br) c → Expr CircE CircB (Tp.denote (CompE ε br)) none α}
+    {t : CompE ε br (Tp.denote (CompE ε br) α)}
+    (ih : ∀ vc, vc = o.denote va vb → Eutt (Expr.denote hE hB (k vc)) t) :
+    Eutt (Expr.denote hE hB (.bin o va vb k)) t :=
+  ih _ rfl
+
+/-- Reflect `bind (eff e i') ks`: emit an `eff` node — its input atom must equal the source's
+    input (side condition `hi`, discharged from the defining equations) — and continue
+    pointwise under the bound result. -/
+theorem reflect_eff {α : Tp} (e : CircE.ε) (i : Tp.denote (CompE ε br) (CircE.𝓘 e))
+    {i' : Tp.denote (CompE ε br) (CircE.𝓘 e)}
+    {k : Tp.denote (CompE ε br) (CircE.𝓞 e) →
+      Expr CircE CircB (Tp.denote (CompE ε br)) none α}
+    {ks : Tp.denote (CompE ε br) (CircE.𝓞 e) →
+      Freek (CircE.spec (CompE ε br)) (CircB.spec (CompE ε br)) (Tp.denote (CompE ε br) α)}
+    (hi : i = i')
+    (ih : ∀ o, Eutt (Expr.denote hE hB (k o)) (evalC hE hB (ks o))) :
+    Eutt (Expr.denote hE hB (.eff e i k)) (evalC hE hB (Freek.bind (Freek.eff e i') ks)) := by
+  subst hi
+  show Eutt (ITree.bind (hE e i) fun o => Expr.denote hE hB (k o))
+            (ITree.bind (hE e i) fun o => evalC hE hB (ks o))
+  exact eutt_bind_cong (eutt_refl _) ih
+
+/-- `sqAssertSrc`, reflected **top-down**: the AST component is the `_` — it is *discovered*
+    by the `apply`-trace along the source circuit, one lemma per source node. -/
+def sqAssertReflected (x : Nat) :
+    { e : Expr CircE CircB (Tp.denote (CompE ε br)) none .nat //
+      Eutt (Expr.denote hE hB e) (evalC hE hB (sqAssertSrc (CompE ε br) x)) } :=
+  ⟨_, by
+    unfold sqAssertSrc
+    apply reflect_bin hE hB .mul x x    -- y := x * x
+    intro y hy
+    apply reflect_bin hE hB .le x y     -- c := decide (x ≤ y)
+    intro c hc
+    apply reflect_eff hE hB () c        -- assert c   (side goal: c = decide (x ≤ x*x))
+    · simp only [hc, hy, Bin.denote]
+    · intro o
+      apply reflect_ret hE hB y         -- return y   (side goal: y = x*x)
+      simp only [hy, Bin.denote]⟩
+
+/-- The trace reconstructs exactly the hand-written AST. -/
+example (x : Nat) : (sqAssertReflected hE hB x).1 = sqAssertAst x := rfl
+
 end Sound
 
 end Example
