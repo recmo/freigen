@@ -390,6 +390,298 @@ def sqAssertReflected' (x : Nat) :
 /-- The third style, too, reconstructs exactly the hand-written AST. -/
 example (x : Nat) : (sqAssertReflected' hE hB x).1 = sqAssertAst x := rfl
 
+/-! ## Tying the recursion knot
+
+The reflect lemma for structural `Nat` recursion — the reusable core that `sumSq_sound` proved
+by hand.  It relates the **`mrec`-tied `letrec` body** to a source recursive function, given:
+
+* two **AST-side** facts about the body denotation `bd` — it computes `base` at `0`, and at
+  `n+1` performs *one* guarded self-call (the `tau`) whose result feeds a base-domain
+  continuation `cont n` (this is exactly the shape the `letrec`/`selfCall` scaffolding denotes
+  to, via `interp_vis_call`/`interp_sumL`);
+* two **source-side** facts — the source folds the same way (`hsrcBase`/`hsrcStep`, discharged
+  from `eval`/`eval_bind`).
+
+The `tau` each unfolding spends is absorbed by `≈`.  Everything specific to *this* recursion —
+the step continuation `cont` — is supplied as an approach-#3 reflection pack, so applying the
+lemma leaves the recursion's AST to be *derived*, not guessed. -/
+theorem reflect_natRec {R : Type}
+    (bd : Nat → CompE (ε ⊕ Nat) (callBr br R) R) (src : Nat → CompE ε br R)
+    (base : CompE ε br R) (cont : Nat → R → CompE ε br R)
+    (hbase : Eutt (mrec bd 0) base)
+    (hstep : ∀ n, Eutt (mrec bd (n + 1)) (tau (ITree.bind (mrec bd n) (cont n))))
+    (hsrcBase : Eutt (src 0) base)
+    (hsrcStep : ∀ n, Eutt (src (n + 1)) (ITree.bind (src n) (cont n))) :
+    ∀ n, Eutt (mrec bd n) (src n) := by
+  intro n
+  induction n with
+  | zero => exact (hbase).trans hsrcBase.symm
+  | succ n ih =>
+      refine (hstep n).trans ?_
+      exact (eutt_tau_left (eutt_bind_cong ih fun s => eutt_refl _)).trans (hsrcStep n).symm
+
+/-- Reflect a **function application** `bind (fSrc x) ks`: emit an `app` node on the function
+    atom `f` (whose per-argument soundness `hf` witnesses that `f x` reflects the helper call),
+    then continue pointwise.  The approach-#3 combinator for a `letrec`-helper call. -/
+def Reflection.app {Φ : Prop} {α aT bT : Tp} (f : Tp.denote (CompE ε br) (.fn aT bT))
+    (x : Tp.denote (CompE ε br) aT)
+    {fSrc : Tp.denote (CompE ε br) aT → Circuit (Tp.denote (CompE ε br) bT)}
+    (hf : Φ → Eutt (f x) (evalC hE hB (fSrc x)))
+    {ks : Tp.denote (CompE ε br) bT → Circuit (Tp.denote (CompE ε br) α)}
+    (k : ∀ o, Reflection hE hB Φ α (ks o)) :
+    Reflection hE hB Φ α (Freek.bind (fSrc x) ks) :=
+  ⟨.app f x fun o => (k o).1, fun hΦ => by
+    have hexp : evalC hE hB (Freek.bind (fSrc x) ks)
+        = ITree.bind (evalC hE hB (fSrc x)) fun o => evalC hE hB (ks o) :=
+      Freek.eval_bind (𝓔 := circuitEff) (𝓑 := circuitBlock) hE hB (fSrc x) ks
+    show Eutt (ITree.bind (f x) fun o => Expr.denote (rE hE) (rB hB) ((k o).1))
+              (evalC hE hB (Freek.bind (fSrc x) ks))
+    rw [hexp]
+    exact eutt_bind_cong (hf hΦ) fun o => (k o).2 hΦ⟩
+
+/-- The **step continuation** of `sumSqSrc`, apply-derived (approach #3): reflect
+    `do let y ← sqAssertSrc (n+1); pure (s + y)` — an `app` of the helper (sound by
+    `sq_sound`) then a `bin .add` and `ret`.  Its denotation is the `cont` the knot lemma
+    consumes. -/
+def sumSqStep (n s : Nat) :
+    Reflection hE hB True .nat (Freek.bind (sqAssertSrc (n + 1)) fun y => pure (s + y)) := by
+  refine Reflection.app hE hB (aT := .nat) (bT := .nat) (sqD hE hB) (n + 1)
+    (fSrc := sqAssertSrc) (fun _ => Eutt.of_eq (sq_sound hE hB (n + 1))) ?_
+  intro y
+  apply Reflection.bin hE hB .add s y
+  intro r
+  apply Reflection.ret hE hB r
+  rintro ⟨-, hr⟩
+  simp only [hr, Bin.denote]
+
+/-- The derived step denotes to exactly the base-domain continuation `sumSq_sound` used — the
+    apply-derived pack and the hand unfolding meet. -/
+theorem sumSqStep_denote (n s : Nat) :
+    Expr.denote (rE hE) (rB hB) (sumSqStep hE hB n s).1
+      = ITree.bind (sqD hE hB (n + 1)) fun y => ITree.ret (s + y) := rfl
+
+/-- **`sumSqSrc` reflected via the knot lemma.**  The recursion's soundness, re-established
+    principledly: `reflect_natRec` supplies the induction/`tau`-absorption once; its `cont` is
+    the *apply-derived* `sumSqStep`; the two body facts are the definitional `letrec`/`selfCall`
+    unfoldings, and the source facts come from `eval_bind`. -/
+theorem sumSqRec : ∀ n, Eutt (mrec (bd hE hB) n) (evalC hE hB (sumSqSrc n)) := by
+  apply reflect_natRec (bd hE hB) (fun n => evalC hE hB (sumSqSrc n)) (ITree.ret 0)
+    (fun n s => ITree.bind (sqD hE hB (n + 1)) fun y => ITree.ret (s + y))
+  · -- hbase: the body at 0 computes `ret 0`
+    apply Eutt.of_eq
+    show interp (bd hE hB) (ITree.bind (ITree.ret 0) fun v => ITree.ret v) = _
+    rw [bind_ret, interp_ret]
+  · -- hstep: one guarded self-call, result fed to the step continuation
+    intro n
+    apply Eutt.of_eq
+    show interp (bd hE hB)
+        (ITree.bind (vis (Sum.inr n) fun (s : Nat) =>
+          ITree.bind (sumL (sqD hE hB (n + 1))) fun y => ITree.ret (s + y))
+          (fun v => ITree.ret v)) = _
+    simp only [bind_vis, interp_vis_call, interp_bind, bind_assoc, bind_ret, interp_sumL,
+               interp_ret]
+    rfl
+  · -- hsrcBase: `eval (pure 0) = ret 0`
+    exact Eutt.of_eq rfl
+  · -- hsrcStep: the source folds through the step, matched by the *apply-derived* step pack
+    intro n
+    have hexp : evalC hE hB (sumSqSrc (n + 1))
+        = ITree.bind (evalC hE hB (sumSqSrc n)) fun s =>
+            evalC hE hB (Freek.bind (sqAssertSrc (n + 1)) fun y => pure (s + y)) :=
+      Freek.eval_bind (𝓔 := circuitEff) (𝓑 := circuitBlock) hE hB (sumSqSrc n)
+        (fun s => Freek.bind (sqAssertSrc (n + 1)) fun y => Freek.pure (s + y))
+    rw [hexp]
+    refine eutt_bind_cong (eutt_refl _) fun s => ?_
+    rw [← sumSqStep_denote hE hB n s]
+    exact ((sumSqStep hE hB n s).2 True.intro).symm
+
+/-! ## A constructive `Reflection` for recursion
+
+`reflect_natRec` above is the *engine* (a plain `≈` statement); here it is repackaged so it
+fits the apply-style.  The pieces:
+
+* **`ReflectionS`** — a reflection at the *recursion slot* `some (.nat, R)`: a call-free body
+  fragment `e` reflecting a source `m`, carrying the **equality** `denote e = sumL (eval m)`
+  (call-free ⇒ no `tau`, so `=` not just `≈`).  Combinators `ret`/`bin`/`app` mirror the
+  none-slot ones, discharged by the `sumL` monad-morphism laws.
+* **`RecReflection`** — the reflection of a whole recursive function `F : Nat → Circuit R`: the
+  `letrec` **body** together with the proof that its `mrec` knot is `≈ eval ∘ F`.
+* **`Reflection.natRec`** — the constructive combinator.  Given the source fold `F (n+1) =
+  F n >>= step (n+1)`, a reflection of the base `F 0`, and a reflection of the step body, it
+  **emits the natural `letrec` body** (`n==0 ? base : selfCall (n-1) >>= step`) and proves it
+  reflects — the induction/`tau`-absorption handled once by `reflect_natRec`.  Applying it
+  leaves the base and step *bodies* as reflection goals, apply-derivable like any others.
+* **`Reflection.letrec`** — uses a `RecReflection` at a call site (`bind (F N) ks`): emits
+  `letrec … (app · N …)` and continues. -/
+
+/-- A reflection of source `m` at the **recursion slot** — a call-free body fragment, sound as
+    an *equality* against the `sumL`-embedded source. -/
+def ReflectionS (Φ : Prop) (R α : Tp) (m : Circuit (Tp.denote (CompE ε br) α)) : Type :=
+  { e : Expr CircE CircB (Tp.denote (CompE ε br)) (some (.nat, R)) α //
+    Φ → Expr.denote (rE hE) (rB hB) e = sumL (evalC hE hB m) }
+
+/-- Reflect `pure` at the recursion slot. -/
+def ReflectionS.ret {Φ : Prop} {R α : Tp} (v : Tp.denote (CompE ε br) α)
+    {v' : Tp.denote (CompE ε br) α} (h : Φ → v = v') :
+    ReflectionS hE hB Φ R α (.pure v') :=
+  ⟨.ret v, fun hΦ => by rw [h hΦ]; exact (sumL_ret v').symm⟩
+
+/-- Reflect a host primitive at the recursion slot (the source is untouched). -/
+def ReflectionS.bin {Φ : Prop} {R a b c α : Tp} (o : Bin a b c)
+    (va : Tp.denote (CompE ε br) a) (vb : Tp.denote (CompE ε br) b)
+    {m : Circuit (Tp.denote (CompE ε br) α)}
+    (k : ∀ vc, ReflectionS hE hB (Φ ∧ vc = o.denote va vb) R α m) :
+    ReflectionS hE hB Φ R α m :=
+  ⟨.bin o va vb fun vc => (k vc).1, fun hΦ => (k _).2 ⟨hΦ, rfl⟩⟩
+
+/-- Reflect a helper application at the recursion slot (`sumL`-lifted). -/
+def ReflectionS.app {Φ : Prop} {R α aT bT : Tp} (f : Tp.denote (CompE ε br) (.fn aT bT))
+    (x : Tp.denote (CompE ε br) aT)
+    {fSrc : Tp.denote (CompE ε br) aT → Circuit (Tp.denote (CompE ε br) bT)}
+    (hf : Φ → f x = evalC hE hB (fSrc x))
+    {ks : Tp.denote (CompE ε br) bT → Circuit (Tp.denote (CompE ε br) α)}
+    (k : ∀ o, ReflectionS hE hB Φ R α (ks o)) :
+    ReflectionS hE hB Φ R α (Freek.bind (fSrc x) ks) :=
+  ⟨.app f x fun o => (k o).1, fun hΦ => by
+    have hexp : evalC hE hB (Freek.bind (fSrc x) ks)
+        = ITree.bind (evalC hE hB (fSrc x)) fun o => evalC hE hB (ks o) :=
+      Freek.eval_bind (𝓔 := circuitEff) (𝓑 := circuitBlock) hE hB (fSrc x) ks
+    show ITree.bind (sumL (f x)) (fun o => Expr.denote (rE hE) (rB hB) ((k o).1))
+        = sumL (evalC hE hB (Freek.bind (fSrc x) ks))
+    rw [hexp, hf hΦ, sumL_bind]
+    exact congrArg (ITree.bind (sumL (evalC hE hB (fSrc x))))
+      (funext fun o => (k o).2 hΦ)⟩
+
+/-- A reflection of a structurally-recursive function `F : Nat → Circuit R`: the `letrec`
+    body, sound (`≈`) against `eval ∘ F` under the `mrec` knot. -/
+def RecReflection (Φ : Prop) (R : Tp) (F : Nat → Circuit (Tp.denote (CompE ε br) R)) : Type :=
+  { body : Tp.denote (CompE ε br) .nat →
+      Expr CircE CircB (Tp.denote (CompE ε br)) (some (.nat, R)) R //
+    Φ → ∀ n, Eutt (mrec (fun s => Expr.denote (rE hE) (rB hB) (body s)) n) (evalC hE hB (F n)) }
+
+/-- The natural `letrec` body for structural `Nat` recursion:
+    `n == 0 ? base : selfCall (n-1) >>= step`. -/
+def natRecBody {R : Tp}
+    (baseE : Expr CircE CircB (Tp.denote (CompE ε br)) (some (.nat, R)) R)
+    (stepE : Nat → Tp.denote (CompE ε br) R →
+      Expr CircE CircB (Tp.denote (CompE ε br)) (some (.nat, R)) R)
+    (m : Nat) : Expr CircE CircB (Tp.denote (CompE ε br)) (some (.nat, R)) R :=
+  .natLit 0 fun z =>
+  .bin .eq m z fun c =>
+  .ite c baseE
+    (.natLit 1 fun one => .bin .sub m one fun m' => .selfCall m' fun s => stepE m s)
+    fun v => .ret v
+
+/-- Body-at-`0` denotes to the base branch (the `n==0` guard reduces). -/
+theorem natRecBody_zero {R : Tp} (baseE) (stepE) :
+    Expr.denote (rE hE) (rB hB) (natRecBody (R := R) baseE stepE 0)
+      = ITree.bind (Expr.denote (rE hE) (rB hB) baseE) fun v => ITree.ret v := rfl
+
+/-- Body-at-`n+1` denotes to one self-call feeding the step branch. -/
+theorem natRecBody_succ {R : Tp} (baseE) (stepE) (n : Nat) :
+    Expr.denote (rE hE) (rB hB) (natRecBody (R := R) baseE stepE (n + 1))
+      = ITree.bind (vis (Sum.inr n) fun s =>
+          Expr.denote (rE hE) (rB hB) (stepE (n + 1) s)) fun v => ITree.ret v := rfl
+
+/-- **The constructive knot combinator.**  From the source fold and reflections of the base and
+    step *bodies*, emit the natural `letrec` body (`natRecBody`) and prove it reflects `F` — the
+    induction/`tau`-absorption delegated to `reflect_natRec`. -/
+def Reflection.natRec {Φ : Prop} {R : Tp}
+    (F : Nat → Circuit (Tp.denote (CompE ε br) R))
+    (step : Nat → Tp.denote (CompE ε br) R → Circuit (Tp.denote (CompE ε br) R))
+    (hfold : Φ → ∀ n, F (n + 1) = Freek.bind (F n) fun s => step (n + 1) s)
+    (base0 : ReflectionS hE hB Φ R R (F 0))
+    (stepBody : ∀ (m : Nat) (s : Tp.denote (CompE ε br) R),
+      ReflectionS hE hB Φ R R (step m s)) :
+    RecReflection hE hB Φ R F :=
+  ⟨natRecBody base0.1 fun m s => (stepBody m s).1,
+   fun hΦ => by
+    refine reflect_natRec _ (fun n => evalC hE hB (F n)) (evalC hE hB (F 0))
+      (fun n t => evalC hE hB (step (n + 1) t)) ?_ ?_ (eutt_refl _) ?_
+    · -- hbase: body at 0 = base ⇒ mrec = eval (F 0)
+      apply Eutt.of_eq
+      rw [show mrec (fun s => Expr.denote (rE hE) (rB hB)
+            (natRecBody base0.1 (fun m s => (stepBody m s).1) s)) 0
+          = interp _ (ITree.bind (Expr.denote (rE hE) (rB hB) base0.1) fun v => ITree.ret v)
+        from congrArg (interp _) (natRecBody_zero hE hB _ _)]
+      rw [base0.2 hΦ, interp_bind, interp_sumL]
+      simp only [interp_ret]
+      exact bind_ret_right _
+    · -- hstep: body at n+1 = one self-call feeding the reflected step
+      intro n
+      apply Eutt.of_eq
+      rw [show mrec (fun s => Expr.denote (rE hE) (rB hB)
+            (natRecBody base0.1 (fun m s => (stepBody m s).1) s)) (n + 1)
+          = interp _ (ITree.bind (vis (Sum.inr n) fun s =>
+              Expr.denote (rE hE) (rB hB) ((stepBody (n + 1) s).1)) fun v => ITree.ret v)
+        from congrArg (interp _) (natRecBody_succ hE hB _ _ n)]
+      rw [bind_vis, interp_vis_call, interp_bind]
+      refine congrArg tau (congrArg (ITree.bind (mrec _ n)) (funext fun t => ?_))
+      rw [(stepBody (n + 1) t).2 hΦ, interp_bind, interp_sumL]
+      simp only [interp_ret]
+      exact bind_ret_right _
+    · -- hsrcStep
+      intro n
+      apply Eutt.of_eq
+      rw [hfold hΦ n]
+      exact Freek.eval_bind (𝓔 := circuitEff) (𝓑 := circuitBlock) hE hB (F n)
+        (fun s => step (n + 1) s)⟩
+
+/-- Reflect a **recursive call site** `bind (F N) ks` from a `RecReflection` of `F`: emit
+    `letrec` (binding the recursive function), `app` it to `N`, and continue.  This is where the
+    apply-derived recursion pack plugs into an ordinary trace. -/
+def Reflection.letrec {Φ : Prop} {R α : Tp}
+    {F : Nat → Circuit (Tp.denote (CompE ε br) R)} (Frec : RecReflection hE hB Φ R F)
+    (N : Nat) {ks : Tp.denote (CompE ε br) R → Circuit (Tp.denote (CompE ε br) α)}
+    (k : ∀ s, Reflection hE hB Φ α (ks s)) :
+    Reflection hE hB Φ α (Freek.bind (F N) ks) :=
+  ⟨.letrec Frec.1 fun f => .app f N fun s => (k s).1, fun hΦ => by
+    have hexp : evalC hE hB (Freek.bind (F N) ks)
+        = ITree.bind (evalC hE hB (F N)) fun s => evalC hE hB (ks s) :=
+      Freek.eval_bind (𝓔 := circuitEff) (𝓑 := circuitBlock) hE hB (F N) ks
+    show Eutt (ITree.bind (mrec (fun s => Expr.denote (rE hE) (rB hB) (Frec.1 s)) N)
+          fun s => Expr.denote (rE hE) (rB hB) ((k s).1))
+        (evalC hE hB (Freek.bind (F N) ks))
+    rw [hexp]
+    exact eutt_bind_cong (Frec.2 hΦ N) fun s => (k s).2 hΦ⟩
+
+/-! ## Apply-deriving the recursion
+
+`sumSqSrc` reflected through the constructive combinator: `apply Reflection.natRec` emits the
+`letrec` body and leaves the base and step *bodies* as `ReflectionS` goals, discharged by the
+`ret`/`bin`/`app` combinators — a trace that walks the source recursion, no hand-written body. -/
+def sumSqRecPack : RecReflection hE hB True .nat sumSqSrc := by
+  refine Reflection.natRec hE hB (R := .nat) sumSqSrc
+    (fun m s => Freek.bind (sqAssertSrc m) fun y => pure (s + y))
+    (fun _ n => rfl)               -- the source fold `sumSqSrc (n+1) = …` is definitional
+    ?base ?step
+  case base =>                     -- base branch: `pure 0`
+    exact ReflectionS.ret hE hB 0 (fun _ => rfl)
+  case step =>                     -- step branch: `app helper; bin add; ret`
+    intro m s
+    refine ReflectionS.app hE hB (aT := .nat) (bT := .nat) (sqD hE hB) m (fSrc := sqAssertSrc)
+      (fun _ => sq_sound hE hB m) ?_
+    intro y
+    apply ReflectionS.bin hE hB .add s y
+    intro r
+    apply ReflectionS.ret hE hB r
+    rintro ⟨-, hr⟩
+    simp only [hr, Bin.denote]
+
+/-- The apply-derived recursion body's *step* matches the hand-written one node-for-node (the
+    helper atom `sq` instantiated to its denotation): the derived and hand `selfCall`/`app`/`bin`
+    scaffolding agree.  (The bases differ only cosmetically — `.ret 0` vs a `natLit`-bound `0`.) -/
+example (m : Nat) :
+    Expr.denote (rE hE) (rB hB) ((sumSqRecPack hE hB).1 m)
+      = Expr.denote (rE hE) (rB hB) (sumSqAst (sqD hE hB) m) := rfl
+
+/-- `sumSqRecPack` re-establishes the recursion soundness through the constructive combinator —
+    the derived body's `mrec` knot is `≈ eval ∘ sumSqSrc`. -/
+example (n : Nat) :
+    Eutt (mrec (fun s => Expr.denote (rE hE) (rB hB) ((sumSqRecPack hE hB).1 s)) n)
+      (evalC hE hB (sumSqSrc n)) :=
+  (sumSqRecPack hE hB).2 True.intro n
+
 end Sound
 
 end Example
