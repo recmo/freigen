@@ -198,14 +198,15 @@ structure BindSig : Type 1 where
   𝓑 : ε → Type
   𝓑τ : (e : ε) → 𝓑 e → Tp
 
-/-- Instantiate a coded effect signature at a target monad. -/
-def EffSig.spec (𝓔 : EffSig) (M : Type → Type) : EffSpec where
+/-- Instantiate a coded effect signature at a target monad.  (Reducible: downstream statements
+    identify `(𝓔.spec M).𝓘 e` with `Tp.denote M (𝓔.𝓘 e)` definitionally.) -/
+@[reducible] def EffSig.spec (𝓔 : EffSig) (M : Type → Type) : EffSpec where
   ε := 𝓔.ε
   𝓘 := fun e => (𝓔.𝓘 e).denote M
   𝓞 := fun e => (𝓔.𝓞 e).denote M
 
 /-- Instantiate a coded custom-control-flow signature at a target monad. -/
-def BindSig.spec (𝓑 : BindSig) (M : Type → Type) : BindSpec where
+@[reducible] def BindSig.spec (𝓑 : BindSig) (M : Type → Type) : BindSpec where
   ε := 𝓑.ε
   𝓘 := fun e => (𝓑.𝓘 e).denote M
   𝓞 := fun e => (𝓑.𝓞 e).denote M
@@ -217,14 +218,14 @@ def BindSig.spec (𝓑 : BindSig) (M : Type → Type) : BindSpec where
 /-- An **effect interpreter** into the tree domain over `(ε, br)`: gives each effect its tree
     (typically a `vis` — but which event, and how the payload is packaged, is its choice).
     This is `Freek.eval`'s `evalEff` at `M := CompE ε br`, over coded types. -/
-def EffInterp (𝓔 : EffSig) (ε : Type) (br : ε → Type) : Type :=
+abbrev EffInterp (𝓔 : EffSig) (ε : Type) (br : ε → Type) : Type :=
   (e : 𝓔.ε) → Tp.denote (CompE ε br) (𝓔.𝓘 e) → CompE ε br (Tp.denote (CompE ε br) (𝓔.𝓞 e))
 
 /-- A **`bindEff` interpreter** into the tree domain over `(ε, br)`: receives the operation,
     its (denoted) input, and one *denoted block* per branch label — full trees — and returns
     the operation's tree.  Run one block, run none, splice, iterate — entirely its business.
     This is `Freek.eval`'s `evalBind` at `M := CompE ε br`, over coded types. -/
-def BindInterp (𝓑 : BindSig) (ε : Type) (br : ε → Type) : Type :=
+abbrev BindInterp (𝓑 : BindSig) (ε : Type) (br : ε → Type) : Type :=
   (e : 𝓑.ε) → Tp.denote (CompE ε br) (𝓑.𝓘 e) →
     ((b : 𝓑.𝓑 e) → CompE ε br (Tp.denote (CompE ε br) (𝓑.𝓑τ e b))) →
     CompE ε br (Tp.denote (CompE ε br) (𝓑.𝓞 e))
