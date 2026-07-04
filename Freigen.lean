@@ -7,11 +7,12 @@ import Freigen.Ast.Basic
 import Freigen.Ast.Sexp
 import Freigen.Reflect.Sound
 import Freigen.Reflect.Basic
-import Freigen.Reflect.Recursion
 import Freigen.Compile
 import Freigen.Examples.Circuit.Basic
 import Freigen.Examples.Storage
 import Freigen.Examples.Recursion
+import Freigen.Examples.OfFnClone
+import Freigen.Examples.FirstClass
 
 /-!
 # Freigen — the root module
@@ -31,15 +32,17 @@ Module map (details in each module's own docstring; the full story is in the REA
 - `Freigen.Ast.Tp`/`.Basic`/`.Sexp` — the object-type universe and reified primitives, the dumb
   typed AST `Code`/`Prog` with its uniform denotation `denoteProg` into `Comp`, and the
   S-expression serialization (**the** printer; grammar pinned in `Ast.Sexp`).
-- `Freigen.Reflect.Sound`/`.Basic`/`.Recursion` — `reflect%` compiles a `Free` program (a value,
-  a function of its inputs, or a structural recursion) into a `Prog` bundled with its
-  `≈`-soundness against `ofFree`: per-node congruence lemmas, the mode-parametric walk, and the
-  recursion arm with the `reflect%`/`reflect_def` elaborators.
+- `Freigen.Reflect.Sound`/`.Basic` — `reflect%` compiles a `Free` program (a value, a function
+  of its inputs, or a structural recursion — one unified walk: a recursive definition spills as
+  a `rec_` like any recursive helper) into a `Prog` bundled with its `≈`-soundness against
+  `ofFree`: per-node congruence lemmas (`=` and, past recursion, `≈`), the mode-parametric walk,
+  and the `reflect%`/`reflect_def` elaborators.
 - `Freigen.Compile` — the `DSL` class, `serialize`, and the `#compile prog => "path"` command
   behind the `lake build <lib>:prog` facet.
-- `Freigen.Examples.Circuit.Basic`/`.Storage`/`.Recursion` — the Lean-side unit-test suite
-  (`CircOp` + scoped `hint`, the hint-less `StoreOp`, and `rec_` programs), each example pinning
-  its runtime result, soundness statement, and serialized AST with `#guard_msgs`.  The end-to-end
+- `Freigen.Examples.Circuit.Basic`/`.Storage`/`.Recursion`/`.OfFnClone` — the Lean-side
+  unit-test suite (`CircOp` + scoped `hint`, the hint-less `StoreOp`, `rec_` programs, and a
+  `Vector.ofFn` clone whose worker spills as a recursive definition over `push`), each example
+  pinning its runtime result, soundness statement, and serialized AST with `#guard_msgs`.  The end-to-end
   path — `#compile` → `.prog` artifact → parsed and executed by the Rust SDK — is exercised by
   the separate goldens project (`examples/client/`) on CI.
 -/

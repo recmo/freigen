@@ -9,7 +9,7 @@ use num_bigint::BigUint;
 /// Numbers are arbitrary-precision: `Nat` is an unbounded natural, `Field` a canonical
 /// representative modulo its prime (the modulus travels with the value, so field arithmetic needs
 /// no ambient typing).
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Value {
     Bool(bool),
     Nat(BigUint),
@@ -24,6 +24,13 @@ pub enum Value {
     /// The image of a literal with no serializable payload (a function-typed literal).  Inspecting
     /// it in any primitive is a runtime error.
     Opaque,
+    /// A **function value**: a suspended block closing over its captured environment; applying
+    /// it binds `param` and runs `body`.
+    Closure {
+        param: String,
+        body: crate::ast::Block,
+        env: std::collections::HashMap<String, Value>,
+    },
 }
 
 impl Value {
@@ -71,6 +78,7 @@ impl fmt::Display for Value {
             Value::Inr(x) => write!(f, "(inr {x})"),
             Value::Fin { val, .. } => write!(f, "{val}"),
             Value::Opaque => write!(f, "opaque"),
+            Value::Closure { .. } => write!(f, "<closure>"),
         }
     }
 }

@@ -68,6 +68,8 @@ pub enum BinOp {
     MulF,
     PowF,
     Pair,
+    /// `xs.push x` — append one element to an array.
+    Push,
 }
 
 /// Partial (proof-erased) primitives (Lean's `POp`).  Their proof obligations were erased at
@@ -123,6 +125,11 @@ pub enum Expr {
     /// A scoped construct carrying an in-monad block — meaning supplied by the client (the
     /// canonical interpreter runs the block inline by default).
     Scope { name: String, body: Block },
+    /// A **function value**: suspend `body` (an ordinary block) as a first-class closure over
+    /// the current environment, binding `param` on application.
+    Lam { param: Var, body: Block },
+    /// **Apply** a function value — effectful, like `Call`.
+    App { f: Var, arg: Var },
 }
 
 /// One statement: `(let var tp expr)`.

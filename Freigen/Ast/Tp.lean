@@ -33,19 +33,46 @@ inductive Tp : Type
   | sum : Tp → Tp → Tp
   | fin : Nat → Tp
 
-/-- Denote an object type back into Lean.  Reducible so type-class search and unification see
-    through it to the underlying Lean type. -/
-@[reducible] def Tp.denote : Tp → Type
+/-- **First-order** object types — `Tp` minus `fn`.  This is the universe of *effect signatures*
+    (`Op : TpF → TpF → Type`): an effect's input/output cannot be a function, which is exactly
+    what breaks the `Tp.denote ↔ Comp` circularity — `TpF.denote` is `Op`-independent, so the
+    interaction-tree domain (whose event payloads live here) can be defined *before* the full,
+    Kleisli-valued `Tp.denote`.  It also keeps the whole effect stack in `Type 0`: signatures
+    quantify `TpF` *codes* (data), never host `Type`s. -/
+inductive TpF : Type
+  | bool : TpF
+  | nat : TpF
+  | zmod : Nat → TpF
+  | unit : TpF
+  | prod : TpF → TpF → TpF
+  | vec : TpF → Nat → TpF
+  | array : TpF → TpF
+  | sum : TpF → TpF → TpF
+  | fin : Nat → TpF
+
+/-- Denote a first-order object type into Lean (`Op`-independent). -/
+@[reducible] def TpF.denote : TpF → Type
   | .bool     => Bool
   | .nat      => Nat
   | .zmod n   => ZMod n
   | .unit     => Unit
   | .prod a b => a.denote × b.denote
-  | .fn a b   => a.denote → b.denote
   | .vec a n  => Vector a.denote n
   | .array a  => Array a.denote
   | .sum a b  => a.denote ⊕ b.denote
   | .fin n    => Fin n
+
+/-- Embed a first-order type into the full universe. -/
+@[reducible] def TpF.tp : TpF → Tp
+  | .bool     => .bool
+  | .nat      => .nat
+  | .zmod n   => .zmod n
+  | .unit     => .unit
+  | .prod a b => .prod a.tp b.tp
+  | .vec a n  => .vec a.tp n
+  | .array a  => .array a.tp
+  | .sum a b  => .sum a.tp b.tp
+  | .fin n    => .fin n
 
 /-- A heterogeneous list: `HList β [i₀, i₁, …]` holds a `β i₀`, a `β i₁`, ….  Used for the
     argument tuples of (multi-argument) function definitions. -/
@@ -89,33 +116,8 @@ inductive Bin : Tp → Tp → Tp → Type
   /-- Field power with a `Nat` exponent. -/
   | powZ {n : Nat} : Bin (.zmod n) .nat (.zmod n)
   | pair {a b : Tp} : Bin a b (.prod a b)
-
-/-- Denote a unary primitive to its Lean operation. -/
-def Un.denote {a b : Tp} : Un a b → a.denote → b.denote
-  | .not, x => !x
-  | .fst, p => p.1
-  | .snd, p => p.2
-  | .inl, x => Sum.inl x
-  | .inr, x => Sum.inr x
-  | .toArray, v => v.toArray
-  | .finVal, i => i.val
-
-/-- Denote a binary primitive to its Lean operation. -/
-def Bin.denote {a b c : Tp} : Bin a b c → a.denote → b.denote → c.denote
-  | .add,  x, y => x + y
-  | .sub,  x, y => x - y
-  | .mul,  x, y => x * y
-  | .pow,  x, y => x ^ y
-  | .eq,   x, y => x == y
-  | .lt,   x, y => decide (x < y)
-  | .ble,  x, y => decide (x ≤ y)
-  | .and,  x, y => x && y
-  | .or,   x, y => x || y
-  | .addZ, x, y => x + y
-  | .subZ, x, y => x - y
-  | .mulZ, x, y => x * y
-  | .powZ, x, y => x ^ y
-  | .pair, x, y => (x, y)
+  /-- **Array push** `xs.push x` — append one element (total). -/
+  | push {a : Tp} : Bin (.array a) a (.array a)
 
 /-- **Partial** primitive operations, indexed by (argument list, result) object types.  These are
     the *proof-erased* primitives — collection get/set and refinement upcasts — whose Lean
@@ -139,22 +141,5 @@ inductive POp : List Tp → Tp → Type
   /-- **Strict select** `c ? x : y` — both branches evaluated, the boolean picks.  Total (its
       denotation is always `some`); lives here so pure `if` needs no continuation duplication. -/
   | select {a : Tp} : POp [.bool, a, a] a
-
-/-- Denote a partial primitive; `none` is the erased proof obligation failing. -/
-def POp.denote : {as : List Tp} → {b : Tp} → POp as b → HList Tp.denote as → Option b.denote
-  | _, _, @POp.vget _ n, .cons v (.cons i .nil) =>
-      if h : i < n then some (v[i]'h) else none
-  | _, _, @POp.vset _ n, .cons v (.cons i (.cons x .nil)) =>
-      if h : i < n then some (v.set i x h) else none
-  | _, _, .aget, .cons v (.cons i .nil) =>
-      if h : i < v.size then some (v[i]'h) else none
-  | _, _, .aset, .cons v (.cons i (.cons x .nil)) =>
-      if h : i < v.size then some (v.set i x h) else none
-  | _, _, @POp.arrToVec _ n, .cons arr .nil =>
-      if h : arr.size = n then some ⟨arr, h⟩ else none
-  | _, _, @POp.natToFin n, .cons m .nil =>
-      if h : m < n then some ⟨m, h⟩ else none
-  | _, _, .select, .cons c (.cons x (.cons y .nil)) =>
-      some (bif c then x else y)
 
 end Freigen

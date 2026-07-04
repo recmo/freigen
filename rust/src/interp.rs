@@ -213,6 +213,20 @@ impl<'p> Interpreter<'p> {
                 Ok(Value::Vec(out))
             }
             Expr::Op { name, arg } => handler.op(name, lookup(env, arg)?),
+            Expr::Lam { param, body } => Ok(Value::Closure {
+                param: param.clone(),
+                body: body.clone(),
+                env: env.clone(),
+            }),
+            Expr::App { f, arg } => match lookup(env, f)? {
+                Value::Closure { param, body, env: captured } => {
+                    let arg = lookup(env, arg)?;
+                    let mut env = captured;
+                    env.insert(param, arg);
+                    self.eval_block(handler, &mut env, rec, depth, &body)
+                }
+                other => malformed(format!("apply on a non-function: {other}")),
+            },
             Expr::SelfCall(arg) => match rec {
                 Some(def) => {
                     let arg = lookup(env, arg)?;
@@ -284,6 +298,13 @@ fn eval_un(op: UnOp, a: Value) -> Result<Value> {
 fn eval_bin(op: BinOp, a: Value, b: Value) -> Result<Value> {
     match op {
         BinOp::Pair => Ok(Value::Pair(Box::new(a), Box::new(b))),
+        BinOp::Push => match a {
+            Value::Array(mut xs) => {
+                xs.push(b);
+                Ok(Value::Array(xs))
+            }
+            _ => malformed("push on a non-array"),
+        },
         BinOp::And => Ok(Value::Bool(as_bool(a)? && as_bool(b)?)),
         BinOp::Or => Ok(Value::Bool(as_bool(a)? || as_bool(b)?)),
         BinOp::Add => Ok(Value::Nat(as_nat(a)? + as_nat(b)?)),

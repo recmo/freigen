@@ -205,6 +205,7 @@ fn bin_op(head: &str) -> Option<BinOp> {
         "mulf" => BinOp::MulF,
         "powf" => BinOp::PowF,
         "pair" => BinOp::Pair,
+        "push" => BinOp::Push,
         _ => return None,
     })
 }
@@ -276,6 +277,18 @@ fn parse_expr(tp: &Tp, s: &Sexp) -> Result<Expr> {
             name: as_name(name, "a scope name")?.to_owned(),
             body: parse_block(body)?,
         }),
+        ("lam", [binders, body]) => {
+            let binders = as_list(binders, "lam binders")?;
+            let [binder] = binders else {
+                return err(format!("lam expects one ((var type)) binder, got `{s}`"));
+            };
+            let binder = as_list(binder, "a lam binder")?;
+            let [v, _tp] = binder else {
+                return err(format!("lam binder expects (var type), got `{s}`"));
+            };
+            Ok(Expr::Lam { param: as_var(v)?, body: parse_block(body)? })
+        }
+        ("app", [f, arg]) => Ok(Expr::App { f: as_var(f)?, arg: as_var(arg)? }),
         (head, args) => {
             if let Some(o) = un_op(head) {
                 let [a] = args else {

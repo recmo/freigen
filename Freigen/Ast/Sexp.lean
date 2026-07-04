@@ -33,6 +33,8 @@ stmt    ::= (let VAR TYPE expr)
 term    ::= (ret VAR)
           | (if VAR block block)               ; branch in tail position
 expr    ::= (lit VALUE)                        ; a host literal
+          | (lam ((VAR TYPE)) block)           ; a function value (an ordinary code block)
+          | (app VAR VAR)                      ; apply a function value — effectful, like call
           | (UNOP VAR)                         ; total unary primitive
           | (BINOP VAR VAR)                    ; total binary primitive
           | (POP VAR*)                         ; partial (proof-erased) primitive — may fail
@@ -53,7 +55,7 @@ VALUE   ::= true | false | NAT | unit | opaque
           | (VALUE*) | (inl VALUE) | (inr VALUE)
 UNOP    ::= not | fst | snd | inl | inr | to-array | fin-val
 BINOP   ::= add | sub | mul | pow | eq | lt | le | and | or
-          | addf | subf | mulf | powf | pair
+          | addf | subf | mulf | powf | pair | push
 POP     ::= vget | vset | aget | aset | select
 ```
 
@@ -84,7 +86,7 @@ def Tp.toSexp : Tp → String
     annotation directs the parse, so a value carries no redundant structure: scalars are bare
     tokens, composites bare lists — only a sum's `inl`/`inr` head (a real data bit) survives.  A
     function literal has no serializable payload (`opaque`). -/
-def Tp.toSexpVal : (α : Tp) → α.denote → String
+def Tp.toSexpVal {X : TpF → TpF → Type} : (α : Tp) → α.denote X → String
   | .bool,     b => toString b
   | .nat,      n => toString n
   | .zmod _,   x => toString x.val
@@ -109,7 +111,7 @@ def Bin.sexpName {a b c : Tp} : Bin a b c → String
   | .add => "add" | .sub => "sub" | .mul => "mul" | .pow => "pow"
   | .eq => "eq" | .lt => "lt" | .ble => "le" | .and => "and" | .or => "or"
   | .addZ => "addf" | .subZ => "subf" | .mulZ => "mulf" | .powZ => "powf"
-  | .pair => "pair"
+  | .pair => "pair" | .push => "push"
 
 /-- S-expression head for a partial primitive — the upcasts carry their target bound as their
     first argument. -/
@@ -123,7 +125,7 @@ def POp.sexpName : {as : List Tp} → {b : Tp} → POp as b → String
 /-- Value representation for serialization: every atom is its variable name. -/
 abbrev SexpV : Tp → Type := fun _ => String
 /-- Function representation for serialization: a definition is its display name. -/
-abbrev SexpF : List Tp → Tp → Type 1 := fun _ _ => ULift String
+abbrev SexpF : List Tp → Tp → Type := fun _ _ => String
 
 namespace Sexp
 
@@ -148,88 +150,97 @@ private def blockAt (d : Nat) (stmts : String) : String :=
 /-- Serialize a `Code` chain into statement lines at depth `d` (a fresh-name counter `i` threads
     through).  `opE` renders an op node applied to its argument atom —
     parameterized so a `rec_` body can render the `CallOp.call` self-call structurally. -/
-private def sCode {Op : Type → Type → Type 1} {SOp : Type → Type} {α : Tp}
-    (opE : {I R : Type} → Op I R → String → String) (sname : {β : Type} → SOp β → String) :
-    Nat → Nat → Code Op SOp SexpF SexpV α → (String × Nat)
+private def sCode {X : TpF → TpF → Type} {Opc : Tp → Tp → Type} {SOp : Type → Type} {α : Tp}
+    (opE : {I R : Tp} → Opc I R → String → String) (sname : {β : Type} → SOp β → String) :
+    Nat → Nat → Code X Opc SOp SexpF SexpV α → (String × Nat)
   | d, i, .ret v => (s!"{ind d}(ret {v})", i)
-  | d, i, @Code.lit _ _ _ _ β _ a k =>
+  | d, i, @Code.lit _ _ _ _ _ _ β a k =>
       let v := s!"v{i}"; let (r, j) := sCode opE sname d (i+1) (k v)
       (s!"{ind d}(let {v} {β.toSexp} (lit {β.toSexpVal a}))\n{r}", j)
-  | d, i, @Code.un _ _ _ _ _ _ b o a k =>
+  | d, i, @Code.un _ _ _ _ _ _ _ b o a k =>
       let v := s!"v{i}"; let (r, j) := sCode opE sname d (i+1) (k v)
       (s!"{ind d}(let {v} {b.toSexp} ({o.sexpName} {a}))\n{r}", j)
-  | d, i, @Code.bin _ _ _ _ _ _ _ c o a b k =>
+  | d, i, @Code.bin _ _ _ _ _ _ _ _ c o a b k =>
       let v := s!"v{i}"; let (r, j) := sCode opE sname d (i+1) (k v)
       (s!"{ind d}(let {v} {c.toSexp} ({o.sexpName} {a} {b}))\n{r}", j)
-  | d, i, @Code.pop _ _ _ _ _ _ b o args k =>
+  | d, i, @Code.pop _ _ _ _ _ _ _ b o args k =>
       let v := s!"v{i}"; let (r, j) := sCode opE sname d (i+1) (k v)
       let argStr := String.join ((hlistStrings args).map (" " ++ ·))
       (s!"{ind d}(let {v} {b.toSexp} ({o.sexpName}{argStr}))\n{r}", j)
-  | d, i, @Code.vec _ _ _ _ _ a n elems k =>
+  | d, i, @Code.vec _ _ _ _ _ _ a n elems k =>
       let v := s!"v{i}"; let (r, j) := sCode opE sname d (i+1) (k v)
       let argStr := String.join (elems.toList.map (" " ++ ·))
       (s!"{ind d}(let {v} {(Tp.vec a n).toSexp} (vec{argStr}))\n{r}", j)
-  | d, i, @Code.arr _ _ _ _ _ a elems k =>
+  | d, i, @Code.arr _ _ _ _ _ _ a elems k =>
       let v := s!"v{i}"; let (r, j) := sCode opE sname d (i+1) (k v)
       let argStr := String.join (elems.map (" " ++ ·))
       (s!"{ind d}(let {v} {(Tp.array a).toSexp} (arr{argStr}))\n{r}", j)
-  | d, i, @Code.fold _ _ _ _ _ a n init body k =>
+  | d, i, @Code.fold _ _ _ _ _ _ a n init body k =>
       let iv := s!"i{i}"; let av := s!"a{i+1}"
       let (bs, j) := sCode opE sname (d+2) (i+2) (body iv av)
       let v := s!"v{j}"; let (r, l) := sCode opE sname d (j+1) (k v)
       (s!"{ind d}(let {v} {a.toSexp} (fold {n} {init} ({iv} {av})\n{blockAt (d+1) bs}))\n{r}", l)
-  | d, i, @Code.vgen _ _ _ _ _ a n body k =>
+  | d, i, @Code.vgen _ _ _ _ _ _ a n body k =>
       let iv := s!"i{i}"
       let (bs, j) := sCode opE sname (d+2) (i+1) (body iv)
       let v := s!"v{j}"; let (r, l) := sCode opE sname d (j+1) (k v)
       (s!"{ind d}(let {v} {(Tp.vec a n).toSexp} (vgen {n} ({iv})\n{blockAt (d+1) bs}))\n{r}", l)
-  | d, i, @Code.op _ _ _ _ _ _ R o inp k =>
+  | d, i, @Code.op _ _ _ _ _ _ _ R o inp k =>
       let v := s!"v{i}"; let (r, j) := sCode opE sname d (i+1) (k v)
       (s!"{ind d}(let {v} {R.toSexp} {opE o inp})\n{r}", j)
   | d, i, .ite c t e =>
       let (ts, j) := sCode opE sname (d+2) i t
       let (es, j) := sCode opE sname (d+2) j e
       (s!"{ind d}(if {c}\n{blockAt (d+1) ts}\n{blockAt (d+1) es})", j)
-  | d, i, @Code.call _ _ _ _ _ _ b cf args k =>
+  | d, i, @Code.call _ _ _ _ _ _ _ b cf args k =>
       let v := s!"v{i}"; let (r, j) := sCode opE sname d (i+1) (k v)
       let argStr := String.join ((hlistStrings args).map (" " ++ ·))
-      (s!"{ind d}(let {v} {b.toSexp} (call {cf.down}{argStr}))\n{r}", j)
-  | d, i, @Code.scope _ _ _ _ _ β s b k =>
+      (s!"{ind d}(let {v} {b.toSexp} (call {cf}{argStr}))\n{r}", j)
+  | d, i, @Code.lam _ _ _ _ _ _ a b body k =>
+      let x := s!"x{i}"
+      let (bs, j) := sCode opE sname (d+2) (i+1) (body x)
+      let v := s!"v{j}"; let (r, l) := sCode opE sname d (j+1) (k v)
+      (s!"{ind d}(let {v} {(Tp.fn a b).toSexp} (lam (({x} {a.toSexp}))\n{blockAt (d+1) bs}))\n{r}", l)
+  | d, i, @Code.app _ _ _ _ _ _ _ b f x k =>
+      let v := s!"v{i}"; let (r, j) := sCode opE sname d (i+1) (k v)
+      (s!"{ind d}(let {v} {b.toSexp} (app {f} {x}))\n{r}", j)
+  | d, i, @Code.scope _ _ _ _ _ _ β s b k =>
       let (bs, j) := sCode opE sname (d+2) i b
       let v := s!"v{j}"; let (r, l) := sCode opE sname d (j+1) (k v)
       (s!"{ind d}(let {v} {β.toSexp} (scope {sname s}\n{blockAt (d+1) bs}))\n{r}", l)
 
-private def sProg {Op : Type → Type → Type 1} {SOp : Type → Type} {mainArgs : List Tp} {α : Tp}
-    (name : {I R : Type} → Op I R → String) (sname : {β : Type} → SOp β → String) :
-    Nat → Prog Op SOp SexpF SexpV mainArgs α → (String × Nat)
+private def sProg {X : TpF → TpF → Type} {SOp : Type → Type} {mainArgs : List Tp} {α : Tp}
+    (name : {I R : TpF} → X I R → String) (sname : {β : Type} → SOp β → String) :
+    Nat → Prog X SOp SexpF SexpV mainArgs α → (String × Nat)
   | i, @Prog.main _ _ _ _ mainArgs α body =>
       let (argv, i) := freshHList mainArgs i
-      let opE : {I R : Type} → Op I R → String → String := fun o a => s!"(op {name o} {a})"
+      let opE : {I R : Tp} → OpT X I R → String → String := fun o a => match o with
+        | .mk o' => s!"(op {name o'} {a})"
       let (b, i) := sCode opE sname 3 i (body argv)
       (s!"{ind 1}(main {params mainArgs argv} {α.toSexp}\n{blockAt 2 b})", i)
   | i, @Prog.def_ _ _ _ _ _ _ as b nm body k =>
       let (argv, i) := freshHList as i
-      let opE : {I R : Type} → Op I R → String → String := fun o a => s!"(op {name o} {a})"
+      let opE : {I R : Tp} → OpT X I R → String → String := fun o a => match o with
+        | .mk o' => s!"(op {name o'} {a})"
       let (bs, i) := sCode opE sname 3 i (body argv)
-      let (rest, i) := sProg name sname i (k (ULift.up nm))
+      let (rest, i) := sProg name sname i (k nm)
       (s!"{ind 1}(def {nm} {params as argv} {b.toSexp}\n{blockAt 2 bs})\n{rest}", i)
   | i, @Prog.rec_ _ _ _ _ _ _ arg res nm body k =>
       let x := s!"x{i}"; let i := i + 1
-      let opE : {I R : Type} → Freigen.ITree.CallOp Op arg.denote res.denote I R →
-          String → String := fun o a => match o with
-        | .base o' => s!"(op {name o'} {a})"
-        | .call    => s!"(self {a})"
+      let opE : {I R : Tp} → CallOp (OpT X) arg res I R → String → String := fun o a => match o with
+        | .base (.mk o') => s!"(op {name o'} {a})"
+        | .call          => s!"(self {a})"
       let (bs, i) := sCode opE sname 3 i (body SexpF x)
-      let (rest, i) := sProg name sname i (k (ULift.up nm))
+      let (rest, i) := sProg name sname i (k nm)
       (s!"{ind 1}(rec {nm} {params [arg] (.cons x .nil)} {res.toSexp}\n{blockAt 2 bs})\n{rest}", i)
 
 end Sexp
 
 /-- Serialize a closed program into the uniform S-expression format (grammar in this module's
     docstring) — the machine-facing sibling of `pp`. -/
-def sexp {Op : Type → Type → Type 1} {SOp : Type → Type}
-    (name : {I R : Type} → Op I R → String) (sname : {β : Type} → SOp β → String)
-    {mainArgs : List Tp} {α : Tp} (c : Closed Op SOp mainArgs α) : String :=
+def sexp {X : TpF → TpF → Type} {SOp : Type → Type}
+    (name : {I R : TpF} → X I R → String) (sname : {β : Type} → SOp β → String)
+    {mainArgs : List Tp} {α : Tp} (c : Closed X SOp mainArgs α) : String :=
   "(program\n" ++ (Sexp.sProg name sname 0 (c SexpF SexpV)).1 ++ ")\n"
 
 end Freigen
