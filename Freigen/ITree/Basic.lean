@@ -214,6 +214,13 @@ theorem bind_assoc {α β γ} (m : CompE ε br α) (k : α → CompE ε br β) (
   · obtain ⟨p, c, hd⟩ : ∃ p c, x.dest = ⟨p, c⟩ := ⟨_, _, rfl⟩
     exact ⟨p, c, c, hd, hd, fun _ => Or.inr rfl⟩
 
+/-- With all three `bind` laws proved, interaction trees are a **lawful monad**. -/
+instance : LawfulMonad (CompE ε br) :=
+  LawfulMonad.mk' _
+    (fun x => bind_ret_right x)
+    (fun a k => bind_ret a k)
+    (fun m k h => bind_assoc m k h)
+
 /-! ## General recursion: `mrec`
 
 A recursive call is a node *inside* the tree, so the continuation after it is preserved (this is

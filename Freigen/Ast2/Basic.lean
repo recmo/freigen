@@ -16,26 +16,85 @@ structure BindSpec : Type _ where
   𝓑 : ε → Type x
   𝓑τ : (e: ε) → 𝓑 e → Type y
 
+/-- The free monad over a host effect spec and a custom-control-flow spec, in **leaf-grafting
+    form**: every node carries its continuation, and `bind` is a *function* (structural
+    grafting at `pure` leaves), not a constructor — which is what makes the `Monad` instance
+    lawful on the nose (`pure_bind` is `rfl`; the other laws are inductions). -/
 inductive Freek (𝓔 : EffSpec) (𝓑 : BindSpec) : Type _ → Type _ where
 | pure {α} : α → Freek 𝓔 𝓑 α
-| bind {α β} : Freek 𝓔 𝓑 α → (α → Freek 𝓔 𝓑 β) → Freek 𝓔 𝓑 β
-| eff : (e : 𝓔.ε) → 𝓔.𝓘 e → Freek 𝓔 𝓑 (𝓔.𝓞 e)
-| bindEff : (e : 𝓑.ε) → 𝓑.𝓘 e → ((b: 𝓑.𝓑 e) → Freek 𝓔 𝓑 (𝓑.𝓑τ e b)) → Freek 𝓔 𝓑 (𝓑.𝓞 e)
+| eff {α} (e : 𝓔.ε) : 𝓔.𝓘 e → (𝓔.𝓞 e → Freek 𝓔 𝓑 α) → Freek 𝓔 𝓑 α
+| bindEff {α} (e : 𝓑.ε) : 𝓑.𝓘 e → ((b : 𝓑.𝓑 e) → Freek 𝓔 𝓑 (𝓑.𝓑τ e b)) →
+    (𝓑.𝓞 e → Freek 𝓔 𝓑 α) → Freek 𝓔 𝓑 α
+
+/-- Monadic bind: graft `f` at the `pure` leaves — extending each node's *continuation*, never
+    a `bindEff` block. -/
+def Freek.bind {𝓔 𝓑} {α β} : Freek 𝓔 𝓑 α → (α → Freek 𝓔 𝓑 β) → Freek 𝓔 𝓑 β
+  | .pure a, f => f a
+  | .eff e i k, f => .eff e i fun o => (k o).bind f
+  | .bindEff e i bs k, f => .bindEff e i bs fun o => (k o).bind f
 
 instance {𝓔 𝓑} : Monad (Freek 𝓔 𝓑) where
   pure := Freek.pure
   bind := Freek.bind
+
+/-- Right identity, by induction (`pure_bind`, the left one, is `rfl`). -/
+theorem Freek.bind_pure {𝓔 𝓑 α} (m : Freek 𝓔 𝓑 α) : m.bind .pure = m := by
+  induction m with
+  | pure a => rfl
+  | eff e i k ih => exact congrArg (Freek.eff e i) (funext ih)
+  | bindEff e i bs k _ ihk => exact congrArg (Freek.bindEff e i bs) (funext ihk)
+
+/-- Associativity, by induction. -/
+theorem Freek.bind_assoc {𝓔 𝓑} {α β γ} (m : Freek 𝓔 𝓑 α)
+    (f : α → Freek 𝓔 𝓑 β) (g : β → Freek 𝓔 𝓑 γ) :
+    (m.bind f).bind g = m.bind fun a => (f a).bind g := by
+  induction m with
+  | pure a => rfl
+  | eff e i k ih => exact congrArg (Freek.eff e i) (funext fun o => ih o f)
+  | bindEff e i bs k _ ihk => exact congrArg (Freek.bindEff e i bs) (funext fun o => ihk o f)
+
+/-- **`Freek` is a lawful monad** — the point of the leaf-grafting representation.  `id_map` is
+    `bind_pure` (map is the monad-default `bind ∘ pure`), `pure_bind` is `rfl` (grafting at the
+    single `pure` leaf), and `bind_assoc` is the induction above. -/
+instance {𝓔 𝓑} : LawfulMonad (Freek 𝓔 𝓑) :=
+  LawfulMonad.mk' (Freek 𝓔 𝓑)
+    (fun m => Freek.bind_pure m)
+    (fun _ _ => rfl)
+    (fun m f g => Freek.bind_assoc m f g)
 
 def Freek.eval {M} [Monad M] {𝓔 𝓑 α}
     (evalEff : (e : 𝓔.ε) → 𝓔.𝓘 e → M (𝓔.𝓞 e))
     (evalBind : (e : 𝓑.ε) → 𝓑.𝓘 e → ((b: 𝓑.𝓑 e) → M (𝓑.𝓑τ e b)) → M (𝓑.𝓞 e))
     : Freek 𝓔 𝓑 α → M α
 | .pure a => Pure.pure a
-| .bind a f => do
-    let a' ← Freek.eval evalEff evalBind a
-    Freek.eval evalEff evalBind (f a')
-| .eff e i => evalEff e i
-| .bindEff e i k => evalBind e i (fun b => Freek.eval evalEff evalBind (k b))
+| .eff e i k => do
+    let o ← evalEff e i
+    Freek.eval evalEff evalBind (k o)
+| .bindEff e i bs k => do
+    let o ← evalBind e i (fun b => Freek.eval evalEff evalBind (bs b))
+    Freek.eval evalEff evalBind (k o)
+
+/-- `eval` is a **monad morphism**: it maps `Freek.bind` to the target's bind.  With `bind`
+    computed by grafting this is a lemma rather than a definitional arm — the price of
+    lawfulness — proved by induction, using the target's own laws (hence `[LawfulMonad M]`). -/
+theorem Freek.eval_bind {M} [Monad M] [LawfulMonad M] {𝓔 𝓑} {α β}
+    (evalEff : (e : 𝓔.ε) → 𝓔.𝓘 e → M (𝓔.𝓞 e))
+    (evalBind : (e : 𝓑.ε) → 𝓑.𝓘 e → ((b: 𝓑.𝓑 e) → M (𝓑.𝓑τ e b)) → M (𝓑.𝓞 e))
+    (m : Freek 𝓔 𝓑 α) (f : α → Freek 𝓔 𝓑 β) :
+    Freek.eval evalEff evalBind (m.bind f)
+      = Freek.eval evalEff evalBind m >>= fun a => Freek.eval evalEff evalBind (f a) := by
+  -- `induction m` generalizes `f`; each node case unfolds `bind`/`eval` on both sides, pushes
+  -- the continuation past target-monad associativity, and closes with the pointwise IH.
+  induction m with
+  | pure a => exact (pure_bind (m := M) a fun a => Freek.eval evalEff evalBind (f a)).symm
+  | eff e i k ih =>
+      simp only [Freek.bind, Freek.eval]
+      rw [LawfulMonad.bind_assoc]
+      exact congrArg _ (funext fun o => ih o f)
+  | bindEff e i bs k _ ihk =>
+      simp only [Freek.bind, Freek.eval]
+      rw [LawfulMonad.bind_assoc]
+      exact congrArg _ (funext fun o => ihk o f)
 
 abbrev circuitEff : EffSpec where
   ε := Unit
@@ -54,7 +113,7 @@ def Circuit (α : Type _) : Type _ := Freek circuitEff circuitBlock α
 instance : Monad Circuit := inferInstanceAs (Monad (Freek _ _))
 
 def Circuit.hint {β : Type} (f : Circuit β) : Circuit β :=
-  Freek.bindEff (𝓔 := circuitEff) (𝓑 := circuitBlock) β () (fun _ => f)
+  Freek.bindEff (𝓔 := circuitEff) (𝓑 := circuitBlock) β () (fun _ => f) Freek.pure
 
 def Circuit.eval_with_hints : Circuit α → Option α := Freek.eval
   (fun _ i => if i then some () else none)

@@ -46,7 +46,7 @@ an `assert : Bool → Unit` effect, and a `hint` block *indexed by an arbitrary 
 
 /-- Assert a boolean. -/
 abbrev Circuit.assert (b : Bool) : Circuit Unit :=
-  Freek.eff (𝓔 := circuitEff) (𝓑 := circuitBlock) () b
+  Freek.eff (𝓔 := circuitEff) (𝓑 := circuitBlock) () b Freek.pure
 
 /-- Helper definition: assert `x ≤ x²`, return `x²`. -/
 def sqAssertSrc (x : Nat) : Circuit Nat := do
@@ -200,7 +200,18 @@ theorem sumSq_sound (n : Nat) :
       simp only [bind_vis, interp_vis_call, interp_bind, bind_assoc, bind_ret, interp_sumL,
                  interp_ret]
       rfl
-    rw [hunf]
+    -- With `Freek.bind` computed by grafting, `eval` no longer distributes over a bind on an
+    -- *opaque* prefix definitionally — `eval_bind` rewrites the source into bind form.
+    have hsrc : evalC hE hB (sumSqSrc (n + 1))
+        = ITree.bind (evalC hE hB (sumSqSrc n)) fun s =>
+            ITree.bind (evalC hE hB (sqAssertSrc (n + 1))) fun y => ITree.ret (s + y) := by
+      show Freek.eval (𝓔 := circuitEff) (𝓑 := circuitBlock) hE hB
+          (Freek.bind (sumSqSrc n) fun s =>
+            Freek.bind (sqAssertSrc (n + 1)) fun y => Freek.pure (s + y)) = _
+      rw [Freek.eval_bind]
+      exact congrArg (ITree.bind (evalC hE hB (sumSqSrc n)))
+        (funext fun s => Freek.eval_bind hE hB _ _)
+    rw [hunf, hsrc]
     exact eutt_tau_left (eutt_bind_cong ih fun s =>
       eutt_bind_cong (Eutt.of_eq (sq_sound hE hB (n + 1))) fun y => eutt_refl _)
 
@@ -211,6 +222,19 @@ theorem sumSq_sound (n : Nat) :
     `sumSq_sound`. -/
 theorem main_sound :
     Eutt (Expr.denote (rE hE) (rB hB) (mainAst _)) (evalC hE hB mainSrc) := by
+  -- Split the source at the recursive call (`eval_bind`); the hint/assert legs are
+  -- constructor-headed, so their binds graft and everything after is definitional.
+  have hsrc : evalC hE hB mainSrc
+      = ITree.bind (evalC hE hB (sumSqSrc 3)) fun s =>
+          ITree.bind (hB Nat () fun _ => ITree.ret s) fun (h : Nat) =>
+            ITree.bind (hE () (h == s)) fun _ => ITree.ret h := by
+    show Freek.eval (𝓔 := circuitEff) (𝓑 := circuitBlock) hE hB
+        (Freek.bind (sumSqSrc 3) fun s =>
+          Freek.bind (Circuit.hint (pure s)) fun h =>
+            Freek.bind (Circuit.assert (h == s)) fun _ => Freek.pure h) = _
+    rw [Freek.eval_bind]
+    exact congrArg (ITree.bind (evalC hE hB (sumSqSrc 3))) (funext fun s => rfl)
+  rw [hsrc]
   show Eutt
     (ITree.bind (mrec (bd hE hB) 3) fun s =>
       ITree.bind (hB Nat () fun _ => ITree.ret s) fun (h : Nat) =>
@@ -254,7 +278,8 @@ theorem reflect_bin {a b c α : Tp} (o : Bin a b c)
     Eutt (Expr.denote (rE hE) (rB hB) (.bin o va vb k)) t :=
   ih _ rfl
 
-/-- Reflect `bind (eff e i') ks`: emit an `eff` node — its input atom must equal the source's
+/-- Reflect `eff e i' ks` (with the grafting `bind`, every source effect arrives with its
+    continuation already attached): emit an `eff` node — its input atom must equal the source's
     input (side condition `hi`, discharged from the defining equations) — and continue
     pointwise under the bound result. -/
 theorem reflect_eff {α : Tp} (e : CircE.ε) (i : Tp.denote (CompE ε br) (CircE.𝓘 e))
@@ -264,7 +289,7 @@ theorem reflect_eff {α : Tp} (e : CircE.ε) (i : Tp.denote (CompE ε br) (CircE
     {ks : Tp.denote (CompE ε br) (CircE.𝓞 e) → Circuit (Tp.denote (CompE ε br) α)}
     (hi : i = i')
     (ih : ∀ o, Eutt (Expr.denote (rE hE) (rB hB) (k o)) (evalC hE hB (ks o))) :
-    Eutt (Expr.denote (rE hE) (rB hB) (.eff e i k)) (evalC hE hB (Freek.bind (Freek.eff e i') ks)) := by
+    Eutt (Expr.denote (rE hE) (rB hB) (.eff e i k)) (evalC hE hB (Freek.eff e i' ks)) := by
   subst hi
   show Eutt (ITree.bind (hE e i) fun o => Expr.denote (rE hE) (rB hB) (k o))
             (ITree.bind (hE e i) fun o => evalC hE hB (ks o))
@@ -331,13 +356,13 @@ def Reflection.bin {Φ : Prop} {a b c α : Tp} (o : Bin a b c)
     Reflection hE hB Φ α m :=
   ⟨.bin o va vb fun vc => (k vc).1, fun hΦ => (k _).2 ⟨hΦ, rfl⟩⟩
 
-/-- Reflect `bind (eff e i') ks`: the pack's node is `eff e i` around the continuation packs;
+/-- Reflect `eff e i' ks`: the pack's node is `eff e i` around the continuation packs;
     the input condition `i = i'` may assume `Φ`. -/
 def Reflection.eff {Φ : Prop} {α : Tp} (e : CircE.ε) (i : Tp.denote (CompE ε br) (CircE.𝓘 e))
     {i' : Tp.denote (CompE ε br) (CircE.𝓘 e)} (hi : Φ → i = i')
     {ks : Tp.denote (CompE ε br) (CircE.𝓞 e) → Circuit (Tp.denote (CompE ε br) α)}
     (k : ∀ o, Reflection hE hB Φ α (ks o)) :
-    Reflection hE hB Φ α (Freek.bind (Freek.eff e i') ks) :=
+    Reflection hE hB Φ α (Freek.eff e i' ks) :=
   ⟨.eff e i fun o => (k o).1, fun hΦ => by
     rw [← hi hΦ]
     show Eutt (ITree.bind (hE e i) fun o => Expr.denote (rE hE) (rB hB) ((k o).1))
