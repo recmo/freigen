@@ -4,14 +4,22 @@ import Freigen.ITree.Eutt
 /-!
 # A hand-reflected circuit and its soundness
 
-A dry run for the reflector, with no metaprogramming: a source circuit (a `Freek` program with
-a helper definition, a recursive definition, an `assert` effect, and a `hint` block) is mirrored
-*by hand* into an `Expr` — node for node, the way the reflector would emit it — and the two are
-proved equivalent **for every choice of effect and `bindEff` interpreters**:
+A dry run for the reflector, with no metaprogramming: a source circuit — written in the plain,
+**host-level** `Circuit` monad from `Ast2.Basic` (the author never sees `Tp`), with a helper
+definition, a recursive definition, an `assert` effect, and a `hint` block at a host type — is
+mirrored *by hand* into an `Expr` over the *coded* signatures, node for node, the way the
+reflector would emit it, and the two are proved equivalent **for every choice of host effect
+and `bindEff` interpreters**:
 
 ```
-∀ ε br hE hB,  Expr.denote hE hB (mainAst _) ≈ Freek.eval hE hB (mainSrc (CompE ε br))
+∀ ε br hE hB,  Eutt (Expr.denote (rE hE) (rB hB) (mainAst _)) (evalC hE hB mainSrc)
 ```
+
+The two sides meet through the **signature bridge**: the coded `CircE`/`CircB` realize the
+representable fragments of the host `circuitEff`/`circuitBlock` (`Realizes` — an operation-name
+map `φ` with, here, `rfl` payload equations; for the hint, `φ M := Tp.denote M` maps the code
+to the host operation at its denotation).  The statement quantifies over **host** interpreters,
+and the AST denotes under their `Realizes.restrict`-ions.
 
 The proof shape is the template for reflector soundness:
 
@@ -30,47 +38,63 @@ namespace Example
 
 open ITree
 
-/-! ## The signatures
-
-An `assert : bool → nat` effect (the output is a dummy) and a `hint : nat → nat` custom
-control-flow operation carrying one block that computes the hinted value. -/
-
-abbrev CircE : EffSig := ⟨Unit, fun _ => .bool, fun _ => .nat⟩
-
-abbrev CircB : BindSig := ⟨Unit, fun _ => .nat, fun _ => .nat, fun _ => Unit, fun _ _ => .nat⟩
-
 /-! ## The source circuit
 
-Written over the coded signatures instantiated at a generic target monad `M` (the theorem picks
-`M := CompE ε br`).  Structure: a helper definition, a structurally recursive definition calling
-it, and a main body using the hint block and a final assert. -/
+Written in the **`Circuit` monad** from `Ast2.Basic` — host-level `circuitEff`/`circuitBlock`:
+an `assert : Bool → Unit` effect, and a `hint` block *indexed by an arbitrary host type*.  No
+`Tp`, no coded signature, no target monad in sight. -/
 
-section Source
-variable (M : Type → Type)
+/-- Assert a boolean. -/
+abbrev Circuit.assert (b : Bool) : Circuit Unit :=
+  Freek.eff (𝓔 := circuitEff) (𝓑 := circuitBlock) () b
 
 /-- Helper definition: assert `x ≤ x²`, return `x²`. -/
-def sqAssertSrc (x : Nat) : Freek (CircE.spec M) (CircB.spec M) Nat := do
+def sqAssertSrc (x : Nat) : Circuit Nat := do
   let y := x * x
-  let _ ← Freek.eff () (decide (x ≤ y))
+  let _ ← Circuit.assert (decide (x ≤ y))
   pure y
 
 /-- Recursive definition: `Σ_{i=1..n} i²`, each square produced by the helper. -/
-def sumSqSrc : Nat → Freek (CircE.spec M) (CircB.spec M) Nat
+def sumSqSrc : Nat → Circuit Nat
   | 0 => pure 0
   | n + 1 => do
     let s ← sumSqSrc n
-    let y ← sqAssertSrc M (n + 1)
+    let y ← sqAssertSrc (n + 1)
     pure (s + y)
 
-/-- The circuit: sum of squares up to 3, passed through a hint block whose body recomputes it,
-    then asserted equal to the computed value. -/
-def mainSrc : Freek (CircE.spec M) (CircB.spec M) Nat := do
-  let s ← sumSqSrc M 3
-  let h : Nat ← Freek.bindEff () s (fun _ => pure s)
-  let _ ← Freek.eff () (h == s)
+/-- The circuit: sum of squares up to 3, passed through a `hint` block (at the *host type*
+    `Nat`; the block recomputes the value), then asserted equal to the computed value. -/
+def mainSrc : Circuit Nat := do
+  let s ← sumSqSrc 3
+  let h ← Circuit.hint (pure s)
+  let _ ← Circuit.assert (h == s)
   pure h
 
-end Source
+/-! ## The reflector-side coded signatures, and the bridge
+
+`CircE` names `circuitEff`'s single operation; `CircB` names the **representable fragment** of
+`circuitBlock`'s (`Type`-many!) operations — one per `Tp` code, mapped by the realization to
+the host operation at its denotation (`φ M := Tp.denote M`).  All payload equations are `rfl`,
+so the `restrict`-ed interpreters compute definitionally. -/
+
+abbrev CircE : EffSig := ⟨Unit, fun _ => .bool, fun _ => .unit⟩
+
+abbrev CircB : BindSig := ⟨Tp, fun _ => .unit, fun t => t, fun _ => Unit, fun t _ => t⟩
+
+/-- `CircE` realizes `circuitEff` (on the nose — `φ` is the identity on the one operation). -/
+def CircE_realizes : CircE.Realizes circuitEff where
+  φ _ := id
+  input_eq _ _ := rfl
+  output_eq _ _ := rfl
+
+/-- `CircB` realizes the representable fragment of `circuitBlock`: the coded operation `t : Tp`
+    names the host hint at the type `t.denote M`. -/
+def CircB_realizes : CircB.Realizes circuitBlock where
+  φ M := Tp.denote M
+  input_eq _ _ := rfl
+  output_eq _ _ := rfl
+  br_eq _ _ := rfl
+  brTp_eq _ _ _ := rfl
 
 /-! ## The hand-reflected AST
 
@@ -111,7 +135,8 @@ def mainAst : Closed CircE CircB .nat := fun _ =>
   .letrec (sumSqAst sq) fun sumSq =>
   .natLit 3 fun three =>
   .app sumSq three fun s =>
-  .bindEff () s (fun _ => .ret s) fun h =>
+  .unitLit fun u =>
+  .bindEff .nat u (fun _ => .ret s) fun h =>
   .bin .eq h s fun c =>
   .eff () c fun _ =>
   .ret h
@@ -122,31 +147,38 @@ end Ast
 
 section Sound
 variable {ε : Type} {br : ε → Type}
-variable (hE : EffInterp CircE ε br) (hB : BindInterp CircB ε br)
+variable (hE : circuitEff.Interp ε br) (hB : circuitBlock.Interp ε br)
 
-/-- `Freek.eval` at the tree domain — the coded signatures pinned once (the elaborator cannot
-    recover `𝓔`/`𝓑` from the interpreters alone). -/
-abbrev evalC (hE : EffInterp CircE ε br) (hB : BindInterp CircB ε br) {α : Type}
-    (p : Freek (CircE.spec (CompE ε br)) (CircB.spec (CompE ε br)) α) : CompE ε br α :=
-  Freek.eval (𝓔 := CircE.spec (CompE ε br)) (𝓑 := CircB.spec (CompE ε br)) hE hB p
+/-- The coded interpreters induced by the **host** ones across the realizations — what the
+    reflected AST denotes under. -/
+abbrev rE (hE : circuitEff.Interp ε br) : EffInterp CircE ε br := CircE_realizes.restrict hE
+
+/-- See `rE`. -/
+abbrev rB (hB : circuitBlock.Interp ε br) : BindInterp CircB ε br := CircB_realizes.restrict hB
+
+/-- Evaluate a user-level `Circuit` program in the tree domain under the host interpreters
+    (the coded signatures never appear on this side). -/
+abbrev evalC (hE : circuitEff.Interp ε br) (hB : circuitBlock.Interp ε br) {α : Type}
+    (p : Circuit α) : CompE ε br α :=
+  Freek.eval (𝓔 := circuitEff) (𝓑 := circuitBlock) hE hB p
 
 /-- The denoted helper: a base-domain Kleisli arrow (what the `lam` atom stands for). -/
-def sqD : Nat → CompE ε br Nat := fun x => Expr.denote hE hB (sqAssertAst x)
+def sqD : Nat → CompE ε br Nat := fun x => Expr.denote (rE hE) (rB hB) (sqAssertAst x)
 
 /-- The denoted `letrec` body: a tree over the call-extended signature (what `mrec` ties). -/
 def bd : Nat → CompE (ε ⊕ Nat) (callBr br Nat) Nat := fun n =>
-  Expr.denote hE hB (sumSqAst (sqD hE hB) n)
+  Expr.denote (rE hE) (rB hB) (sumSqAst (sqD hE hB) n)
 
 /-- **Helper soundness** — definitional: the denoted `lam` body *is* the evaluated source
     helper, for any interpreters. -/
 theorem sq_sound (x : Nat) :
-    sqD hE hB x = evalC hE hB (sqAssertSrc (CompE ε br) x) := rfl
+    sqD hE hB x = evalC hE hB (sqAssertSrc x) := rfl
 
 /-- **Recursive-definition soundness**, by induction on the argument: the `mrec`-tied `letrec`
     body is `≈` (not `=` — each unfolding spends one `tau`) to the source's structural
     recursion, for any interpreters. -/
 theorem sumSq_sound (n : Nat) :
-    Eutt (mrec (bd hE hB) n) (evalC hE hB (sumSqSrc (CompE ε br) n)) := by
+    Eutt (mrec (bd hE hB) n) (evalC hE hB (sumSqSrc n)) := by
   induction n with
   | zero =>
     apply Eutt.of_eq
@@ -178,13 +210,13 @@ theorem sumSq_sound (n : Nat) :
     is definitionally equal on both sides, so the proof is one `bind`-congruence around
     `sumSq_sound`. -/
 theorem main_sound :
-    Eutt (Expr.denote hE hB (mainAst _)) (evalC hE hB (mainSrc (CompE ε br))) := by
+    Eutt (Expr.denote (rE hE) (rB hB) (mainAst _)) (evalC hE hB mainSrc) := by
   show Eutt
     (ITree.bind (mrec (bd hE hB) 3) fun s =>
-      ITree.bind (hB () s fun _ => ITree.ret s) fun h =>
+      ITree.bind (hB Nat () fun _ => ITree.ret s) fun (h : Nat) =>
         ITree.bind (hE () (h == s)) fun _ => ITree.ret h)
-    (ITree.bind (evalC hE hB (sumSqSrc (CompE ε br) 3)) fun s =>
-      ITree.bind (hB () s fun _ => ITree.ret s) fun h =>
+    (ITree.bind (evalC hE hB (sumSqSrc 3)) fun s =>
+      ITree.bind (hB Nat () fun _ => ITree.ret s) fun (h : Nat) =>
         ITree.bind (hE () (h == s)) fun _ => ITree.ret h)
   exact eutt_bind_cong (sumSq_sound hE hB 3) fun s => eutt_refl _
 
@@ -207,7 +239,7 @@ This is the manual prototype of the reflector's soundness-carrying walk. -/
 /-- Reflect `pure`: emit `ret` on an atom whose defining equation matches the source value. -/
 theorem reflect_ret {α : Tp} (v : Tp.denote (CompE ε br) α) {v' : Tp.denote (CompE ε br) α}
     (h : v = v') :
-    Eutt (Expr.denote hE hB
+    Eutt (Expr.denote (rE hE) (rB hB)
         (.ret v : Expr CircE CircB (Tp.denote (CompE ε br)) none α))
       (evalC hE hB (.pure v')) :=
   Eutt.of_eq (by rw [h]; rfl)
@@ -218,8 +250,8 @@ theorem reflect_bin {a b c α : Tp} (o : Bin a b c)
     (va : Tp.denote (CompE ε br) a) (vb : Tp.denote (CompE ε br) b)
     {k : Tp.denote (CompE ε br) c → Expr CircE CircB (Tp.denote (CompE ε br)) none α}
     {t : CompE ε br (Tp.denote (CompE ε br) α)}
-    (ih : ∀ vc, vc = o.denote va vb → Eutt (Expr.denote hE hB (k vc)) t) :
-    Eutt (Expr.denote hE hB (.bin o va vb k)) t :=
+    (ih : ∀ vc, vc = o.denote va vb → Eutt (Expr.denote (rE hE) (rB hB) (k vc)) t) :
+    Eutt (Expr.denote (rE hE) (rB hB) (.bin o va vb k)) t :=
   ih _ rfl
 
 /-- Reflect `bind (eff e i') ks`: emit an `eff` node — its input atom must equal the source's
@@ -229,13 +261,12 @@ theorem reflect_eff {α : Tp} (e : CircE.ε) (i : Tp.denote (CompE ε br) (CircE
     {i' : Tp.denote (CompE ε br) (CircE.𝓘 e)}
     {k : Tp.denote (CompE ε br) (CircE.𝓞 e) →
       Expr CircE CircB (Tp.denote (CompE ε br)) none α}
-    {ks : Tp.denote (CompE ε br) (CircE.𝓞 e) →
-      Freek (CircE.spec (CompE ε br)) (CircB.spec (CompE ε br)) (Tp.denote (CompE ε br) α)}
+    {ks : Tp.denote (CompE ε br) (CircE.𝓞 e) → Circuit (Tp.denote (CompE ε br) α)}
     (hi : i = i')
-    (ih : ∀ o, Eutt (Expr.denote hE hB (k o)) (evalC hE hB (ks o))) :
-    Eutt (Expr.denote hE hB (.eff e i k)) (evalC hE hB (Freek.bind (Freek.eff e i') ks)) := by
+    (ih : ∀ o, Eutt (Expr.denote (rE hE) (rB hB) (k o)) (evalC hE hB (ks o))) :
+    Eutt (Expr.denote (rE hE) (rB hB) (.eff e i k)) (evalC hE hB (Freek.bind (Freek.eff e i') ks)) := by
   subst hi
-  show Eutt (ITree.bind (hE e i) fun o => Expr.denote hE hB (k o))
+  show Eutt (ITree.bind (hE e i) fun o => Expr.denote (rE hE) (rB hB) (k o))
             (ITree.bind (hE e i) fun o => evalC hE hB (ks o))
   exact eutt_bind_cong (eutt_refl _) ih
 
@@ -243,7 +274,7 @@ theorem reflect_eff {α : Tp} (e : CircE.ε) (i : Tp.denote (CompE ε br) (CircE
     by the `apply`-trace along the source circuit, one lemma per source node. -/
 def sqAssertReflected (x : Nat) :
     { e : Expr CircE CircB (Tp.denote (CompE ε br)) none .nat //
-      Eutt (Expr.denote hE hB e) (evalC hE hB (sqAssertSrc (CompE ε br) x)) } :=
+      Eutt (Expr.denote (rE hE) (rB hB) e) (evalC hE hB (sqAssertSrc x)) } :=
   ⟨_, by
     unfold sqAssertSrc
     apply reflect_bin hE hB .mul x x    -- y := x * x
@@ -258,6 +289,81 @@ def sqAssertReflected (x : Nat) :
 
 /-- The trace reconstructs exactly the hand-written AST. -/
 example (x : Nat) : (sqAssertReflected hE hB x).1 = sqAssertAst x := rfl
+
+/-! ## Third style: pack-returning combinators
+
+Same top-down trace, but the `reflect_*` *theorems* become *functions returning packed
+`(AST, proof)` values*: each `apply` now invokes a function whose result literally contains the
+emitted node (`⟨.bin o va vb (fun vc => (k vc).1), …⟩`) — the term component is built by the
+combinators themselves, not reconstructed by the unifier from a proof trace.
+
+The intermediate objects are richer than `Expr`/`Eutt`, as they must be:
+
+* a continuation argument is a *function* `∀ vc, Reflection … m` — syntax total in the bound
+  atom, so the data component never depends on a proof;
+* the atom's defining equation therefore cannot ride along as a hypothesis *before* the data —
+  it moves *inside* the property: `Reflection Φ m` carries its soundness **conditionally on
+  `Φ`**, the conjunction of all pending defining equations, and each `bin` extends `Φ` for its
+  continuation (`Φ ∧ vc = …`) while discharging it at the knot with `⟨hΦ, rfl⟩`;
+* value side-conditions (`eff` input, returned value) are `Φ → _ = _` functions, closed by
+  `rintro` + `simp` over the accumulated equations. -/
+
+/-- A reflection of source `m`, **conditional on pending defining equations `Φ`**: an AST
+    together with a soundness proof that may assume `Φ`. -/
+def Reflection (Φ : Prop) (α : Tp)
+    (m : Circuit (Tp.denote (CompE ε br) α)) : Type :=
+  { e : Expr CircE CircB (Tp.denote (CompE ε br)) none α //
+    Φ → Eutt (Expr.denote (rE hE) (rB hB) e) (evalC hE hB m) }
+
+/-- Reflect `pure`: the pack's node is `ret v`; the value condition may assume `Φ`. -/
+def Reflection.ret {Φ : Prop} {α : Tp} (v : Tp.denote (CompE ε br) α)
+    {v' : Tp.denote (CompE ε br) α} (h : Φ → v = v') :
+    Reflection hE hB Φ α (.pure v') :=
+  ⟨.ret v, fun hΦ => Eutt.of_eq (by rw [h hΦ]; rfl)⟩
+
+/-- Reflect a host primitive: the pack's node is `bin o va vb` with the continuation's syntax
+    components spliced in; the continuation works under the *extended* equation context
+    `Φ ∧ vc = o.denote va vb`, discharged here at the actual value with `⟨hΦ, rfl⟩`. -/
+def Reflection.bin {Φ : Prop} {a b c α : Tp} (o : Bin a b c)
+    (va : Tp.denote (CompE ε br) a) (vb : Tp.denote (CompE ε br) b)
+    {m : Circuit (Tp.denote (CompE ε br) α)}
+    (k : ∀ vc, Reflection hE hB (Φ ∧ vc = o.denote va vb) α m) :
+    Reflection hE hB Φ α m :=
+  ⟨.bin o va vb fun vc => (k vc).1, fun hΦ => (k _).2 ⟨hΦ, rfl⟩⟩
+
+/-- Reflect `bind (eff e i') ks`: the pack's node is `eff e i` around the continuation packs;
+    the input condition `i = i'` may assume `Φ`. -/
+def Reflection.eff {Φ : Prop} {α : Tp} (e : CircE.ε) (i : Tp.denote (CompE ε br) (CircE.𝓘 e))
+    {i' : Tp.denote (CompE ε br) (CircE.𝓘 e)} (hi : Φ → i = i')
+    {ks : Tp.denote (CompE ε br) (CircE.𝓞 e) → Circuit (Tp.denote (CompE ε br) α)}
+    (k : ∀ o, Reflection hE hB Φ α (ks o)) :
+    Reflection hE hB Φ α (Freek.bind (Freek.eff e i') ks) :=
+  ⟨.eff e i fun o => (k o).1, fun hΦ => by
+    rw [← hi hΦ]
+    show Eutt (ITree.bind (hE e i) fun o => Expr.denote (rE hE) (rB hB) ((k o).1))
+              (ITree.bind (hE e i) fun o => evalC hE hB (ks o))
+    exact eutt_bind_cong (eutt_refl _) fun o => (k o).2 hΦ⟩
+
+/-- `sqAssertSrc` reflected in the third style: the same `apply`-trace, but every `apply` calls
+    a pack-returning *function* — the goal is `Type`-valued (data!), and the AST is assembled
+    by the combinators, node by node, as the trace walks the source. -/
+def sqAssertReflected' (x : Nat) :
+    Reflection hE hB True .nat (sqAssertSrc x) := by
+  unfold sqAssertSrc
+  apply Reflection.bin hE hB .mul x x    -- y := x * x
+  intro y
+  apply Reflection.bin hE hB .le x y     -- c := decide (x ≤ y)
+  intro c
+  apply Reflection.eff hE hB () c        -- assert c
+  · rintro ⟨⟨-, hy⟩, hc⟩                 --   side goal: Φ → c = decide (x ≤ x*x)
+    simp only [hy, hc, Bin.denote]
+  · intro o
+    apply Reflection.ret hE hB y         -- return y
+    rintro ⟨⟨-, hy⟩, -⟩                  --   side goal: Φ → y = x*x
+    simp only [hy, Bin.denote]
+
+/-- The third style, too, reconstructs exactly the hand-written AST. -/
+example (x : Nat) : (sqAssertReflected' hE hB x).1 = sqAssertAst x := rfl
 
 end Sound
 

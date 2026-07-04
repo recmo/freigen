@@ -116,10 +116,11 @@ open ITree
 
 /-! ### Object types -/
 
-/-- The universe of object-language types: `nat`/`bool`, products, and functions. -/
+/-- The universe of object-language types: `nat`/`bool`/`unit`, products, and functions. -/
 inductive Tp : Type
   | nat  : Tp
   | bool : Tp
+  | unit : Tp
   | prod : Tp → Tp → Tp
   | fn   : Tp → Tp → Tp
 
@@ -130,6 +131,7 @@ inductive Tp : Type
 @[reducible] def Tp.denote (M : Type → Type) : Tp → Type
   | .nat      => Nat
   | .bool     => Bool
+  | .unit     => Unit
   | .prod a b => a.denote M × b.denote M
   | .fn a b   => a.denote M → M (b.denote M)
 
@@ -268,6 +270,7 @@ inductive Expr (𝓔 : EffSig) (𝓑 : BindSig) (V : Tp → Type) : Option (Tp �
   | ret     {r α} : V α → Expr 𝓔 𝓑 V r α
   | natLit  {r α} : Nat → (V .nat → Expr 𝓔 𝓑 V r α) → Expr 𝓔 𝓑 V r α
   | boolLit {r α} : Bool → (V .bool → Expr 𝓔 𝓑 V r α) → Expr 𝓔 𝓑 V r α
+  | unitLit {r α} : (V .unit → Expr 𝓔 𝓑 V r α) → Expr 𝓔 𝓑 V r α
   | un      {r α a b} : Un a b → V a → (V b → Expr 𝓔 𝓑 V r α) → Expr 𝓔 𝓑 V r α
   | bin     {r α a b c} : Bin a b c → V a → V b → (V c → Expr 𝓔 𝓑 V r α) → Expr 𝓔 𝓑 V r α
   /-- Branch on a boolean, **join through the continuation**: both arms produce a `β`, and the
@@ -321,6 +324,7 @@ def Expr.denote {𝓔 : EffSig} {𝓑 : BindSig} {ε : Type} {br : ε → Type}
   | _, _, .ret v         => DomR.ret v
   | _, _, .natLit n k    => Expr.denote hE hB (k n)
   | _, _, .boolLit b k   => Expr.denote hE hB (k b)
+  | _, _, .unitLit k     => Expr.denote hE hB (k ())
   | _, _, .un o a k      => Expr.denote hE hB (k (o.denote a))
   | _, _, .bin o a b k   => Expr.denote hE hB (k (o.denote a b))
   | _, _, .ite c t e k   =>
@@ -339,6 +343,72 @@ def Expr.denote {𝓔 : EffSig} {𝓑 : BindSig} {ε : Type} {br : ε → Type}
 /-- A closed program, parametric in the value representation. -/
 def Closed (𝓔 : EffSig) (𝓑 : BindSig) (α : Tp) : Type 1 :=
   ∀ V, Expr 𝓔 𝓑 V none α
+
+end Ast2
+
+/-! ### The signature bridge
+
+A source program is written in a *host-level* monad — `Freek` over an `EffSpec`/`BindSpec`
+whose payloads are plain `Type`s; the author never sees `Tp`.  The AST works over *coded*
+signatures.  `Realizes` is the bridge: an (`M`-indexed) map `φ` of operation names under which
+the host payload types are the denotations of the codes.  `φ` need not be surjective — a
+`circuitBlock`-style spec has an operation per host `Type`, and the coded signature names only
+the **representable fragment**, which is all a reflected program ever uses.  The `restrict`
+transport is where that knowledge is *used*: a host interpreter restricts to a coded one, so a
+reflected AST (denoted under the restricted interpreters) and its source (run through
+`Freek.eval` under the host interpreters) meet in the same tree domain — soundness statements
+therefore quantify over **host** interpreters. -/
+
+open ITree in
+/-- An interpreter for a host-level effect spec in the tree domain over `(ε, br)` —
+    `Freek.eval`'s `evalEff` shape at `M := CompE ε br`. -/
+@[reducible] def EffSpec.Interp (𝓔' : EffSpec) (ε : Type) (br : ε → Type) : Type _ :=
+  (e : 𝓔'.ε) → 𝓔'.𝓘 e → CompE ε br (𝓔'.𝓞 e)
+
+open ITree in
+/-- An interpreter for a host-level custom-control-flow spec in the tree domain —
+    `Freek.eval`'s `evalBind` shape at `M := CompE ε br`. -/
+@[reducible] def BindSpec.Interp (𝓑' : BindSpec) (ε : Type) (br : ε → Type) : Type _ :=
+  (e : 𝓑'.ε) → 𝓑'.𝓘 e → ((b : 𝓑'.𝓑 e) → CompE ε br (𝓑'.𝓑τ e b)) → CompE ε br (𝓑'.𝓞 e)
+
+namespace Ast2
+
+/-- The coded `𝓔` **realizes** (the representable fragment of) the host spec `𝓔'`: an
+    `M`-indexed operation-name map under which the host payload types are pulled back along
+    `Tp.denote` from the codes. -/
+structure EffSig.Realizes (𝓔 : EffSig) (𝓔' : EffSpec) where
+  φ : (M : Type → Type) → 𝓔.ε → 𝓔'.ε
+  input_eq : ∀ M e, 𝓔'.𝓘 (φ M e) = Tp.denote M (𝓔.𝓘 e)
+  output_eq : ∀ M e, 𝓔'.𝓞 (φ M e) = Tp.denote M (𝓔.𝓞 e)
+
+/-- The coded `𝓑` realizes (the representable fragment of) the host spec `𝓑'`. -/
+structure BindSig.Realizes (𝓑 : BindSig) (𝓑' : BindSpec) where
+  φ : (M : Type → Type) → 𝓑.ε → 𝓑'.ε
+  input_eq : ∀ M e, 𝓑'.𝓘 (φ M e) = Tp.denote M (𝓑.𝓘 e)
+  output_eq : ∀ M e, 𝓑'.𝓞 (φ M e) = Tp.denote M (𝓑.𝓞 e)
+  br_eq : ∀ M e, 𝓑'.𝓑 (φ M e) = 𝓑.𝓑 e
+  brTp_eq : ∀ M e (b : 𝓑'.𝓑 (φ M e)),
+    𝓑'.𝓑τ (φ M e) b = Tp.denote M (𝓑.𝓑τ e (cast (br_eq M e) b))
+
+open ITree in
+/-- Restrict a host interpreter to the coded signature across a realization — a reflected
+    AST's denotation only ever needs the representable operations.  When the realization's
+    equations are `rfl`, every `cast` reduces away. -/
+def EffSig.Realizes.restrict {𝓔 : EffSig} {𝓔' : EffSpec} {ε : Type} {br : ε → Type}
+    (h : 𝓔.Realizes 𝓔') (hE : 𝓔'.Interp ε br) : EffInterp 𝓔 ε br :=
+  fun e i =>
+    cast (congrArg (CompE ε br) (h.output_eq (CompE ε br) e))
+      (hE (h.φ (CompE ε br) e) (cast (h.input_eq (CompE ε br) e).symm i))
+
+open ITree in
+/-- Restrict a host `bindEff` interpreter to the coded signature across a realization. -/
+def BindSig.Realizes.restrict {𝓑 : BindSig} {𝓑' : BindSpec} {ε : Type} {br : ε → Type}
+    (h : 𝓑.Realizes 𝓑') (hB : 𝓑'.Interp ε br) : BindInterp 𝓑 ε br :=
+  fun e i blocks =>
+    cast (congrArg (CompE ε br) (h.output_eq (CompE ε br) e))
+      (hB (h.φ (CompE ε br) e) (cast (h.input_eq (CompE ε br) e).symm i)
+        (fun b => cast (congrArg (CompE ε br) (h.brTp_eq (CompE ε br) e b).symm)
+          (blocks (cast (h.br_eq (CompE ε br) e) b))))
 
 end Ast2
 
