@@ -8,18 +8,17 @@ A dry run for the reflector, with no metaprogramming: a source circuit — writt
 **host-level** `Circuit` monad from `Ast2.Basic` (the author never sees `Tp`), with a helper
 definition, a recursive definition, an `assert` effect, and a `hint` block at a host type — is
 mirrored *by hand* into an `Expr` over the *coded* signatures, node for node, the way the
-reflector would emit it, and the two are proved equivalent **for every choice of host effect
-and `bindEff` interpreters**:
+reflector would emit it, and the two are proved equivalent **for every choice of `bindEff`
+interpreter**, with first-order effects left as ITree events:
 
 ```
-∀ ε br hE hB,  Eutt (Expr.denote (rE hE) (rB hB) (mainAst _)) (evalC hE hB mainSrc)
+∀ hB,  Eutt (Expr.denote (rB hB) (mainAst _)) (evalC hB mainSrc)
 ```
 
-The two sides meet through the **signature bridge**: the coded `CircE`/`CircB` realize the
-representable fragments of the host `circuitEff`/`circuitBlock` (`Realizes` — an operation-name
-map `φ` with, here, `rfl` payload equations; for the hint, `φ M := Tp.denote M` maps the code
-to the host operation at its denotation).  The statement quantifies over **host** interpreters,
-and the AST denotes under their `Realizes.restrict`-ions.
+The two sides meet by hoisting the host `circuitEff` operation into the coded `CircE.Event`
+ITree domain.  `CircB` still realizes the representable fragment of the host `circuitBlock`:
+for the hint, `φ M := Tp.denote M` maps the code to the host operation at its denotation.
+Only the host `bindEff` interpreter is restricted across `CircB_realizes`.
 
 The proof shape is the template for reflector soundness:
 
@@ -62,6 +61,42 @@ def sumSqSrc : Nat → Circuit Nat
     let y ← sqAssertSrc (n + 1)
     pure (s + y)
 
+/-- A source term exposing the `Nat.brecOn` shape Lean's equation compiler uses for natural
+    recursive definitions over `Nat`.  This is for structural reflection theorems; source
+    programs can still be written by equations. -/
+def natBRecSource {α : Type} (base : Circuit α) (step : Nat → α → Circuit α) :
+    Nat → Circuit α :=
+  fun n => Nat.brecOn (motive := fun _ => Circuit α) n fun
+    | 0, _ => base
+    | n + 1, prev => Freek.bind prev.1 fun s => step (n + 1) s
+
+/-- The base equation of `natBRecSource` is definitional. -/
+theorem natBRecSource_zero {α : Type} (base : Circuit α) (step : Nat → α → Circuit α) :
+    natBRecSource base step 0 = base := rfl
+
+/-- The successor equation of `natBRecSource` is definitional. -/
+theorem natBRecSource_succ {α : Type} (base : Circuit α) (step : Nat → α → Circuit α)
+    (n : Nat) :
+    natBRecSource base step (n + 1)
+      = Freek.bind (natBRecSource base step n) fun s => step (n + 1) s := rfl
+
+/-- Relate an equation-style primitive recursive source to the explicit `Nat.brecOn` source.
+    The `base` and `step` are inferred from the generated equation lemmas at use sites. -/
+theorem natBRecSource_eq_of_eqns {α : Type} {F : Nat → Circuit α}
+    {base : Circuit α} {step : Nat → α → Circuit α}
+    (hzero : F 0 = base)
+    (hsucc : ∀ n, F (n + 1) = Freek.bind (F n) fun s => step (n + 1) s) :
+    ∀ n, F n = natBRecSource base step n := by
+  intro n
+  induction n with
+  | zero =>
+      rw [hzero]
+      rfl
+  | succ n ih =>
+      rw [hsucc n]
+      rw [ih]
+      rfl
+
 /-- The circuit: sum of squares up to 3, passed through a `hint` block (at the *host type*
     `Nat`; the block recomputes the value), then asserted equal to the computed value. -/
 def mainSrc : Circuit Nat := do
@@ -72,20 +107,14 @@ def mainSrc : Circuit Nat := do
 
 /-! ## The reflector-side coded signatures, and the bridge
 
-`CircE` names `circuitEff`'s single operation; `CircB` names the **representable fragment** of
-`circuitBlock`'s (`Type`-many!) operations — one per `Tp` code, mapped by the realization to
-the host operation at its denotation (`φ M := Tp.denote M`).  All payload equations are `rfl`,
-so the `restrict`-ed interpreters compute definitionally. -/
+`CircE` is the coded first-order effect event signature.  `CircB` names the **representable
+fragment** of `circuitBlock`'s (`Type`-many!) operations — one per `Tp` code, mapped by the
+realization to the host operation at its denotation (`φ M := Tp.denote M`).  All payload
+equations are `rfl`, so the `restrict`-ed interpreters compute definitionally. -/
 
 abbrev CircE : EffSig := ⟨Unit, fun _ => .bool, fun _ => .unit⟩
 
 abbrev CircB : BindSig := ⟨Tp, fun _ => .unit, fun t => t, fun _ => Unit, fun t _ => t⟩
-
-/-- `CircE` realizes `circuitEff` (on the nose — `φ` is the identity on the one operation). -/
-def CircE_realizes : CircE.Realizes circuitEff where
-  φ _ := id
-  input_eq _ _ := rfl
-  output_eq _ _ := rfl
 
 /-- `CircB` realizes the representable fragment of `circuitBlock`: the coded operation `t : Tp`
     names the host hint at the type `t.denote M`. -/
@@ -143,106 +172,104 @@ def mainAst : Closed CircE CircB .nat := fun _ =>
 
 end Ast
 
-/-! ## Soundness, parametric in the interpreters -/
+/-! ## Soundness, parametric in the `bindEff` interpreter -/
 
 section Sound
-variable {ε : Type} {br : ε → Type}
-variable (hE : circuitEff.Interp ε br) (hB : circuitBlock.Interp ε br)
+variable (hB : circuitBlock.Interp CircE.Event EffSig.Event.arity)
 
-/-- The coded interpreters induced by the **host** ones across the realizations — what the
-    reflected AST denotes under. -/
-abbrev rE (hE : circuitEff.Interp ε br) : EffInterp CircE ε br := CircE_realizes.restrict hE
+/-- The base tree domain for this example: circuit effects are ITree events. -/
+abbrev M : Type → Type := CompE CircE.Event EffSig.Event.arity
 
-/-- See `rE`. -/
-abbrev rB (hB : circuitBlock.Interp ε br) : BindInterp CircB ε br := CircB_realizes.restrict hB
+/-- Hoist the host circuit effect into the coded effect event domain. -/
+abbrev evalEffC (e : circuitEff.ε) (i : circuitEff.𝓘 e) : M (circuitEff.𝓞 e) :=
+  EffSig.trigger (𝓔 := CircE) e i
 
-/-- Evaluate a user-level `Circuit` program in the tree domain under the host interpreters
-    (the coded signatures never appear on this side). -/
-abbrev evalC (hE : circuitEff.Interp ε br) (hB : circuitBlock.Interp ε br) {α : Type}
-    (p : Circuit α) : CompE ε br α :=
-  Freek.eval (𝓔 := circuitEff) (𝓑 := circuitBlock) hE hB p
+/-- The coded `bindEff` interpreter induced by the **host** one across the realization. -/
+abbrev rB (hB : circuitBlock.Interp CircE.Event EffSig.Event.arity) :
+    BindInterp CircB CircE.Event EffSig.Event.arity :=
+  CircB_realizes.restrict hB
+
+/-- Evaluate a user-level `Circuit` program in the tree domain, hoisting first-order effects as
+    ITree events and interpreting only `bindEff`. -/
+abbrev evalC (hB : circuitBlock.Interp CircE.Event EffSig.Event.arity) {α : Type}
+    (p : Circuit α) : CompE CircE.Event EffSig.Event.arity α :=
+  Freek.eval (𝓔 := circuitEff) (𝓑 := circuitBlock) evalEffC hB p
 
 /-- The denoted helper: a base-domain Kleisli arrow (what the `lam` atom stands for). -/
-def sqD : Nat → CompE ε br Nat := fun x => Expr.denote (rE hE) (rB hB) (sqAssertAst x)
+def sqD : Nat → CompE CircE.Event EffSig.Event.arity Nat := fun x =>
+  Expr.denote (rB hB) (sqAssertAst x)
 
 /-- The denoted `letrec` body: a tree over the call-extended signature (what `mrec` ties). -/
-def bd : Nat → CompE (ε ⊕ Nat) (callBr br Nat) Nat := fun n =>
-  Expr.denote (rE hE) (rB hB) (sumSqAst (sqD hE hB) n)
+def bd : Nat → CompE (CircE.Event ⊕ Nat) (callBr EffSig.Event.arity Nat) Nat := fun n =>
+  Expr.denote (rB hB) (sumSqAst (sqD hB) n)
 
 /-- **Helper soundness** — definitional: the denoted `lam` body *is* the evaluated source
-    helper, for any interpreters. -/
+    helper, for any `bindEff` interpreter. -/
 theorem sq_sound (x : Nat) :
-    sqD hE hB x = evalC hE hB (sqAssertSrc x) := rfl
+    sqD hB x = evalC hB (sqAssertSrc x) := rfl
 
 /-- **Recursive-definition soundness**, by induction on the argument: the `mrec`-tied `letrec`
     body is `≈` (not `=` — each unfolding spends one `tau`) to the source's structural
-    recursion, for any interpreters. -/
+    recursion, for any `bindEff` interpreter. -/
 theorem sumSq_sound (n : Nat) :
-    Eutt (mrec (bd hE hB) n) (evalC hE hB (sumSqSrc n)) := by
+    Eutt (mrec (bd hB) n) (evalC hB (sumSqSrc n)) := by
   induction n with
   | zero =>
     apply Eutt.of_eq
-    show interp (bd hE hB) (ITree.bind (ITree.ret 0) fun v => ITree.ret v) = _
+    show interp (bd hB) (ITree.bind (ITree.ret 0) fun v => ITree.ret v) = _
     rw [bind_ret, interp_ret]
     rfl
   | succ n ih =>
     -- One unfolding of the knot: `bd (n+1)` is *definitionally* a self-call `vis` followed by
     -- the helper's (`sumL`-embedded) computation; `interp` turns the call into a `tau`-guarded
     -- re-run of the body on `n`.
-    have hunf : mrec (bd hE hB) (n + 1)
-        = tau (ITree.bind (mrec (bd hE hB) n) fun s =>
-            ITree.bind (sqD hE hB (n + 1)) fun y => ITree.ret (s + y)) := by
-      show interp (bd hE hB)
+    have hunf : mrec (bd hB) (n + 1)
+        = tau (ITree.bind (mrec (bd hB) n) fun s =>
+            ITree.bind (sqD hB (n + 1)) fun y => ITree.ret (s + y)) := by
+      show interp (bd hB)
           (ITree.bind
             (vis (Sum.inr n) fun (s : Nat) =>
-              ITree.bind (sumL (sqD hE hB (n + 1))) fun y => ITree.ret (s + y))
+              ITree.bind (sumL (sqD hB (n + 1))) fun y => ITree.ret (s + y))
             (fun v => ITree.ret v)) = _
       simp only [bind_vis, interp_vis_call, interp_bind, bind_assoc, bind_ret, interp_sumL,
                  interp_ret]
       rfl
     -- With `Freek.bind` computed by grafting, `eval` no longer distributes over a bind on an
     -- *opaque* prefix definitionally — `eval_bind` rewrites the source into bind form.
-    have hsrc : evalC hE hB (sumSqSrc (n + 1))
-        = ITree.bind (evalC hE hB (sumSqSrc n)) fun s =>
-            ITree.bind (evalC hE hB (sqAssertSrc (n + 1))) fun y => ITree.ret (s + y) := by
-      show Freek.eval (𝓔 := circuitEff) (𝓑 := circuitBlock) hE hB
+    have hsrc : evalC hB (sumSqSrc (n + 1))
+        = ITree.bind (evalC hB (sumSqSrc n)) fun s =>
+            ITree.bind (evalC hB (sqAssertSrc (n + 1))) fun y => ITree.ret (s + y) := by
+      show Freek.eval (𝓔 := circuitEff) (𝓑 := circuitBlock) evalEffC hB
           (Freek.bind (sumSqSrc n) fun s =>
             Freek.bind (sqAssertSrc (n + 1)) fun y => Freek.pure (s + y)) = _
       rw [Freek.eval_bind]
-      exact congrArg (ITree.bind (evalC hE hB (sumSqSrc n)))
-        (funext fun s => Freek.eval_bind hE hB _ _)
+      exact congrArg (ITree.bind (evalC hB (sumSqSrc n)))
+        (funext fun s => Freek.eval_bind evalEffC hB _ _)
     rw [hunf, hsrc]
     exact eutt_tau_left (eutt_bind_cong ih fun s =>
-      eutt_bind_cong (Eutt.of_eq (sq_sound hE hB (n + 1))) fun y => eutt_refl _)
+      eutt_bind_cong (Eutt.of_eq (sq_sound hB (n + 1))) fun y => eutt_refl _)
 
 /-- **Program soundness**: the hand-reflected AST and the source circuit are weakly bisimilar
-    under *every* effect interpreter and *every* `bindEff` interpreter.  Everything around the
+    under *every* `bindEff` interpreter, with effects hoisted as ITree events.  Everything around the
     recursive call — the `lam`, the literals, the `bindEff` with its block, the final assert —
     is definitionally equal on both sides, so the proof is one `bind`-congruence around
     `sumSq_sound`. -/
 theorem main_sound :
-    Eutt (Expr.denote (rE hE) (rB hB) (mainAst _)) (evalC hE hB mainSrc) := by
+    Eutt (Expr.denote (rB hB) (mainAst _)) (evalC hB mainSrc) := by
   -- Split the source at the recursive call (`eval_bind`); the hint/assert legs are
   -- constructor-headed, so their binds graft and everything after is definitional.
-  have hsrc : evalC hE hB mainSrc
-      = ITree.bind (evalC hE hB (sumSqSrc 3)) fun s =>
+  have hsrc : evalC hB mainSrc
+      = ITree.bind (evalC hB (sumSqSrc 3)) fun s =>
           ITree.bind (hB Nat () fun _ => ITree.ret s) fun (h : Nat) =>
-            ITree.bind (hE () (h == s)) fun _ => ITree.ret h := by
-    show Freek.eval (𝓔 := circuitEff) (𝓑 := circuitBlock) hE hB
+            ITree.bind (EffSig.trigger (𝓔 := CircE) () (h == s)) fun _ => ITree.ret h := by
+    show Freek.eval (𝓔 := circuitEff) (𝓑 := circuitBlock) evalEffC hB
         (Freek.bind (sumSqSrc 3) fun s =>
           Freek.bind (Circuit.hint (pure s)) fun h =>
             Freek.bind (Circuit.assert (h == s)) fun _ => Freek.pure h) = _
     rw [Freek.eval_bind]
-    exact congrArg (ITree.bind (evalC hE hB (sumSqSrc 3))) (funext fun s => rfl)
+    exact congrArg (ITree.bind (evalC hB (sumSqSrc 3))) (funext fun s => rfl)
   rw [hsrc]
-  show Eutt
-    (ITree.bind (mrec (bd hE hB) 3) fun s =>
-      ITree.bind (hB Nat () fun _ => ITree.ret s) fun (h : Nat) =>
-        ITree.bind (hE () (h == s)) fun _ => ITree.ret h)
-    (ITree.bind (evalC hE hB (sumSqSrc 3)) fun s =>
-      ITree.bind (hB Nat () fun _ => ITree.ret s) fun (h : Nat) =>
-        ITree.bind (hE () (h == s)) fun _ => ITree.ret h)
-  exact eutt_bind_cong (sumSq_sound hE hB 3) fun s => eutt_refl _
+  exact eutt_bind_cong (sumSq_sound hB 3) fun s => eutt_refl _
 
 /-! ## Top-down reflection: discovering the AST by `apply`
 
@@ -261,59 +288,60 @@ source node.  Two disciplines make the trace work:
 This is the manual prototype of the reflector's soundness-carrying walk. -/
 
 /-- Reflect `pure`: emit `ret` on an atom whose defining equation matches the source value. -/
-theorem reflect_ret {α : Tp} (v : Tp.denote (CompE ε br) α) {v' : Tp.denote (CompE ε br) α}
+theorem reflect_ret {α : Tp} (v : Tp.denote M α) {v' : Tp.denote M α}
     (h : v = v') :
-    Eutt (Expr.denote (rE hE) (rB hB)
-        (.ret v : Expr CircE CircB (Tp.denote (CompE ε br)) none α))
-      (evalC hE hB (.pure v')) :=
+    Eutt (Expr.denote (rB hB)
+        (.ret v : Expr CircE CircB (Tp.denote M) none α))
+      (evalC hB (.pure v')) :=
   Eutt.of_eq (by rw [h]; rfl)
 
 /-- Reflect a host primitive: emit a `bin` node binding a fresh atom `vc` with its defining
     equation; the source is untouched (`t` is arbitrary — a pure step costs nothing). -/
 theorem reflect_bin {a b c α : Tp} (o : Bin a b c)
-    (va : Tp.denote (CompE ε br) a) (vb : Tp.denote (CompE ε br) b)
-    {k : Tp.denote (CompE ε br) c → Expr CircE CircB (Tp.denote (CompE ε br)) none α}
-    {t : CompE ε br (Tp.denote (CompE ε br) α)}
-    (ih : ∀ vc, vc = o.denote va vb → Eutt (Expr.denote (rE hE) (rB hB) (k vc)) t) :
-    Eutt (Expr.denote (rE hE) (rB hB) (.bin o va vb k)) t :=
+    (va : Tp.denote M a) (vb : Tp.denote M b)
+    {k : Tp.denote M c → Expr CircE CircB (Tp.denote M) none α}
+    {t : M (Tp.denote M α)}
+    (ih : ∀ vc, vc = o.denote va vb → Eutt (Expr.denote (rB hB) (k vc)) t) :
+    Eutt (Expr.denote (rB hB) (.bin o va vb k)) t :=
   ih _ rfl
 
 /-- Reflect `eff e i' ks` (with the grafting `bind`, every source effect arrives with its
     continuation already attached): emit an `eff` node — its input atom must equal the source's
     input (side condition `hi`, discharged from the defining equations) — and continue
     pointwise under the bound result. -/
-theorem reflect_eff {α : Tp} (e : CircE.ε) (i : Tp.denote (CompE ε br) (CircE.𝓘 e))
-    {i' : Tp.denote (CompE ε br) (CircE.𝓘 e)}
-    {k : Tp.denote (CompE ε br) (CircE.𝓞 e) →
-      Expr CircE CircB (Tp.denote (CompE ε br)) none α}
-    {ks : Tp.denote (CompE ε br) (CircE.𝓞 e) → Circuit (Tp.denote (CompE ε br) α)}
+theorem reflect_eff {α : Tp} (e : CircE.ε) (i : Tp0.denote (CircE.𝓘 e))
+    {i' : Tp0.denote (CircE.𝓘 e)}
+    {k : Tp0.denote (CircE.𝓞 e) →
+      Expr CircE CircB (Tp.denote M) none α}
+    {ks : Tp0.denote (CircE.𝓞 e) → Circuit (Tp.denote M α)}
     (hi : i = i')
-    (ih : ∀ o, Eutt (Expr.denote (rE hE) (rB hB) (k o)) (evalC hE hB (ks o))) :
-    Eutt (Expr.denote (rE hE) (rB hB) (.eff e i k)) (evalC hE hB (Freek.eff e i' ks)) := by
+    (ih : ∀ o, Eutt (Expr.denote (rB hB) (k o)) (evalC hB (ks o))) :
+    Eutt (Expr.denote (rB hB) (.eff e i k)) (evalC hB (Freek.eff e i' ks)) := by
   subst hi
-  show Eutt (ITree.bind (hE e i) fun o => Expr.denote (rE hE) (rB hB) (k o))
-            (ITree.bind (hE e i) fun o => evalC hE hB (ks o))
+  show Eutt (ITree.bind (EffSig.trigger (𝓔 := CircE) e i) fun o => Expr.denote (rB hB) (k o))
+            (ITree.bind (EffSig.trigger (𝓔 := CircE) e i) fun o => evalC hB (ks o))
   exact eutt_bind_cong (eutt_refl _) ih
 
 /-- `sqAssertSrc`, reflected **top-down**: the AST component is the `_` — it is *discovered*
     by the `apply`-trace along the source circuit, one lemma per source node. -/
 def sqAssertReflected (x : Nat) :
-    { e : Expr CircE CircB (Tp.denote (CompE ε br)) none .nat //
-      Eutt (Expr.denote (rE hE) (rB hB) e) (evalC hE hB (sqAssertSrc x)) } :=
+    { e : Expr CircE CircB (Tp.denote M) none .nat //
+      Eutt (Expr.denote (rB hB) e) (evalC hB (sqAssertSrc x)) } :=
   ⟨_, by
     unfold sqAssertSrc
-    apply reflect_bin hE hB .mul x x    -- y := x * x
+    apply reflect_bin hB .mul x x    -- y := x * x
     intro y hy
-    apply reflect_bin hE hB .le x y     -- c := decide (x ≤ y)
+    apply reflect_bin hB .le x y     -- c := decide (x ≤ y)
     intro c hc
-    apply reflect_eff hE hB () c        -- assert c   (side goal: c = decide (x ≤ x*x))
-    · simp only [hc, hy, Bin.denote]
+    apply reflect_eff hB () c        -- assert c   (side goal: c = decide (x ≤ x*x))
+    · rw [hy] at hc
+      exact hc
     · intro o
-      apply reflect_ret hE hB y         -- return y   (side goal: y = x*x)
-      simp only [hy, Bin.denote]⟩
+      apply reflect_ret hB y         -- return y   (side goal: y = x*x)
+      exact hy⟩
 
 /-- The trace reconstructs exactly the hand-written AST. -/
-example (x : Nat) : (sqAssertReflected hE hB x).1 = sqAssertAst x := rfl
+example (x : Nat) : (sqAssertReflected hB x).1 = sqAssertAst x := rfl
 
 /-! ## Third style: pack-returning combinators
 
@@ -331,64 +359,65 @@ The intermediate objects are richer than `Expr`/`Eutt`, as they must be:
   `Φ`**, the conjunction of all pending defining equations, and each `bin` extends `Φ` for its
   continuation (`Φ ∧ vc = …`) while discharging it at the knot with `⟨hΦ, rfl⟩`;
 * value side-conditions (`eff` input, returned value) are `Φ → _ = _` functions, closed by
-  `rintro` + `simp` over the accumulated equations. -/
+  projecting and rewriting with the accumulated equations. -/
 
 /-- A reflection of source `m`, **conditional on pending defining equations `Φ`**: an AST
     together with a soundness proof that may assume `Φ`. -/
 def Reflection (Φ : Prop) (α : Tp)
-    (m : Circuit (Tp.denote (CompE ε br) α)) : Type :=
-  { e : Expr CircE CircB (Tp.denote (CompE ε br)) none α //
-    Φ → Eutt (Expr.denote (rE hE) (rB hB) e) (evalC hE hB m) }
+    (m : Circuit (Tp.denote M α)) : Type :=
+  { e : Expr CircE CircB (Tp.denote M) none α //
+    Φ → Eutt (Expr.denote (rB hB) e) (evalC hB m) }
 
 /-- Reflect `pure`: the pack's node is `ret v`; the value condition may assume `Φ`. -/
-def Reflection.ret {Φ : Prop} {α : Tp} (v : Tp.denote (CompE ε br) α)
-    {v' : Tp.denote (CompE ε br) α} (h : Φ → v = v') :
-    Reflection hE hB Φ α (.pure v') :=
+def Reflection.ret {Φ : Prop} {α : Tp} (v : Tp.denote M α)
+    {v' : Tp.denote M α} (h : Φ → v = v') :
+    Reflection hB Φ α (.pure v') :=
   ⟨.ret v, fun hΦ => Eutt.of_eq (by rw [h hΦ]; rfl)⟩
 
 /-- Reflect a host primitive: the pack's node is `bin o va vb` with the continuation's syntax
     components spliced in; the continuation works under the *extended* equation context
     `Φ ∧ vc = o.denote va vb`, discharged here at the actual value with `⟨hΦ, rfl⟩`. -/
 def Reflection.bin {Φ : Prop} {a b c α : Tp} (o : Bin a b c)
-    (va : Tp.denote (CompE ε br) a) (vb : Tp.denote (CompE ε br) b)
-    {m : Circuit (Tp.denote (CompE ε br) α)}
-    (k : ∀ vc, Reflection hE hB (Φ ∧ vc = o.denote va vb) α m) :
-    Reflection hE hB Φ α m :=
+    (va : Tp.denote M a) (vb : Tp.denote M b)
+    {m : Circuit (Tp.denote M α)}
+    (k : ∀ vc, Reflection hB (Φ ∧ vc = o.denote va vb) α m) :
+    Reflection hB Φ α m :=
   ⟨.bin o va vb fun vc => (k vc).1, fun hΦ => (k _).2 ⟨hΦ, rfl⟩⟩
 
 /-- Reflect `eff e i' ks`: the pack's node is `eff e i` around the continuation packs;
     the input condition `i = i'` may assume `Φ`. -/
-def Reflection.eff {Φ : Prop} {α : Tp} (e : CircE.ε) (i : Tp.denote (CompE ε br) (CircE.𝓘 e))
-    {i' : Tp.denote (CompE ε br) (CircE.𝓘 e)} (hi : Φ → i = i')
-    {ks : Tp.denote (CompE ε br) (CircE.𝓞 e) → Circuit (Tp.denote (CompE ε br) α)}
-    (k : ∀ o, Reflection hE hB Φ α (ks o)) :
-    Reflection hE hB Φ α (Freek.eff e i' ks) :=
+def Reflection.eff {Φ : Prop} {α : Tp} (e : CircE.ε) (i : Tp0.denote (CircE.𝓘 e))
+    {i' : Tp0.denote (CircE.𝓘 e)} (hi : Φ → i = i')
+    {ks : Tp0.denote (CircE.𝓞 e) → Circuit (Tp.denote M α)}
+    (k : ∀ o, Reflection hB Φ α (ks o)) :
+    Reflection hB Φ α (Freek.eff e i' ks) :=
   ⟨.eff e i fun o => (k o).1, fun hΦ => by
     rw [← hi hΦ]
-    show Eutt (ITree.bind (hE e i) fun o => Expr.denote (rE hE) (rB hB) ((k o).1))
-              (ITree.bind (hE e i) fun o => evalC hE hB (ks o))
+    show Eutt (ITree.bind (EffSig.trigger (𝓔 := CircE) e i) fun o => Expr.denote (rB hB) ((k o).1))
+              (ITree.bind (EffSig.trigger (𝓔 := CircE) e i) fun o => evalC hB (ks o))
     exact eutt_bind_cong (eutt_refl _) fun o => (k o).2 hΦ⟩
 
 /-- `sqAssertSrc` reflected in the third style: the same `apply`-trace, but every `apply` calls
     a pack-returning *function* — the goal is `Type`-valued (data!), and the AST is assembled
     by the combinators, node by node, as the trace walks the source. -/
 def sqAssertReflected' (x : Nat) :
-    Reflection hE hB True .nat (sqAssertSrc x) := by
+    Reflection hB True .nat (sqAssertSrc x) := by
   unfold sqAssertSrc
-  apply Reflection.bin hE hB .mul x x    -- y := x * x
+  apply Reflection.bin hB .mul x x    -- y := x * x
   intro y
-  apply Reflection.bin hE hB .le x y     -- c := decide (x ≤ y)
+  apply Reflection.bin hB .le x y     -- c := decide (x ≤ y)
   intro c
-  apply Reflection.eff hE hB () c        -- assert c
+  apply Reflection.eff hB () c        -- assert c
   · rintro ⟨⟨-, hy⟩, hc⟩                 --   side goal: Φ → c = decide (x ≤ x*x)
-    simp only [hy, hc, Bin.denote]
+    rw [hy] at hc
+    exact hc
   · intro o
-    apply Reflection.ret hE hB y         -- return y
+    apply Reflection.ret hB y         -- return y
     rintro ⟨⟨-, hy⟩, -⟩                  --   side goal: Φ → y = x*x
-    simp only [hy, Bin.denote]
+    exact hy
 
 /-- The third style, too, reconstructs exactly the hand-written AST. -/
-example (x : Nat) : (sqAssertReflected' hE hB x).1 = sqAssertAst x := rfl
+example (x : Nat) : (sqAssertReflected' hB x).1 = sqAssertAst x := rfl
 
 /-! ## Tying the recursion knot
 
@@ -406,8 +435,8 @@ The `tau` each unfolding spends is absorbed by `≈`.  Everything specific to *t
 the step continuation `cont` — is supplied as an approach-#3 reflection pack, so applying the
 lemma leaves the recursion's AST to be *derived*, not guessed. -/
 theorem reflect_natRec {R : Type}
-    (bd : Nat → CompE (ε ⊕ Nat) (callBr br R) R) (src : Nat → CompE ε br R)
-    (base : CompE ε br R) (cont : Nat → R → CompE ε br R)
+    (bd : Nat → CompE (CircE.Event ⊕ Nat) (callBr EffSig.Event.arity R) R) (src : Nat → M R)
+    (base : M R) (cont : Nat → R → M R)
     (hbase : Eutt (mrec bd 0) base)
     (hstep : ∀ n, Eutt (mrec bd (n + 1)) (tau (ITree.bind (mrec bd n) (cont n))))
     (hsrcBase : Eutt (src 0) base)
@@ -423,19 +452,19 @@ theorem reflect_natRec {R : Type}
 /-- Reflect a **function application** `bind (fSrc x) ks`: emit an `app` node on the function
     atom `f` (whose per-argument soundness `hf` witnesses that `f x` reflects the helper call),
     then continue pointwise.  The approach-#3 combinator for a `letrec`-helper call. -/
-def Reflection.app {Φ : Prop} {α aT bT : Tp} (f : Tp.denote (CompE ε br) (.fn aT bT))
-    (x : Tp.denote (CompE ε br) aT)
-    {fSrc : Tp.denote (CompE ε br) aT → Circuit (Tp.denote (CompE ε br) bT)}
-    (hf : Φ → Eutt (f x) (evalC hE hB (fSrc x)))
-    {ks : Tp.denote (CompE ε br) bT → Circuit (Tp.denote (CompE ε br) α)}
-    (k : ∀ o, Reflection hE hB Φ α (ks o)) :
-    Reflection hE hB Φ α (Freek.bind (fSrc x) ks) :=
+def Reflection.app {Φ : Prop} {α aT bT : Tp} (f : Tp.denote M (.fn aT bT))
+    (x : Tp.denote M aT)
+    {fSrc : Tp.denote M aT → Circuit (Tp.denote M bT)}
+    (hf : Φ → Eutt (f x) (evalC hB (fSrc x)))
+    {ks : Tp.denote M bT → Circuit (Tp.denote M α)}
+    (k : ∀ o, Reflection hB Φ α (ks o)) :
+    Reflection hB Φ α (Freek.bind (fSrc x) ks) :=
   ⟨.app f x fun o => (k o).1, fun hΦ => by
-    have hexp : evalC hE hB (Freek.bind (fSrc x) ks)
-        = ITree.bind (evalC hE hB (fSrc x)) fun o => evalC hE hB (ks o) :=
-      Freek.eval_bind (𝓔 := circuitEff) (𝓑 := circuitBlock) hE hB (fSrc x) ks
-    show Eutt (ITree.bind (f x) fun o => Expr.denote (rE hE) (rB hB) ((k o).1))
-              (evalC hE hB (Freek.bind (fSrc x) ks))
+    have hexp : evalC hB (Freek.bind (fSrc x) ks)
+        = ITree.bind (evalC hB (fSrc x)) fun o => evalC hB (ks o) :=
+      Freek.eval_bind (𝓔 := circuitEff) (𝓑 := circuitBlock) evalEffC hB (fSrc x) ks
+    show Eutt (ITree.bind (f x) fun o => Expr.denote (rB hB) ((k o).1))
+              (evalC hB (Freek.bind (fSrc x) ks))
     rw [hexp]
     exact eutt_bind_cong (hf hΦ) fun o => (k o).2 hΦ⟩
 
@@ -444,39 +473,39 @@ def Reflection.app {Φ : Prop} {α aT bT : Tp} (f : Tp.denote (CompE ε br) (.fn
     `sq_sound`) then a `bin .add` and `ret`.  Its denotation is the `cont` the knot lemma
     consumes. -/
 def sumSqStep (n s : Nat) :
-    Reflection hE hB True .nat (Freek.bind (sqAssertSrc (n + 1)) fun y => pure (s + y)) := by
-  refine Reflection.app hE hB (aT := .nat) (bT := .nat) (sqD hE hB) (n + 1)
-    (fSrc := sqAssertSrc) (fun _ => Eutt.of_eq (sq_sound hE hB (n + 1))) ?_
+    Reflection hB True .nat (Freek.bind (sqAssertSrc (n + 1)) fun y => pure (s + y)) := by
+  refine Reflection.app hB (aT := .nat) (bT := .nat) (sqD hB) (n + 1)
+    (fSrc := sqAssertSrc) (fun _ => Eutt.of_eq (sq_sound hB (n + 1))) ?_
   intro y
-  apply Reflection.bin hE hB .add s y
+  apply Reflection.bin hB .add s y
   intro r
-  apply Reflection.ret hE hB r
+  apply Reflection.ret hB r
   rintro ⟨-, hr⟩
-  simp only [hr, Bin.denote]
+  exact hr
 
 /-- The derived step denotes to exactly the base-domain continuation `sumSq_sound` used — the
     apply-derived pack and the hand unfolding meet. -/
 theorem sumSqStep_denote (n s : Nat) :
-    Expr.denote (rE hE) (rB hB) (sumSqStep hE hB n s).1
-      = ITree.bind (sqD hE hB (n + 1)) fun y => ITree.ret (s + y) := rfl
+    Expr.denote (rB hB) (sumSqStep hB n s).1
+      = ITree.bind (sqD hB (n + 1)) fun y => ITree.ret (s + y) := rfl
 
 /-- **`sumSqSrc` reflected via the knot lemma.**  The recursion's soundness, re-established
     principledly: `reflect_natRec` supplies the induction/`tau`-absorption once; its `cont` is
     the *apply-derived* `sumSqStep`; the two body facts are the definitional `letrec`/`selfCall`
     unfoldings, and the source facts come from `eval_bind`. -/
-theorem sumSqRec : ∀ n, Eutt (mrec (bd hE hB) n) (evalC hE hB (sumSqSrc n)) := by
-  apply reflect_natRec (bd hE hB) (fun n => evalC hE hB (sumSqSrc n)) (ITree.ret 0)
-    (fun n s => ITree.bind (sqD hE hB (n + 1)) fun y => ITree.ret (s + y))
+theorem sumSqRec : ∀ n, Eutt (mrec (bd hB) n) (evalC hB (sumSqSrc n)) := by
+  apply reflect_natRec (bd hB) (fun n => evalC hB (sumSqSrc n)) (ITree.ret 0)
+    (fun n s => ITree.bind (sqD hB (n + 1)) fun y => ITree.ret (s + y))
   · -- hbase: the body at 0 computes `ret 0`
     apply Eutt.of_eq
-    show interp (bd hE hB) (ITree.bind (ITree.ret 0) fun v => ITree.ret v) = _
+    show interp (bd hB) (ITree.bind (ITree.ret 0) fun v => ITree.ret v) = _
     rw [bind_ret, interp_ret]
   · -- hstep: one guarded self-call, result fed to the step continuation
     intro n
     apply Eutt.of_eq
-    show interp (bd hE hB)
+    show interp (bd hB)
         (ITree.bind (vis (Sum.inr n) fun (s : Nat) =>
-          ITree.bind (sumL (sqD hE hB (n + 1))) fun y => ITree.ret (s + y))
+          ITree.bind (sumL (sqD hB (n + 1))) fun y => ITree.ret (s + y))
           (fun v => ITree.ret v)) = _
     simp only [bind_vis, interp_vis_call, interp_bind, bind_assoc, bind_ret, interp_sumL,
                interp_ret]
@@ -485,15 +514,15 @@ theorem sumSqRec : ∀ n, Eutt (mrec (bd hE hB) n) (evalC hE hB (sumSqSrc n)) :=
     exact Eutt.of_eq rfl
   · -- hsrcStep: the source folds through the step, matched by the *apply-derived* step pack
     intro n
-    have hexp : evalC hE hB (sumSqSrc (n + 1))
-        = ITree.bind (evalC hE hB (sumSqSrc n)) fun s =>
-            evalC hE hB (Freek.bind (sqAssertSrc (n + 1)) fun y => pure (s + y)) :=
-      Freek.eval_bind (𝓔 := circuitEff) (𝓑 := circuitBlock) hE hB (sumSqSrc n)
+    have hexp : evalC hB (sumSqSrc (n + 1))
+        = ITree.bind (evalC hB (sumSqSrc n)) fun s =>
+            evalC hB (Freek.bind (sqAssertSrc (n + 1)) fun y => pure (s + y)) :=
+      Freek.eval_bind (𝓔 := circuitEff) (𝓑 := circuitBlock) evalEffC hB (sumSqSrc n)
         (fun s => Freek.bind (sqAssertSrc (n + 1)) fun y => Freek.pure (s + y))
     rw [hexp]
     refine eutt_bind_cong (eutt_refl _) fun s => ?_
-    rw [← sumSqStep_denote hE hB n s]
-    exact ((sumSqStep hE hB n s).2 True.intro).symm
+    rw [← sumSqStep_denote hB n s]
+    exact ((sumSqStep hB n s).2 True.intro).symm
 
 /-! ## A constructive `Reflection` for recursion
 
@@ -506,9 +535,10 @@ fits the apply-style.  The pieces:
   none-slot ones, discharged by the `sumL` monad-morphism laws.
 * **`RecReflection`** — the reflection of a whole recursive function `F : Nat → Circuit R`: the
   `letrec` **body** together with the proof that its `mrec` knot is `≈ eval ∘ F`.
-* **`Reflection.natRec`** — the constructive combinator.  Given the source fold `F (n+1) =
-  F n >>= step (n+1)`, a reflection of the base `F 0`, and a reflection of the step body, it
-  **emits the natural `letrec` body** (`n==0 ? base : selfCall (n-1) >>= step`) and proves it
+* **`Reflection.natRec`** — the constructive combinator for `natBRecSource`, the explicit
+  `Nat.brecOn`-shaped source recursor that natural recursive definitions can be related to by
+  their generated equations.  Given a reflection of the base and a reflection of the step body,
+  it **emits the natural `letrec` body** (`n==0 ? base : selfCall (n-1) >>= step`) and proves it
   reflects — the induction/`tau`-absorption handled once by `reflect_natRec`.  Applying it
   leaves the base and step *bodies* as reflection goals, apply-derivable like any others.
 * **`Reflection.letrec`** — uses a `RecReflection` at a call site (`bind (F N) ks`): emits
@@ -516,56 +546,65 @@ fits the apply-style.  The pieces:
 
 /-- A reflection of source `m` at the **recursion slot** — a call-free body fragment, sound as
     an *equality* against the `sumL`-embedded source. -/
-def ReflectionS (Φ : Prop) (R α : Tp) (m : Circuit (Tp.denote (CompE ε br) α)) : Type :=
-  { e : Expr CircE CircB (Tp.denote (CompE ε br)) (some (.nat, R)) α //
-    Φ → Expr.denote (rE hE) (rB hB) e = sumL (evalC hE hB m) }
+def ReflectionS (Φ : Prop) (R α : Tp) (m : Circuit (Tp.denote M α)) : Type :=
+  { e : Expr CircE CircB (Tp.denote M) (some (.nat, R)) α //
+    Φ → Expr.denote (rB hB) e = sumL (evalC hB m) }
 
 /-- Reflect `pure` at the recursion slot. -/
-def ReflectionS.ret {Φ : Prop} {R α : Tp} (v : Tp.denote (CompE ε br) α)
-    {v' : Tp.denote (CompE ε br) α} (h : Φ → v = v') :
-    ReflectionS hE hB Φ R α (.pure v') :=
+def ReflectionS.ret {Φ : Prop} {R α : Tp} (v : Tp.denote M α)
+    {v' : Tp.denote M α} (h : Φ → v = v') :
+    ReflectionS hB Φ R α (.pure v') :=
   ⟨.ret v, fun hΦ => by rw [h hΦ]; exact (sumL_ret v').symm⟩
 
 /-- Reflect a host primitive at the recursion slot (the source is untouched). -/
 def ReflectionS.bin {Φ : Prop} {R a b c α : Tp} (o : Bin a b c)
-    (va : Tp.denote (CompE ε br) a) (vb : Tp.denote (CompE ε br) b)
-    {m : Circuit (Tp.denote (CompE ε br) α)}
-    (k : ∀ vc, ReflectionS hE hB (Φ ∧ vc = o.denote va vb) R α m) :
-    ReflectionS hE hB Φ R α m :=
+    (va : Tp.denote M a) (vb : Tp.denote M b)
+    {m : Circuit (Tp.denote M α)}
+    (k : ∀ vc, ReflectionS hB (Φ ∧ vc = o.denote va vb) R α m) :
+    ReflectionS hB Φ R α m :=
   ⟨.bin o va vb fun vc => (k vc).1, fun hΦ => (k _).2 ⟨hΦ, rfl⟩⟩
 
 /-- Reflect a helper application at the recursion slot (`sumL`-lifted). -/
-def ReflectionS.app {Φ : Prop} {R α aT bT : Tp} (f : Tp.denote (CompE ε br) (.fn aT bT))
-    (x : Tp.denote (CompE ε br) aT)
-    {fSrc : Tp.denote (CompE ε br) aT → Circuit (Tp.denote (CompE ε br) bT)}
-    (hf : Φ → f x = evalC hE hB (fSrc x))
-    {ks : Tp.denote (CompE ε br) bT → Circuit (Tp.denote (CompE ε br) α)}
-    (k : ∀ o, ReflectionS hE hB Φ R α (ks o)) :
-    ReflectionS hE hB Φ R α (Freek.bind (fSrc x) ks) :=
+def ReflectionS.app {Φ : Prop} {R α aT bT : Tp} (f : Tp.denote M (.fn aT bT))
+    (x : Tp.denote M aT)
+    {fSrc : Tp.denote M aT → Circuit (Tp.denote M bT)}
+    (hf : Φ → f x = evalC hB (fSrc x))
+    {ks : Tp.denote M bT → Circuit (Tp.denote M α)}
+    (k : ∀ o, ReflectionS hB Φ R α (ks o)) :
+    ReflectionS hB Φ R α (Freek.bind (fSrc x) ks) :=
   ⟨.app f x fun o => (k o).1, fun hΦ => by
-    have hexp : evalC hE hB (Freek.bind (fSrc x) ks)
-        = ITree.bind (evalC hE hB (fSrc x)) fun o => evalC hE hB (ks o) :=
-      Freek.eval_bind (𝓔 := circuitEff) (𝓑 := circuitBlock) hE hB (fSrc x) ks
-    show ITree.bind (sumL (f x)) (fun o => Expr.denote (rE hE) (rB hB) ((k o).1))
-        = sumL (evalC hE hB (Freek.bind (fSrc x) ks))
+    have hexp : evalC hB (Freek.bind (fSrc x) ks)
+        = ITree.bind (evalC hB (fSrc x)) fun o => evalC hB (ks o) :=
+      Freek.eval_bind (𝓔 := circuitEff) (𝓑 := circuitBlock) evalEffC hB (fSrc x) ks
+    show ITree.bind (sumL (f x)) (fun o => Expr.denote (rB hB) ((k o).1))
+        = sumL (evalC hB (Freek.bind (fSrc x) ks))
     rw [hexp, hf hΦ, sumL_bind]
-    exact congrArg (ITree.bind (sumL (evalC hE hB (fSrc x))))
+    exact congrArg (ITree.bind (sumL (evalC hB (fSrc x))))
       (funext fun o => (k o).2 hΦ)⟩
 
 /-- A reflection of a structurally-recursive function `F : Nat → Circuit R`: the `letrec`
     body, sound (`≈`) against `eval ∘ F` under the `mrec` knot. -/
-def RecReflection (Φ : Prop) (R : Tp) (F : Nat → Circuit (Tp.denote (CompE ε br) R)) : Type :=
-  { body : Tp.denote (CompE ε br) .nat →
-      Expr CircE CircB (Tp.denote (CompE ε br)) (some (.nat, R)) R //
-    Φ → ∀ n, Eutt (mrec (fun s => Expr.denote (rE hE) (rB hB) (body s)) n) (evalC hE hB (F n)) }
+def RecReflection (Φ : Prop) (R : Tp) (F : Nat → Circuit (Tp.denote M R)) : Type :=
+  { body : Tp.denote M .nat →
+      Expr CircE CircB (Tp.denote M) (some (.nat, R)) R //
+    Φ → ∀ n, Eutt (mrec (fun s => Expr.denote (rB hB) (body s)) n) (evalC hB (F n)) }
+
+/-- Reindex a recursive reflection along pointwise equality of source functions. -/
+def RecReflection.congr {Φ : Prop} {R : Tp}
+    {F G : Nat → Circuit (Tp.denote M R)}
+    (rec : RecReflection hB Φ R F) (h : Φ → ∀ n, G n = F n) :
+    RecReflection hB Φ R G :=
+  ⟨rec.1, fun hΦ n => by
+    rw [h hΦ n]
+    exact rec.2 hΦ n⟩
 
 /-- The natural `letrec` body for structural `Nat` recursion:
     `n == 0 ? base : selfCall (n-1) >>= step`. -/
 def natRecBody {R : Tp}
-    (baseE : Expr CircE CircB (Tp.denote (CompE ε br)) (some (.nat, R)) R)
-    (stepE : Nat → Tp.denote (CompE ε br) R →
-      Expr CircE CircB (Tp.denote (CompE ε br)) (some (.nat, R)) R)
-    (m : Nat) : Expr CircE CircB (Tp.denote (CompE ε br)) (some (.nat, R)) R :=
+    (baseE : Expr CircE CircB (Tp.denote M) (some (.nat, R)) R)
+    (stepE : Nat → Tp.denote M R →
+      Expr CircE CircB (Tp.denote M) (some (.nat, R)) R)
+    (m : Nat) : Expr CircE CircB (Tp.denote M) (some (.nat, R)) R :=
   .natLit 0 fun z =>
   .bin .eq m z fun c =>
   .ite c baseE
@@ -574,47 +613,48 @@ def natRecBody {R : Tp}
 
 /-- Body-at-`0` denotes to the base branch (the `n==0` guard reduces). -/
 theorem natRecBody_zero {R : Tp} (baseE) (stepE) :
-    Expr.denote (rE hE) (rB hB) (natRecBody (R := R) baseE stepE 0)
-      = ITree.bind (Expr.denote (rE hE) (rB hB) baseE) fun v => ITree.ret v := rfl
+    Expr.denote (rB hB) (natRecBody (R := R) baseE stepE 0)
+      = ITree.bind (Expr.denote (rB hB) baseE) fun v => ITree.ret v := rfl
 
 /-- Body-at-`n+1` denotes to one self-call feeding the step branch. -/
 theorem natRecBody_succ {R : Tp} (baseE) (stepE) (n : Nat) :
-    Expr.denote (rE hE) (rB hB) (natRecBody (R := R) baseE stepE (n + 1))
+    Expr.denote (rB hB) (natRecBody (R := R) baseE stepE (n + 1))
       = ITree.bind (vis (Sum.inr n) fun s =>
-          Expr.denote (rE hE) (rB hB) (stepE (n + 1) s)) fun v => ITree.ret v := rfl
+          Expr.denote (rB hB) (stepE (n + 1) s)) fun v => ITree.ret v := rfl
 
-/-- **The constructive knot combinator.**  From the source fold and reflections of the base and
-    step *bodies*, emit the natural `letrec` body (`natRecBody`) and prove it reflects `F` — the
-    induction/`tau`-absorption delegated to `reflect_natRec`. -/
-def Reflection.natRec {Φ : Prop} {R : Tp}
-    (F : Nat → Circuit (Tp.denote (CompE ε br) R))
-    (step : Nat → Tp.denote (CompE ε br) R → Circuit (Tp.denote (CompE ε br) R))
-    (hfold : Φ → ∀ n, F (n + 1) = Freek.bind (F n) fun s => step (n + 1) s)
-    (base0 : ReflectionS hE hB Φ R R (F 0))
-    (stepBody : ∀ (m : Nat) (s : Tp.denote (CompE ε br) R),
-      ReflectionS hE hB Φ R R (step m s)) :
-    RecReflection hE hB Φ R F :=
+/-- **The constructive knot combinator for the explicit source recursor.**  For
+    `natBRecSource`, emit the natural `letrec` body (`natRecBody`) from reflections of the base
+    and step *bodies*, and prove it reflects — the induction/`tau`-absorption delegated to
+    `reflect_natRec`. -/
+def Reflection.natBRec {Φ : Prop} {R : Tp}
+    (base : Circuit (Tp.denote M R))
+    (step : Nat → Tp.denote M R → Circuit (Tp.denote M R))
+    (base0 : ReflectionS hB Φ R R base)
+    (stepBody : ∀ (m : Nat) (s : Tp.denote M R),
+      ReflectionS hB Φ R R (step m s)) :
+    RecReflection hB Φ R (natBRecSource base step) :=
   ⟨natRecBody base0.1 fun m s => (stepBody m s).1,
    fun hΦ => by
-    refine reflect_natRec _ (fun n => evalC hE hB (F n)) (evalC hE hB (F 0))
-      (fun n t => evalC hE hB (step (n + 1) t)) ?_ ?_ (eutt_refl _) ?_
-    · -- hbase: body at 0 = base ⇒ mrec = eval (F 0)
+    refine reflect_natRec _ (fun n => evalC hB (natBRecSource base step n))
+      (evalC hB base)
+      (fun n t => evalC hB (step (n + 1) t)) ?_ ?_ (eutt_refl _) ?_
+    · -- hbase: body at 0 = base ⇒ mrec = eval base
       apply Eutt.of_eq
-      rw [show mrec (fun s => Expr.denote (rE hE) (rB hB)
+      rw [show mrec (fun s => Expr.denote (rB hB)
             (natRecBody base0.1 (fun m s => (stepBody m s).1) s)) 0
-          = interp _ (ITree.bind (Expr.denote (rE hE) (rB hB) base0.1) fun v => ITree.ret v)
-        from congrArg (interp _) (natRecBody_zero hE hB _ _)]
+          = interp _ (ITree.bind (Expr.denote (rB hB) base0.1) fun v => ITree.ret v)
+        from congrArg (interp _) (natRecBody_zero hB _ _)]
       rw [base0.2 hΦ, interp_bind, interp_sumL]
       simp only [interp_ret]
       exact bind_ret_right _
     · -- hstep: body at n+1 = one self-call feeding the reflected step
       intro n
       apply Eutt.of_eq
-      rw [show mrec (fun s => Expr.denote (rE hE) (rB hB)
+      rw [show mrec (fun s => Expr.denote (rB hB)
             (natRecBody base0.1 (fun m s => (stepBody m s).1) s)) (n + 1)
           = interp _ (ITree.bind (vis (Sum.inr n) fun s =>
-              Expr.denote (rE hE) (rB hB) ((stepBody (n + 1) s).1)) fun v => ITree.ret v)
-        from congrArg (interp _) (natRecBody_succ hE hB _ _ n)]
+              Expr.denote (rB hB) ((stepBody (n + 1) s).1)) fun v => ITree.ret v)
+        from congrArg (interp _) (natRecBody_succ hB _ _ n)]
       rw [bind_vis, interp_vis_call, interp_bind]
       refine congrArg tau (congrArg (ITree.bind (mrec _ n)) (funext fun t => ?_))
       rw [(stepBody (n + 1) t).2 hΦ, interp_bind, interp_sumL]
@@ -623,25 +663,39 @@ def Reflection.natRec {Φ : Prop} {R : Tp}
     · -- hsrcStep
       intro n
       apply Eutt.of_eq
-      rw [hfold hΦ n]
-      exact Freek.eval_bind (𝓔 := circuitEff) (𝓑 := circuitBlock) hE hB (F n)
-        (fun s => step (n + 1) s)⟩
+      exact Freek.eval_bind (𝓔 := circuitEff) (𝓑 := circuitBlock) evalEffC hB
+        (natBRecSource base step n) (fun s => step (n + 1) s)⟩
+
+/-- **The constructive knot combinator.**  Given a source function that has been identified as
+    a `natBRecSource`, emit the natural `letrec` body (`natRecBody`) from reflections of the
+    base and step *bodies*, and prove it reflects.  The base and step may be inferred from a
+    generic `natBRecSource_eq_of_eqns` proof over the source's generated equations. -/
+def Reflection.natRec {Φ : Prop} {R : Tp}
+    (F : Nat → Circuit (Tp.denote M R))
+    {base : Circuit (Tp.denote M R)}
+    {step : Nat → Tp.denote M R → Circuit (Tp.denote M R)}
+    (base0 : ReflectionS hB Φ R R base)
+    (stepBody : ∀ (m : Nat) (s : Tp.denote M R),
+      ReflectionS hB Φ R R (step m s))
+    (hshape : Φ → ∀ n, F n = natBRecSource base step n) :
+    RecReflection hB Φ R F :=
+  RecReflection.congr hB (Reflection.natBRec hB base step base0 stepBody) hshape
 
 /-- Reflect a **recursive call site** `bind (F N) ks` from a `RecReflection` of `F`: emit
     `letrec` (binding the recursive function), `app` it to `N`, and continue.  This is where the
     apply-derived recursion pack plugs into an ordinary trace. -/
 def Reflection.letrec {Φ : Prop} {R α : Tp}
-    {F : Nat → Circuit (Tp.denote (CompE ε br) R)} (Frec : RecReflection hE hB Φ R F)
-    (N : Nat) {ks : Tp.denote (CompE ε br) R → Circuit (Tp.denote (CompE ε br) α)}
-    (k : ∀ s, Reflection hE hB Φ α (ks s)) :
-    Reflection hE hB Φ α (Freek.bind (F N) ks) :=
+    {F : Nat → Circuit (Tp.denote M R)} (Frec : RecReflection hB Φ R F)
+    (N : Nat) {ks : Tp.denote M R → Circuit (Tp.denote M α)}
+    (k : ∀ s, Reflection hB Φ α (ks s)) :
+    Reflection hB Φ α (Freek.bind (F N) ks) :=
   ⟨.letrec Frec.1 fun f => .app f N fun s => (k s).1, fun hΦ => by
-    have hexp : evalC hE hB (Freek.bind (F N) ks)
-        = ITree.bind (evalC hE hB (F N)) fun s => evalC hE hB (ks s) :=
-      Freek.eval_bind (𝓔 := circuitEff) (𝓑 := circuitBlock) hE hB (F N) ks
-    show Eutt (ITree.bind (mrec (fun s => Expr.denote (rE hE) (rB hB) (Frec.1 s)) N)
-          fun s => Expr.denote (rE hE) (rB hB) ((k s).1))
-        (evalC hE hB (Freek.bind (F N) ks))
+    have hexp : evalC hB (Freek.bind (F N) ks)
+        = ITree.bind (evalC hB (F N)) fun s => evalC hB (ks s) :=
+      Freek.eval_bind (𝓔 := circuitEff) (𝓑 := circuitBlock) evalEffC hB (F N) ks
+    show Eutt (ITree.bind (mrec (fun s => Expr.denote (rB hB) (Frec.1 s)) N)
+          fun s => Expr.denote (rB hB) ((k s).1))
+        (evalC hB (Freek.bind (F N) ks))
     rw [hexp]
     exact eutt_bind_cong (Frec.2 hΦ N) fun s => (k s).2 hΦ⟩
 
@@ -650,37 +704,41 @@ def Reflection.letrec {Φ : Prop} {R α : Tp}
 `sumSqSrc` reflected through the constructive combinator: `apply Reflection.natRec` emits the
 `letrec` body and leaves the base and step *bodies* as `ReflectionS` goals, discharged by the
 `ret`/`bin`/`app` combinators — a trace that walks the source recursion, no hand-written body. -/
-def sumSqRecPack : RecReflection hE hB True .nat sumSqSrc := by
-  refine Reflection.natRec hE hB (R := .nat) sumSqSrc
-    (fun m s => Freek.bind (sqAssertSrc m) fun y => pure (s + y))
-    (fun _ n => rfl)               -- the source fold `sumSqSrc (n+1) = …` is definitional
-    ?base ?step
+def sumSqRecPack : RecReflection hB True .nat sumSqSrc := by
+  refine Reflection.natRec hB (R := .nat) sumSqSrc
+    (base := ?baseSrc) (step := ?stepSrc) ?base ?step ?shape
   case base =>                     -- base branch: `pure 0`
-    exact ReflectionS.ret hE hB 0 (fun _ => rfl)
-  case step =>                     -- step branch: `app helper; bin add; ret`
+    show ReflectionS hB True .nat .nat (pure 0)
+    exact ReflectionS.ret hB 0 (fun _ => rfl)
+  case step =>                     -- step branch: ad-hoc helper atom; bin add; ret
     intro m s
-    refine ReflectionS.app hE hB (aT := .nat) (bT := .nat) (sqD hE hB) m (fSrc := sqAssertSrc)
-      (fun _ => sq_sound hE hB m) ?_
+    show ReflectionS hB True .nat .nat
+      (Freek.bind (sqAssertSrc m) fun y => pure (s + y))
+    refine ReflectionS.app hB (aT := .nat) (bT := .nat)
+      (fun x => evalC hB (sqAssertSrc x)) m (fSrc := sqAssertSrc) (fun _ => rfl) ?_
     intro y
-    apply ReflectionS.bin hE hB .add s y
+    apply ReflectionS.bin hB .add s y
     intro r
-    apply ReflectionS.ret hE hB r
+    apply ReflectionS.ret hB r
     rintro ⟨-, hr⟩
-    simp only [hr, Bin.denote]
+    exact hr
+  case shape =>
+    intro _
+    exact natBRecSource_eq_of_eqns sumSqSrc.eq_1 sumSqSrc.eq_2
 
 /-- The apply-derived recursion body's *step* matches the hand-written one node-for-node (the
     helper atom `sq` instantiated to its denotation): the derived and hand `selfCall`/`app`/`bin`
     scaffolding agree.  (The bases differ only cosmetically — `.ret 0` vs a `natLit`-bound `0`.) -/
 example (m : Nat) :
-    Expr.denote (rE hE) (rB hB) ((sumSqRecPack hE hB).1 m)
-      = Expr.denote (rE hE) (rB hB) (sumSqAst (sqD hE hB) m) := rfl
+    Expr.denote (rB hB) ((sumSqRecPack hB).1 m)
+      = Expr.denote (rB hB) (sumSqAst (sqD hB) m) := rfl
 
 /-- `sumSqRecPack` re-establishes the recursion soundness through the constructive combinator —
     the derived body's `mrec` knot is `≈ eval ∘ sumSqSrc`. -/
 example (n : Nat) :
-    Eutt (mrec (fun s => Expr.denote (rE hE) (rB hB) ((sumSqRecPack hE hB).1 s)) n)
-      (evalC hE hB (sumSqSrc n)) :=
-  (sumSqRecPack hE hB).2 True.intro n
+    Eutt (mrec (fun s => Expr.denote (rB hB) ((sumSqRecPack hB).1 s)) n)
+      (evalC hB (sumSqSrc n)) :=
+  (sumSqRecPack hB).2 True.intro n
 
 end Sound
 

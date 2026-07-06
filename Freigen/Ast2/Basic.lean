@@ -9,6 +9,21 @@ structure EffSpec : Type _ where
   𝓘 : ε → Type _
   𝓞 : ε → Type _
 
+/-- A first-order event with its input packaged into the ITree event itself. -/
+structure EffSpec.Event (𝓔 : EffSpec) : Type _ where
+  e : 𝓔.ε
+  input : 𝓔.𝓘 e
+
+/-- The output arity of a packaged first-order event. -/
+@[reducible] def EffSpec.Event.arity {𝓔 : EffSpec} : 𝓔.Event → Type _
+  | ⟨e, _⟩ => 𝓔.𝓞 e
+
+open ITree in
+/-- Perform a host-level effect as an uninterpreted ITree event. -/
+def EffSpec.trigger {𝓔 : EffSpec} (e : 𝓔.ε) (i : 𝓔.𝓘 e) :
+    CompE 𝓔.Event EffSpec.Event.arity (𝓔.𝓞 e) :=
+  ITree.vis ⟨e, i⟩ ITree.ret
+
 structure BindSpec : Type _ where
   ε : Type u
   𝓘 : ε → Type v
@@ -131,8 +146,11 @@ def Circuit.eval_constraints : Circuit α → ConstraintM α := Freek.eval
 
 open ITree in
 def Freek.toITree {α} {𝓔: EffSpec} {𝓑: BindSpec}
-    (evalBind :  (e : 𝓑.ε) → 𝓑.𝓘 e → ((b: 𝓑.𝓑 e) → CompE 𝓔.ε 𝓔.𝓞 (𝓑.𝓑τ e b)) → CompE 𝓔.ε 𝓔.𝓞 (𝓑.𝓞 e)):
-  Freek 𝓔 𝓑 α → CompE 𝓔.ε 𝓔.𝓞 α := Freek.eval (fun e _ => ITree.vis e (fun o => ITree.ret o)) evalBind
+    (evalBind :  (e : 𝓑.ε) → 𝓑.𝓘 e →
+      ((b: 𝓑.𝓑 e) → CompE 𝓔.Event EffSpec.Event.arity (𝓑.𝓑τ e b)) →
+      CompE 𝓔.Event EffSpec.Event.arity (𝓑.𝓞 e)):
+  Freek 𝓔 𝓑 α → CompE 𝓔.Event EffSpec.Event.arity α :=
+    Freek.eval (fun e i => EffSpec.trigger e i) evalBind
 
 /-!
 ## The object-type universe and the AST
@@ -144,13 +162,9 @@ A from-scratch restart of the AST.  What changes relative to `Freigen.Ast`:
   denotation.  Here the AST has a `bindEff` node mirroring `Freek.bindEff` one-to-one, and the
   denotation is parameterised by an interpreter for it (`BindInterp`), so every soundness
   statement quantifies over the interpretation of custom control flow.
-* **The denotation fixes no event signature.**  `Expr.denote` targets `CompE ε br` for an
-  *arbitrary* `(ε, br)`, given an interpreter for the effects (`EffInterp`) and one for custom
-  control flow (`BindInterp`) — the same shape as `Freek.eval`'s `evalEff`/`evalBind`, at
-  `M := CompE ε br`.  Because the domain is a parameter (never something the signatures must be
-  defined "before"), signature payloads are full `Tp` — no first-order sub-universe — and
-  `Tp.denote M` (with `.fn a b` a Kleisli arrow `a.denote M → M (b.denote M)`) instantiates at
-  `M := CompE ε br` with no circularity.
+* **First-order effects are hoisted into the ITree signature.**  `Expr.denote` emits `vis`
+  nodes for `eff`; only custom control flow is parameterised by an interpreter (`BindInterp`).
+  The coded effect vocabulary defines that event signature directly.
 * **No `prog → defs → exprs` stratification.**  Function definitions — recursive or not — are
   a single inline `letrec` node, so the reflector can emit a definition in one pass, right
   where it is first encountered.
@@ -175,32 +189,54 @@ open ITree
 
 /-! ### Object types -/
 
-/-- The universe of object-language types: `nat`/`bool`/`unit`, products, and functions. -/
+/-- First-order object types: exactly the types effects may exchange with the ITree event
+    system. -/
+inductive Tp0 : Type
+  | nat  : Tp0
+  | bool : Tp0
+  | unit : Tp0
+  | prod : Tp0 → Tp0 → Tp0
+
+namespace Tp0
+
+/-- Denote a first-order object type directly into Lean. -/
+@[reducible] def denote : Tp0 → Type
+  | .nat      => Nat
+  | .bool     => Bool
+  | .unit     => Unit
+  | .prod a b => a.denote × b.denote
+
+end Tp0
+
+/-- The full object-language type universe: either a first-order type or a function type. -/
 inductive Tp : Type
-  | nat  : Tp
-  | bool : Tp
-  | unit : Tp
-  | prod : Tp → Tp → Tp
+  | base : Tp0 → Tp
   | fn   : Tp → Tp → Tp
+
+namespace Tp
+
+abbrev nat : Tp := .base .nat
+abbrev bool : Tp := .base .bool
+abbrev unit : Tp := .base .unit
+abbrev prod (a b : Tp0) : Tp := .base (.prod a b)
 
 /-- Denote an object type over an arbitrary target monad `M`.  A function type denotes as a
     **Kleisli arrow into `M`** — a function value is a suspended, potentially effectful
     computation.  Quantifying the target keeps every downstream statement parametric in the
     interpreter.  Reducible so type-class search and unification see through it. -/
-@[reducible] def Tp.denote (M : Type → Type) : Tp → Type
-  | .nat      => Nat
-  | .bool     => Bool
-  | .unit     => Unit
-  | .prod a b => a.denote M × b.denote M
-  | .fn a b   => a.denote M → M (b.denote M)
+@[reducible] def denote (M : Type → Type) : Tp → Type
+  | .base t => t.denote
+  | .fn a b => a.denote M → M (b.denote M)
+
+end Tp
 
 /-! ### Reified primitive operations -/
 
 /-- Unary primitives, indexed by (argument, result) object type. -/
 inductive Un : Tp → Tp → Type
   | not : Un .bool .bool
-  | fst {a b : Tp} : Un (.prod a b) a
-  | snd {a b : Tp} : Un (.prod a b) b
+  | fst {a b : Tp0} : Un (.prod a b) (.base a)
+  | snd {a b : Tp0} : Un (.prod a b) (.base b)
 
 /-- Denote a unary primitive to its Lean operation (`M`-independent on these types, but stated
     over `Tp.denote M` so it composes with the AST's denotation). -/
@@ -219,7 +255,7 @@ inductive Bin : Tp → Tp → Tp → Type
   | le  : Bin .nat .nat .bool
   | and : Bin .bool .bool .bool
   | or  : Bin .bool .bool .bool
-  | pair {a b : Tp} : Bin a b (.prod a b)
+  | pair {a b : Tp0} : Bin (.base a) (.base b) (.prod a b)
 
 /-- Denote a binary primitive to its Lean operation. -/
 def Bin.denote {M : Type → Type} {a b c : Tp} :
@@ -234,19 +270,19 @@ def Bin.denote {M : Type → Type} {a b c : Tp} :
   | .or,   x, y => x || y
   | .pair, x, y => (x, y)
 
-/-! ### `Tp`-coded effect signatures
+/-! ### Coded effect signatures
 
 The syntactic mirrors of `EffSpec`/`BindSpec`: the same shapes, but with all payload types
-given by `Tp` *codes* rather than host `Type`s — the AST is data, so its vocabulary must be
-too.  `spec` instantiates a coded signature at a target monad, recovering the host-level spec
-a source `Freek` program lives over. -/
+given by object-type *codes* rather than host `Type`s — the AST is data, so its vocabulary
+must be too.  Effects are first-order (`Tp0`) and define their ITree event domain directly;
+custom control flow can use full `Tp` because its interpreter runs in the denotation domain. -/
 
-/-- A first-order effect vocabulary coded in `Tp`: event `e` takes a `𝓘 e` and returns an
+/-- A first-order effect vocabulary coded in `Tp0`: event `e` takes a `𝓘 e` and returns an
     `𝓞 e`. -/
 structure EffSig : Type 1 where
   ε : Type
-  𝓘 : ε → Tp
-  𝓞 : ε → Tp
+  𝓘 : ε → Tp0
+  𝓞 : ε → Tp0
 
 /-- A custom-control-flow vocabulary coded in `Tp`: operation `e` takes a `𝓘 e`, carries one
     sub-computation (block) per branch label `b : 𝓑 e` producing a `𝓑τ e b`, and returns an
@@ -259,12 +295,11 @@ structure BindSig : Type 1 where
   𝓑 : ε → Type
   𝓑τ : (e : ε) → 𝓑 e → Tp
 
-/-- Instantiate a coded effect signature at a target monad.  (Reducible: downstream statements
-    identify `(𝓔.spec M).𝓘 e` with `Tp.denote M (𝓔.𝓘 e)` definitionally.) -/
-@[reducible] def EffSig.spec (𝓔 : EffSig) (M : Type → Type) : EffSpec where
+/-- Instantiate a coded first-order effect signature as a host-level `EffSpec`. -/
+@[reducible] def EffSig.spec (𝓔 : EffSig) : EffSpec where
   ε := 𝓔.ε
-  𝓘 := fun e => (𝓔.𝓘 e).denote M
-  𝓞 := fun e => (𝓔.𝓞 e).denote M
+  𝓘 := fun e => (𝓔.𝓘 e).denote
+  𝓞 := fun e => (𝓔.𝓞 e).denote
 
 /-- Instantiate a coded custom-control-flow signature at a target monad. -/
 @[reducible] def BindSig.spec (𝓑 : BindSig) (M : Type → Type) : BindSpec where
@@ -274,13 +309,22 @@ structure BindSig : Type 1 where
   𝓑 := 𝓑.𝓑
   𝓑τ := fun e b => (𝓑.𝓑τ e b).denote M
 
-/-! ### Interpreters and the recursion-slot-indexed domain -/
+/-- A coded effect event with its denoted input packaged into the ITree event itself. -/
+structure EffSig.Event (𝓔 : EffSig) : Type where
+  e : 𝓔.ε
+  input : (𝓔.𝓘 e).denote
 
-/-- An **effect interpreter** into the tree domain over `(ε, br)`: gives each effect its tree
-    (typically a `vis` — but which event, and how the payload is packaged, is its choice).
-    This is `Freek.eval`'s `evalEff` at `M := CompE ε br`, over coded types. -/
-abbrev EffInterp (𝓔 : EffSig) (ε : Type) (br : ε → Type) : Type :=
-  (e : 𝓔.ε) → Tp.denote (CompE ε br) (𝓔.𝓘 e) → CompE ε br (Tp.denote (CompE ε br) (𝓔.𝓞 e))
+/-- The output arity of a coded effect event. -/
+@[reducible] def EffSig.Event.arity {𝓔 : EffSig} : 𝓔.Event → Type
+  | ⟨e, _⟩ => (𝓔.𝓞 e).denote
+
+open ITree in
+/-- Perform a coded first-order effect as an uninterpreted ITree event. -/
+def EffSig.trigger {𝓔 : EffSig} (e : 𝓔.ε) (i : (𝓔.𝓘 e).denote) :
+    CompE 𝓔.Event EffSig.Event.arity ((𝓔.𝓞 e).denote) :=
+  ITree.vis ⟨e, i⟩ ITree.ret
+
+/-! ### Interpreters and the recursion-slot-indexed domain -/
 
 /-- A **`bindEff` interpreter** into the tree domain over `(ε, br)`: receives the operation,
     its (denoted) input, and one *denoted block* per branch label — full trees — and returns
@@ -359,7 +403,8 @@ inductive Expr (𝓔 : EffSig) (𝓑 : BindSig) (V : Tp → Type) : Option (Tp �
   | selfCall {α a b} : V a → (V b → Expr 𝓔 𝓑 V (some (a, b)) α) →
       Expr 𝓔 𝓑 V (some (a, b)) α
   /-- Perform an effect. -/
-  | eff     {r α} (e : 𝓔.ε) : V (𝓔.𝓘 e) → (V (𝓔.𝓞 e) → Expr 𝓔 𝓑 V r α) → Expr 𝓔 𝓑 V r α
+  | eff     {r α} (e : 𝓔.ε) : V (.base (𝓔.𝓘 e)) →
+      (V (.base (𝓔.𝓞 e)) → Expr 𝓔 𝓑 V r α) → Expr 𝓔 𝓑 V r α
   /-- Perform a custom-control-flow operation: the blocks are carried as **uninterpreted
       sub-computations** — the syntactic mirror of `Freek.bindEff`, reflected one-to-one, never
       flattened.  Blocks are `none`-indexed: a block may not `selfCall` the enclosing
@@ -367,37 +412,37 @@ inductive Expr (𝓔 : EffSig) (𝓑 : BindSig) (V : Tp → Type) : Option (Tp �
   | bindEff {r α} (e : 𝓑.ε) : V (𝓑.𝓘 e) → ((b : 𝓑.𝓑 e) → Expr 𝓔 𝓑 V none (𝓑.𝓑τ e b)) →
       (V (𝓑.𝓞 e) → Expr 𝓔 𝓑 V r α) → Expr 𝓔 𝓑 V r α
 
-/-- **The AST's meaning**, given an effect interpreter and a `bindEff` interpreter — so an
-    `Expr`'s denotation is the function `fun hE hB => Expr.denote hE hB e`, and soundness
-    quantifies over the target signature `(ε, br)` and both interpreters.  At
-    `V := Tp.denote (CompE ε br)`: a `lam` suspends its body as a base-domain Kleisli arrow, an
-    `app` binds the arrow's computation (`lift`ed into a `letrec` body's extended domain), an
-    `eff`/`bindEff` hands its input (and denoted blocks) to the interpreter, and a **`letrec`
-    ties the knot with `mrec`** — a `selfCall` is the call event.  Only `mrec` introduces
-    `tau`s: a `letrec`-free program denotes to a tree exactly as deep as its interpreters
-    make it. -/
-def Expr.denote {𝓔 : EffSig} {𝓑 : BindSig} {ε : Type} {br : ε → Type}
-    (hE : EffInterp 𝓔 ε br) (hB : BindInterp 𝓑 ε br) :
+/-- **The AST's meaning**, given a `bindEff` interpreter.  First-order `eff` nodes are not
+    interpreted: they are emitted as `vis` nodes in the coded `EffSig` ITree event system.  At
+    `V := Tp.denote (CompE 𝓔.Event EffSig.Event.arity)`: a `lam` suspends its body as a
+    base-domain Kleisli arrow, an `app` binds the arrow's computation (`lift`ed into a `letrec`
+    body's extended domain), `bindEff` hands its denoted blocks to the interpreter, and a
+    **`letrec` ties the knot with `mrec`** — a `selfCall` is the call event. -/
+def Expr.denote {𝓔 : EffSig} {𝓑 : BindSig}
+    (hB : BindInterp 𝓑 𝓔.Event EffSig.Event.arity) :
     {r : Option (Tp × Tp)} → {α : Tp} →
-      Expr 𝓔 𝓑 (Tp.denote (CompE ε br)) r α → DomR ε br r (Tp.denote (CompE ε br) α)
+      Expr 𝓔 𝓑 (Tp.denote (CompE 𝓔.Event EffSig.Event.arity)) r α →
+        DomR 𝓔.Event EffSig.Event.arity r
+          (Tp.denote (CompE 𝓔.Event EffSig.Event.arity) α)
   | _, _, .ret v         => DomR.ret v
-  | _, _, .natLit n k    => Expr.denote hE hB (k n)
-  | _, _, .boolLit b k   => Expr.denote hE hB (k b)
-  | _, _, .unitLit k     => Expr.denote hE hB (k ())
-  | _, _, .un o a k      => Expr.denote hE hB (k (o.denote a))
-  | _, _, .bin o a b k   => Expr.denote hE hB (k (o.denote a b))
+  | _, _, .natLit n k    => Expr.denote hB (k n)
+  | _, _, .boolLit b k   => Expr.denote hB (k b)
+  | _, _, .unitLit k     => Expr.denote hB (k ())
+  | _, _, .un o a k      => Expr.denote hB (k (o.denote a))
+  | _, _, .bin o a b k   => Expr.denote hB (k (o.denote a b))
   | _, _, .ite c t e k   =>
-      DomR.bind (cond c (Expr.denote hE hB t) (Expr.denote hE hB e)) fun v =>
-        Expr.denote hE hB (k v)
-  | _, _, .lam body k    => Expr.denote hE hB (k fun x => Expr.denote hE hB (body x))
-  | _, _, .app f x k     => DomR.bind (DomR.lift (f x)) fun v => Expr.denote hE hB (k v)
+      DomR.bind (cond c (Expr.denote hB t) (Expr.denote hB e)) fun v =>
+        Expr.denote hB (k v)
+  | _, _, .lam body k    => Expr.denote hB (k fun x => Expr.denote hB (body x))
+  | _, _, .app f x k     => DomR.bind (DomR.lift (f x)) fun v => Expr.denote hB (k v)
   | _, _, .letrec body k =>
-      Expr.denote hE hB (k (mrec fun s => Expr.denote hE hB (body s)))
-  | _, _, .selfCall x k  => vis (Sum.inr x) fun v => Expr.denote hE hB (k v)
-  | _, _, .eff e i k     => DomR.bind (DomR.lift (hE e i)) fun o => Expr.denote hE hB (k o)
+      Expr.denote hB (k (mrec fun s => Expr.denote hB (body s)))
+  | _, _, .selfCall x k  => vis (Sum.inr x) fun v => Expr.denote hB (k v)
+  | _, _, .eff e i k     => DomR.bind (DomR.lift (EffSig.trigger e i)) fun o =>
+      Expr.denote hB (k o)
   | _, _, .bindEff e i blocks k =>
-      DomR.bind (DomR.lift (hB e i fun b => Expr.denote hE hB (blocks b))) fun o =>
-        Expr.denote hE hB (k o)
+      DomR.bind (DomR.lift (hB e i fun b => Expr.denote hB (blocks b))) fun o =>
+        Expr.denote hB (k o)
 
 /-- A closed program, parametric in the value representation. -/
 def Closed (𝓔 : EffSig) (𝓑 : BindSig) (α : Tp) : Type 1 :=
@@ -405,24 +450,14 @@ def Closed (𝓔 : EffSig) (𝓑 : BindSig) (α : Tp) : Type 1 :=
 
 end Ast2
 
-/-! ### The signature bridge
+/-! ### The `bindEff` signature bridge
 
 A source program is written in a *host-level* monad — `Freek` over an `EffSpec`/`BindSpec`
-whose payloads are plain `Type`s; the author never sees `Tp`.  The AST works over *coded*
-signatures.  `Realizes` is the bridge: an (`M`-indexed) map `φ` of operation names under which
-the host payload types are the denotations of the codes.  `φ` need not be surjective — a
-`circuitBlock`-style spec has an operation per host `Type`, and the coded signature names only
-the **representable fragment**, which is all a reflected program ever uses.  The `restrict`
-transport is where that knowledge is *used*: a host interpreter restricts to a coded one, so a
-reflected AST (denoted under the restricted interpreters) and its source (run through
-`Freek.eval` under the host interpreters) meet in the same tree domain — soundness statements
-therefore quantify over **host** interpreters. -/
-
-open ITree in
-/-- An interpreter for a host-level effect spec in the tree domain over `(ε, br)` —
-    `Freek.eval`'s `evalEff` shape at `M := CompE ε br`. -/
-@[reducible] def EffSpec.Interp (𝓔' : EffSpec) (ε : Type) (br : ε → Type) : Type _ :=
-  (e : 𝓔'.ε) → 𝓔'.𝓘 e → CompE ε br (𝓔'.𝓞 e)
+whose payloads are plain `Type`s; the author never sees `Tp`.  The AST works over coded
+signatures.  First-order effects are hoisted into the coded ITree event signature directly.
+`Realizes` remains only for `bindEff`: a `circuitBlock`-style spec has an operation per host
+`Type`, and the coded signature names only the **representable fragment**, which is all a
+reflected program ever uses. -/
 
 open ITree in
 /-- An interpreter for a host-level custom-control-flow spec in the tree domain —
@@ -432,14 +467,6 @@ open ITree in
 
 namespace Ast2
 
-/-- The coded `𝓔` **realizes** (the representable fragment of) the host spec `𝓔'`: an
-    `M`-indexed operation-name map under which the host payload types are pulled back along
-    `Tp.denote` from the codes. -/
-structure EffSig.Realizes (𝓔 : EffSig) (𝓔' : EffSpec) where
-  φ : (M : Type → Type) → 𝓔.ε → 𝓔'.ε
-  input_eq : ∀ M e, 𝓔'.𝓘 (φ M e) = Tp.denote M (𝓔.𝓘 e)
-  output_eq : ∀ M e, 𝓔'.𝓞 (φ M e) = Tp.denote M (𝓔.𝓞 e)
-
 /-- The coded `𝓑` realizes (the representable fragment of) the host spec `𝓑'`. -/
 structure BindSig.Realizes (𝓑 : BindSig) (𝓑' : BindSpec) where
   φ : (M : Type → Type) → 𝓑.ε → 𝓑'.ε
@@ -448,16 +475,6 @@ structure BindSig.Realizes (𝓑 : BindSig) (𝓑' : BindSpec) where
   br_eq : ∀ M e, 𝓑'.𝓑 (φ M e) = 𝓑.𝓑 e
   brTp_eq : ∀ M e (b : 𝓑'.𝓑 (φ M e)),
     𝓑'.𝓑τ (φ M e) b = Tp.denote M (𝓑.𝓑τ e (cast (br_eq M e) b))
-
-open ITree in
-/-- Restrict a host interpreter to the coded signature across a realization — a reflected
-    AST's denotation only ever needs the representable operations.  When the realization's
-    equations are `rfl`, every `cast` reduces away. -/
-def EffSig.Realizes.restrict {𝓔 : EffSig} {𝓔' : EffSpec} {ε : Type} {br : ε → Type}
-    (h : 𝓔.Realizes 𝓔') (hE : 𝓔'.Interp ε br) : EffInterp 𝓔 ε br :=
-  fun e i =>
-    cast (congrArg (CompE ε br) (h.output_eq (CompE ε br) e))
-      (hE (h.φ (CompE ε br) e) (cast (h.input_eq (CompE ε br) e).symm i))
 
 open ITree in
 /-- Restrict a host `bindEff` interpreter to the coded signature across a realization. -/
