@@ -68,6 +68,10 @@ def dest {α : Type u} (x : CompE 𝓔 𝓑 α) : Step 𝓔 𝓑 (CompE 𝓔 �
     dest (mk x) = x :=
   IxPFunctor.M.dest_ofStep x
 
+@[simp] theorem raw_dest_mk {α : Type u} (x : Step 𝓔 𝓑 (CompE 𝓔 𝓑) α) :
+    IxPFunctor.M.dest (mk x) = x :=
+  IxPFunctor.M.dest_ofStep x
+
 /-- Return a value. -/
 def ret {α : Type u} (a : α) : CompE 𝓔 𝓑 α :=
   mk (Step.ret a)
@@ -233,6 +237,197 @@ instance : Monad (CompE 𝓔 𝓑) where
 
 @[simp] theorem bind_def {α β : Type u} (m : CompE 𝓔 𝓑 α) (k : α → CompE 𝓔 𝓑 β) :
     m >>= k = bind m k := rfl
+
+theorem corec_copy {α β γ : Type u} (k : α → CompE 𝓔 𝓑 β) (t : CompE 𝓔 𝓑 γ) :
+    IxPFunctor.M.corec (P := P 𝓔 𝓑) (bindCo k) (.copy t) = t := by
+  refine IxPFunctor.M.bisim (P := P 𝓔 𝓑)
+    (fun γ x y =>
+      x = IxPFunctor.M.corec (P := P 𝓔 𝓑) (bindCo k)
+        (.copy y : BindState 𝓔 𝓑 α β γ)) ?_ _ _ rfl
+  intro γ x y hxy
+  subst hxy
+  obtain ⟨p, c, hy⟩ : ∃ p c, dest y = ⟨p, c⟩ := ⟨_, _, rfl⟩
+  refine ⟨p, fun a => IxPFunctor.M.corec (P := P 𝓔 𝓑) (bindCo k) (.copy (c a)),
+    c, ?_, hy, fun _ => rfl⟩
+  rw [IxPFunctor.M.dest_corec]
+  simp only [bindCo]
+  rw [hy]
+  rfl
+
+@[simp] theorem bind_ret {α β : Type u} (a : α) (k : α → CompE 𝓔 𝓑 β) :
+    bind (ret a) k = k a := by
+  apply eq_of_dest_eq
+  obtain ⟨p, c, hk⟩ : ∃ p c, dest (k a) = ⟨p, c⟩ := ⟨_, _, rfl⟩
+  rw [bind, corec]
+  change IxPFunctor.M.dest
+      (IxPFunctor.M.corec (P := P 𝓔 𝓑) (bindCo k) (.bind (ret a))) = dest (k a)
+  rw [IxPFunctor.M.dest_corec]
+  simp only [bindCo, ret]
+  rw [dest_mk]
+  simp only [Step.ret, IxPFunctor.map, corec_copy]
+
+@[simp] theorem bind_tau {α β : Type u} (t : CompE 𝓔 𝓑 α) (k : α → CompE 𝓔 𝓑 β) :
+    bind (tau t) k = tau (bind t k) := by
+  apply eq_of_dest_eq
+  rw [bind, corec]
+  change IxPFunctor.M.dest
+      (IxPFunctor.M.corec (P := P 𝓔 𝓑) (bindCo k) (.bind (tau t))) =
+    dest (tau (bind t k))
+  rw [IxPFunctor.M.dest_corec]
+  simp only [bindCo, tau]
+  rw [dest_mk, dest_mk]
+  simp only [Step.tau, IxPFunctor.map, bind, corec]
+  refine Sigma.ext rfl ?_
+  apply heq_of_eq
+  funext x
+  cases x
+  rfl
+
+@[simp] theorem bind_fail {α β : Type u} (k : α → CompE 𝓔 𝓑 β) :
+    bind (fail : CompE 𝓔 𝓑 α) k = fail := by
+  apply eq_of_dest_eq
+  rw [bind, corec]
+  change IxPFunctor.M.dest
+      (IxPFunctor.M.corec (P := P 𝓔 𝓑) (bindCo k)
+        (.bind (fail : CompE 𝓔 𝓑 α))) =
+    dest (fail : CompE 𝓔 𝓑 β)
+  rw [IxPFunctor.M.dest_corec]
+  simp only [bindCo, fail]
+  rw [dest_mk, dest_mk]
+  simp only [Step.fail, IxPFunctor.map]
+  refine Sigma.ext rfl ?_
+  apply heq_of_eq
+  funext h
+  exact PEmpty.elim h
+
+@[simp] theorem bind_vis {α β : Type u} (e : 𝓔.ε) (i : 𝓔.input e)
+    (c : 𝓔.output e → CompE 𝓔 𝓑 α) (k : α → CompE 𝓔 𝓑 β) :
+    bind (vis e i c) k = vis e i (fun o => bind (c o) k) := by
+  apply eq_of_dest_eq
+  rw [bind, corec]
+  change IxPFunctor.M.dest
+      (IxPFunctor.M.corec (P := P 𝓔 𝓑) (bindCo k) (.bind (vis e i c))) =
+    dest (vis e i (fun o => bind (c o) k))
+  rw [IxPFunctor.M.dest_corec]
+  simp only [bindCo, vis]
+  rw [dest_mk, dest_mk]
+  simp only [Step.vis, IxPFunctor.map, bind, corec]
+  refine Sigma.ext rfl ?_
+  apply heq_of_eq
+  funext x
+  cases x
+  rfl
+
+@[simp] theorem bind_bindEff {α β : Type u} (e : 𝓑.ε) (i : 𝓑.input e)
+    (blocks : (b : 𝓑.branch e) → CompE 𝓔 𝓑 (𝓑.branchOutput e b))
+    (c : 𝓑.output e → CompE 𝓔 𝓑 α) (k : α → CompE 𝓔 𝓑 β) :
+    bind (bindEff e i blocks c) k = bindEff e i blocks (fun o => bind (c o) k) := by
+  apply eq_of_dest_eq
+  rw [bind, corec]
+  change IxPFunctor.M.dest
+      (IxPFunctor.M.corec (P := P 𝓔 𝓑) (bindCo k)
+        (.bind (bindEff e i blocks c))) =
+    dest (bindEff e i blocks (fun o => bind (c o) k))
+  rw [IxPFunctor.M.dest_corec]
+  simp only [bindCo, bindEff]
+  rw [dest_mk, dest_mk]
+  simp only [Step.bindEff, IxPFunctor.map, bind, corec]
+  refine Sigma.ext rfl ?_
+  apply heq_of_eq
+  funext x
+  cases x with
+  | inl b =>
+      cases b
+      exact corec_copy k (blocks _)
+  | inr o =>
+      cases o
+      rfl
+
+private def BindRightRel (γ : Type u) (x y : CompE 𝓔 𝓑 γ) : Prop :=
+  (∃ m : CompE 𝓔 𝓑 γ, x = bind m ret ∧ y = m) ∨ x = y
+
+theorem bind_ret_right {α : Type u} (m : CompE 𝓔 𝓑 α) : bind m ret = m := by
+  refine IxPFunctor.M.bisim (P := P 𝓔 𝓑) BindRightRel ?_ _ _ (Or.inl ⟨m, rfl, rfl⟩)
+  intro γ x y hxy
+  rcases hxy with ⟨m, hx, hy⟩ | hxy
+  ·
+      rw [hx, hy]
+      rcases cases_view m with
+        ⟨a, hm⟩ | hm | ⟨t, hm⟩ | ⟨e, i, c, hm⟩ |
+        ⟨e, i, blocks, c, hm⟩
+      · rw [hm, bind_ret]
+        exact ⟨Pos.ret a, _, _, by rw [ret, raw_dest_mk]; rfl, by rw [ret, raw_dest_mk]; rfl,
+          fun h => PEmpty.elim h⟩
+      · rw [hm, bind_fail]
+        exact ⟨Pos.fail, _, _, by rw [fail, raw_dest_mk]; rfl, by rw [fail, raw_dest_mk]; rfl,
+          fun h => PEmpty.elim h⟩
+      · rw [hm, bind_tau]
+        exact ⟨Pos.tau, _, _, dest_tau _, dest_tau _, fun _ => Or.inl ⟨t, rfl, rfl⟩⟩
+      · rw [hm, bind_vis]
+        exact ⟨Pos.vis e i, _, _, dest_vis _ _ _, dest_vis _ _ _,
+          fun o => Or.inl ⟨c o.down, rfl, rfl⟩⟩
+      · rw [hm, bind_bindEff]
+        exact ⟨Pos.bindEff e i, _, _, dest_bindEff _ _ _ _, dest_bindEff _ _ _ _,
+          fun
+            | Sum.inl b => Or.inr rfl
+            | Sum.inr o => Or.inl ⟨c o.down, rfl, rfl⟩⟩
+  ·
+      rw [hxy]
+      obtain ⟨p, c, hd⟩ :
+          ∃ (p : (P 𝓔 𝓑).Pos γ)
+            (c : (a : (P 𝓔 𝓑).Ar p) → CompE 𝓔 𝓑 ((P 𝓔 𝓑).next p a)),
+            dest y = ⟨p, c⟩ := ⟨_, _, rfl⟩
+      exact ⟨p, c, c, hd, hd, fun a => Or.inr rfl⟩
+
+private inductive BindAssocRel {α β γ : Type u}
+    (k : α → CompE 𝓔 𝓑 β) (h : β → CompE 𝓔 𝓑 γ) :
+    (δ : Type u) → CompE 𝓔 𝓑 δ → CompE 𝓔 𝓑 δ → Prop where
+  | root {x y : CompE 𝓔 𝓑 γ} (m : CompE 𝓔 𝓑 α)
+      (hx : x = bind (bind m k) h)
+      (hy : y = bind m fun a => bind (k a) h) : BindAssocRel k h γ x y
+  | eq {δ : Type u} {x y : CompE 𝓔 𝓑 δ} (hxy : x = y) : BindAssocRel k h δ x y
+
+theorem bind_assoc {α β γ : Type u} (m : CompE 𝓔 𝓑 α)
+    (k : α → CompE 𝓔 𝓑 β) (h : β → CompE 𝓔 𝓑 γ) :
+    bind (bind m k) h = bind m (fun a => bind (k a) h) := by
+  refine IxPFunctor.M.bisim (P := P 𝓔 𝓑) (BindAssocRel k h) ?_ _ _ (.root m rfl rfl)
+  intro δ x y hxy
+  cases hxy with
+  | root m hx hy =>
+      cases hx
+      cases hy
+      rcases cases_view m with
+        ⟨a, hm⟩ | hm | ⟨t, hm⟩ | ⟨e, i, c, hm⟩ |
+        ⟨e, i, blocks, c, hm⟩
+      · rw [hm, bind_ret, bind_ret]
+        obtain ⟨p, c', hd'⟩ : ∃ p c', dest (bind (k a) h) = ⟨p, c'⟩ := ⟨_, _, rfl⟩
+        exact ⟨p, c', c', hd', hd', fun a => .eq rfl⟩
+      · rw [hm, bind_fail, bind_fail, bind_fail]
+        exact ⟨Pos.fail, _, _, by rw [fail, raw_dest_mk]; rfl, by rw [fail, raw_dest_mk]; rfl,
+          fun h => PEmpty.elim h⟩
+      · rw [hm, bind_tau, bind_tau, bind_tau]
+        exact ⟨Pos.tau, _, _, dest_tau _, dest_tau _, fun _ => .root t rfl rfl⟩
+      · rw [hm, bind_vis, bind_vis, bind_vis]
+        exact ⟨Pos.vis e i, _, _, dest_vis _ _ _, dest_vis _ _ _,
+          fun o => .root (c o.down) rfl rfl⟩
+      · rw [hm, bind_bindEff, bind_bindEff, bind_bindEff]
+        exact ⟨Pos.bindEff e i, _, _, dest_bindEff _ _ _ _, dest_bindEff _ _ _ _,
+          fun
+            | Sum.inl b => .eq rfl
+            | Sum.inr o => .root (c o.down) rfl rfl⟩
+  | eq hxy =>
+      cases hxy
+      obtain ⟨p, c, hd⟩ :
+          ∃ (p : (P 𝓔 𝓑).Pos δ)
+            (c : (a : (P 𝓔 𝓑).Ar p) → CompE 𝓔 𝓑 ((P 𝓔 𝓑).next p a)),
+            dest x = ⟨p, c⟩ := ⟨_, _, rfl⟩
+      exact ⟨p, c, c, hd, hd, fun a => .eq rfl⟩
+
+instance : LawfulMonad (CompE 𝓔 𝓑) :=
+  LawfulMonad.mk' _
+    (fun m => bind_ret_right m)
+    (fun a k => bind_ret a k)
+    (fun m k h => bind_assoc m k h)
 
 end CompE
 

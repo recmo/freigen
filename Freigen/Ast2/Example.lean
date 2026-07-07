@@ -1,5 +1,4 @@
-import Freigen.Ast2.Basic
-import Freigen.ITree2.Eutt
+import Freigen.Ast2.Reflect
 
 /-!
 # A hand-reflected circuit over `ITree2`
@@ -122,33 +121,6 @@ This ITree2 version has no `EffInterp`/`BindInterp` bridge: source and AST both 
 the same `CircE.spec`/`CircB.spec` tree signature, so the proof relation is plain equality.
 -/
 
-/-- Reflect `pure`: emit `ret` on an atom whose defining equation matches the source value. -/
-theorem reflect_ret {α : Tp0} (v : α.denote) {v' : α.denote} (h : v = v') :
-    Expr.denote (.ret v : Expr CircE CircB Tp0.denote none α) = evalC (.pure v') := by
-  rw [h]
-  rfl
-
-/-- Reflect a primitive: emit a `bin` node binding a fresh atom `vc` with its defining
-    equation. -/
-theorem reflect_bin {a b c α : Tp0} (o : Bin a b c) (va : a.denote) (vb : b.denote)
-    {k : c.denote → Expr CircE CircB Tp0.denote none α} {t : M α.denote}
-    (ih : ∀ vc, vc = o.denote va vb → Expr.denote (k vc) = t) :
-    Expr.denote (.bin o va vb k) = t :=
-  ih _ rfl
-
-/-- Reflect an effect node.  The input side condition is discharged from the accumulated
-    defining equations. -/
-theorem reflect_eff {α : Tp0} (e : CircE.ε) (i : (CircE.𝓘 e).denote)
-    {i' : (CircE.𝓘 e).denote}
-    {k : (CircE.𝓞 e).denote → Expr CircE CircB Tp0.denote none α}
-    {ks : (CircE.𝓞 e).denote → Circuit α.denote} (hi : i = i')
-    (ih : ∀ o, Expr.denote (k o) = evalC (ks o)) :
-    Expr.denote (.eff e i k) = evalC (Freek.eff e i' ks) := by
-  subst hi
-  show ITree2.CompE.bind (EffSig.trigger (𝓑 := CircB) e i) (fun o => Expr.denote (k o)) =
-    ITree2.CompE.bind (EffSig.trigger (𝓑 := CircB) e i) (fun o => evalC (ks o))
-  exact congrArg (ITree2.CompE.bind (EffSig.trigger (𝓑 := CircB) e i)) (funext ih)
-
 /-- `sqAssertSrc`, reflected top-down: the AST component is the `_`, discovered by the
     `apply` trace along the source circuit. -/
 def sqAssertReflected (x : Nat) :
@@ -156,11 +128,15 @@ def sqAssertReflected (x : Nat) :
       Expr.denote e = evalC (sqAssertSrc x) } :=
   ⟨_, by
     unfold sqAssertSrc Circuit.assert
+    change Expr.denote (_ : Expr CircE CircB Tp0.denote none .nat) =
+      Freek.toITree
+        (Freek.eff (𝓔 := CircE.spec) (𝓑 := CircB.spec) ()
+          (decide (x ≤ x * x)) (fun _ => Freek.pure (x * x)))
     apply reflect_bin .mul x x
     intro y hy
     apply reflect_bin .le x y
     intro c hc
-    apply reflect_eff () c
+    apply reflect_eff (𝓔 := CircE) (𝓑 := CircB) () c
     · rw [hy] at hc
       exact hc
     · intro _
@@ -170,56 +146,21 @@ def sqAssertReflected (x : Nat) :
 /-- The top-down proof trace reconstructs exactly the hand-written helper AST. -/
 example (x : Nat) : (sqAssertReflected x).1 = sqAssertAst (V := Tp0.denote) x := rfl
 
-/-! ## Third style: pack-returning combinators
-
-The same top-down trace, but the `reflect_*` theorems become functions returning packed
-`(AST, proof)` values.  Each `apply` invokes a function whose result literally contains the
-emitted node, so the syntax is assembled by the combinators themselves.
--/
-
-/-- A reflection of source `m`, conditional on pending defining equations `Φ`. -/
-def Reflection (Φ : Prop) (α : Tp0) (m : Circuit α.denote) : Type 2 :=
-  { e : Expr CircE CircB Tp0.denote none α //
-    Φ → Expr.denote e = evalC m }
-
-/-- Reflect `pure`: the pack's node is `ret v`; the value condition may assume `Φ`. -/
-def Reflection.ret {Φ : Prop} {α : Tp0} (v : α.denote) {v' : α.denote}
-    (h : Φ → v = v') : Reflection Φ α (.pure v') :=
-  ⟨.ret v, fun hΦ => by
-    rw [h hΦ]
-    rfl⟩
-
-/-- Reflect a primitive.  The continuation works under the extended equation context
-    `Φ ∧ vc = o.denote va vb`, discharged here at the actual primitive result. -/
-def Reflection.bin {Φ : Prop} {a b c α : Tp0} (o : Bin a b c)
-    (va : a.denote) (vb : b.denote) {m : Circuit α.denote}
-    (k : ∀ vc, Reflection (Φ ∧ vc = o.denote va vb) α m) :
-    Reflection Φ α m :=
-  ⟨.bin o va vb fun vc => (k vc).1, fun hΦ => (k _).2 ⟨hΦ, rfl⟩⟩
-
-/-- Reflect an effect node. -/
-def Reflection.eff {Φ : Prop} {α : Tp0} (e : CircE.ε) (i : (CircE.𝓘 e).denote)
-    {i' : (CircE.𝓘 e).denote} (hi : Φ → i = i')
-    {ks : (CircE.𝓞 e).denote → Circuit α.denote}
-    (k : ∀ o, Reflection Φ α (ks o)) :
-    Reflection Φ α (Freek.eff e i' ks) :=
-  ⟨.eff e i fun o => (k o).1, fun hΦ => by
-    rw [hi hΦ]
-    show ITree2.CompE.bind (EffSig.trigger (𝓑 := CircB) e i') (fun o =>
-        Expr.denote ((k o).1)) =
-      ITree2.CompE.bind (EffSig.trigger (𝓑 := CircB) e i') (fun o => evalC (ks o))
-    exact congrArg (ITree2.CompE.bind (EffSig.trigger (𝓑 := CircB) e i'))
-      (funext fun o => (k o).2 hΦ)⟩
+/-! ## Third style: pack-returning combinators -/
 
 /-- `sqAssertSrc` reflected in the third style: the same `apply` trace, but every `apply`
     calls a pack-returning function. -/
-def sqAssertReflected' (x : Nat) : Reflection True .nat (sqAssertSrc x) := by
+def sqAssertReflected' (x : Nat) :
+    Reflection (𝓔 := CircE) (𝓑 := CircB) True .nat (sqAssertSrc x) := by
   unfold sqAssertSrc Circuit.assert
+  change Reflection (𝓔 := CircE) (𝓑 := CircB) True .nat
+    (Freek.eff (𝓔 := CircE.spec) (𝓑 := CircB.spec) ()
+      (decide (x ≤ x * x)) (fun _ => Freek.pure (x * x)))
   apply Reflection.bin .mul x x
   intro y
   apply Reflection.bin .le x y
   intro c
-  apply Reflection.eff () c
+  apply Reflection.eff (𝓔 := CircE) (𝓑 := CircB) () c
   · rintro ⟨⟨-, hy⟩, hc⟩
     rw [hy] at hc
     exact hc
@@ -229,33 +170,8 @@ def sqAssertReflected' (x : Nat) : Reflection True .nat (sqAssertSrc x) := by
     exact hy
 
 /-- The third style also reconstructs exactly the hand-written helper AST. -/
-example (x : Nat) : (sqAssertReflected' x).1 = sqAssertAst (V := Tp0.denote) x := rfl
-
-/-! ## Application-shaped reflection
-
-The old generic application combinator used `Freek.eval_bind` against the target tree monad.
-For `ITree2.CompE` that requires monad laws that have not yet been ported to `ITree2`, so this
-version makes the source bind shape an explicit premise.  For concrete unfolded examples the
-premise is definitional and can still be generated by the walk. -/
-
-/-- Reflect a helper application. -/
-def Reflection.app {Φ : Prop} {α a b : Tp0} (f : a.denote → M b.denote) (x : a.denote)
-    {fSrc : a.denote → Circuit b.denote}
-    (hf : Φ → f x = evalC (fSrc x))
-    {ks : b.denote → Circuit α.denote}
-    (hsrc : Φ → evalC (Freek.bind (fSrc x) ks) =
-      ITree2.CompE.bind (evalC (fSrc x)) fun o => evalC (ks o))
-    (k : ∀ o, Reflection Φ α (ks o)) :
-    Reflection Φ α (Freek.bind (fSrc x) ks) :=
-  ⟨.app f x fun o => (k o).1, fun hΦ => by
-    calc
-      ITree2.CompE.bind (f x) (fun o => Expr.denote ((k o).1))
-          = ITree2.CompE.bind (evalC (fSrc x)) (fun o => Expr.denote ((k o).1)) := by
-              rw [hf hΦ]
-      _ = ITree2.CompE.bind (evalC (fSrc x)) (fun o => evalC (ks o)) := by
-              exact congrArg (ITree2.CompE.bind (evalC (fSrc x)))
-                (funext fun o => (k o).2 hΦ)
-      _ = evalC (Freek.bind (fSrc x) ks) := (hsrc hΦ).symm⟩
+example (x : Nat) : (sqAssertReflected' x).1 =
+    sqAssertAst (V := Tp0.denote) x := rfl
 
 end Example
 end Ast2

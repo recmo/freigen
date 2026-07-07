@@ -97,6 +97,17 @@ def Freek.toITree {𝓔 : ITree2.EffSig.{uEff,uEffIn,u}}
     (fun e i => ITree2.CompE.vis e i ITree2.CompE.ret)
     (fun e i blocks => ITree2.CompE.bindEff e i blocks ITree2.CompE.ret)
 
+theorem Freek.toITree_bind {𝓔 : ITree2.EffSig.{uEff,uEffIn,u}}
+    {𝓑 : ITree2.BindSig.{u,uBind,uBindIn,u,uBranch}} {α β : Type u}
+    (m : Freek 𝓔 𝓑 α) (f : α → Freek 𝓔 𝓑 β) :
+    Freek.toITree (m.bind f) =
+      ITree2.CompE.bind (Freek.toITree m) (fun a => Freek.toITree (f a)) := by
+  unfold Freek.toITree
+  exact Freek.eval_bind
+    (fun e i => ITree2.CompE.vis e i ITree2.CompE.ret)
+    (fun e i blocks => ITree2.CompE.bindEff e i blocks ITree2.CompE.ret)
+    m f
+
 /-!
 ## The object-type universe and the AST
 
