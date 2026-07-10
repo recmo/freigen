@@ -9,7 +9,7 @@ universe u v
 /-- Free syntax for higher-order operations with dynamically bound block arguments. -/
 inductive Freek (H : ITree2.HSig.{u}) : Type u → Type (u+1) where
   | pure {α} : α → Freek H α
-  | op {α} (e : H.ε) : H.input e →
+  | op {α} (e : H.op) : H.input e →
       ((b : H.branch e) → H.branchInput e b → Freek H (H.branchOutput e b)) →
       (H.output e → Freek H α) → Freek H α
 
@@ -40,7 +40,7 @@ instance {H} : LawfulMonad (Freek H) :=
     (fun m f g => Freek.bind_assoc m f g)
 
 def Freek.eval {M : Type u → Type v} [Monad M] {H α}
-    (evalOp : (e : H.ε) → H.input e →
+    (evalOp : (e : H.op) → H.input e →
       ((b : H.branch e) → H.branchInput e b → M (H.branchOutput e b)) →
       M (H.output e)) : Freek H α → M α
   | .pure a => Pure.pure a
@@ -49,7 +49,7 @@ def Freek.eval {M : Type u → Type v} [Monad M] {H α}
       Freek.eval evalOp (k o)
 
 theorem Freek.eval_bind {M : Type u → Type v} [Monad M] [LawfulMonad M] {H} {α β}
-    (evalOp : (e : H.ε) → H.input e →
+    (evalOp : (e : H.op) → H.input e →
       ((b : H.branch e) → H.branchInput e b → M (H.branchOutput e b)) →
       M (H.output e)) (m : Freek H α) (f : α → Freek H β) :
     Freek.eval evalOp (m.bind f) = Freek.eval evalOp m >>= fun a => Freek.eval evalOp (f a) := by
@@ -61,9 +61,9 @@ theorem Freek.eval_bind {M : Type u → Type v} [Monad M] [LawfulMonad M] {H} {�
       rw [LawfulMonad.bind_assoc]
       exact congrArg _ (funext fun o => ih o f)
 
-def Freek.toITree {H : ITree2.HSig.{u}} {α : Type u} : Freek H α → ITree2.HComp H α :=
+def Freek.toITree {H : ITree2.HSig.{u}} {α : Type u} : Freek H α → ITree2.CompE H α :=
   Freek.eval fun e i blocks =>
-    ITree2.CompE.bindEff e i (fun bx => blocks bx.1 bx.2) ITree2.CompE.ret
+    ITree2.CompE.op e i (fun bx => blocks bx.1 bx.2) ITree2.CompE.ret
 
 theorem Freek.toITree_bind {H : ITree2.HSig.{u}} {α β : Type u}
     (m : Freek H α) (f : α → Freek H β) :
@@ -190,7 +190,7 @@ structure Signature : Type 1 where
   branchOutput : (e : op) → branch e → Tp0
 
 @[reducible] def Signature.spec (H : Signature) : ITree2.HSig where
-  ε := H.op
+  op := H.op
   input := fun e => (H.input e).denote
   output := fun e => (H.output e).denote
   branch := H.branch
@@ -198,11 +198,10 @@ structure Signature : Type 1 where
   branchOutput := fun e b => (H.branchOutput e b).denote
 
 @[reducible] def DomR (H : Signature) : Option (Tp × Tp) → Type → Type
-  | none => ITree2.HComp H.spec
+  | none => ITree2.CompE H.spec
   | some (a, b) => ITree2.CompE
-      (ITree2.SumEff ITree2.NoEff
-        (ITree2.CallEff (a.denote (ITree2.HComp H.spec)) (b.denote (ITree2.HComp H.spec))))
-      H.spec.toBindSig
+      (ITree2.Sum H.spec
+        (ITree2.Call (a.denote (ITree2.CompE H.spec)) (b.denote (ITree2.CompE H.spec))))
 
 def DomR.ret {H : Signature} : {r : Option (Tp × Tp)} → {α : Type} → α → DomR H r α
   | none, _, x | some _, _, x => ITree2.CompE.ret x
@@ -212,20 +211,20 @@ def DomR.bind {H : Signature} : {r : Option (Tp × Tp)} → {α β : Type} →
   | none, _, _, m, k | some _, _, _, m, k => ITree2.CompE.bind m k
 
 def DomR.lift {H : Signature} : {r : Option (Tp × Tp)} → {α : Type} →
-    ITree2.HComp H.spec α → DomR H r α
+    ITree2.CompE H.spec α → DomR H r α
   | none, _, t => t
   | some (a, b), _, t => ITree2.CompE.sumL
-      (𝓕 := ITree2.CallEff (a.denote (ITree2.HComp H.spec))
-        (b.denote (ITree2.HComp H.spec))) t
+      (F := ITree2.Call (a.denote (ITree2.CompE H.spec))
+        (b.denote (ITree2.CompE H.spec))) t
 
 def DomR.perform {H : Signature} : {r : Option (Tp × Tp)} → (e : H.op) →
     (H.input e).denote →
     ((b : H.branch e) → (H.branchInput e b).denote →
       DomR H r (H.branchOutput e b).denote) →
     DomR H r (H.output e).denote
-  | none, e, i, blocks => ITree2.CompE.bindEff e i
+  | none, e, i, blocks => ITree2.CompE.op e i
       (fun bx => blocks bx.1 bx.2) ITree2.CompE.ret
-  | some _, e, i, blocks => ITree2.CompE.bindEff e i
+  | some _, e, i, blocks => ITree2.CompE.op (.inl e) i
       (fun bx => blocks bx.1 bx.2) ITree2.CompE.ret
 
 /-- PHOAS target for proof-erasing reflection. Operation blocks retain the ambient recursion
@@ -255,8 +254,8 @@ inductive Expr (H : Signature) (V : Tp → Type) : Option (Tp × Tp) → Tp → 
       (V (.base (H.output e)) → Expr H V r α) → Expr H V r α
 
 def Expr.denote {H : Signature} : {r : Option (Tp × Tp)} → {α : Tp} →
-    Expr H (Tp.denote (ITree2.HComp H.spec)) r α →
-      DomR H r (α.denote (ITree2.HComp H.spec))
+    Expr H (Tp.denote (ITree2.CompE H.spec)) r α →
+      DomR H r (α.denote (ITree2.CompE H.spec))
   | _, _, .ret v => DomR.ret v
   | _, _, .natLit n k => Expr.denote (k n)
   | _, _, .boolLit b k => Expr.denote (k b)
@@ -270,7 +269,8 @@ def Expr.denote {H : Signature} : {r : Option (Tp × Tp)} → {α : Tp} →
   | _, _, .letrec body k =>
       Expr.denote (k (ITree2.CompE.mrec fun x => Expr.denote (body x)))
   | _, _, .selfCall x k =>
-      ITree2.CompE.vis (Sum.inr ITree2.CallOp.call) x fun v => Expr.denote (k v)
+      ITree2.CompE.op (Sum.inr ITree2.CallOp.call) x
+        (fun bx => nomatch bx.1) fun v => Expr.denote (k v)
   | _, _, .op e i blocks k =>
       DomR.bind (DomR.perform e i fun b x => Expr.denote (blocks b x)) fun o =>
         Expr.denote (k o)

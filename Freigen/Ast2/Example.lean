@@ -29,7 +29,7 @@ abbrev Circ : Signature where
     | .hint result, _ => result
 
 abbrev Circuit := Freek Circ.spec
-abbrev M := ITree2.HComp Circ.spec
+abbrev M := ITree2.CompE Circ.spec
 
 def Circuit.assert (condition : Bool) : Circuit Unit :=
   .op .assert condition (fun b => nomatch b) .pure
@@ -115,8 +115,7 @@ end Ast
 def sqD (x : Nat) : M Nat := Expr.denote (sqAssertAst x)
 
 def recursiveBody (n : Nat) :
-    ITree2.CompE (ITree2.SumEff ITree2.NoEff (ITree2.CallEff Nat Nat))
-      Circ.spec.toBindSig Nat :=
+    ITree2.CompE (ITree2.Sum Circ.spec (ITree2.Call Nat Nat)) Nat :=
   Expr.denote (sumSqAst sqD n)
 
 def mainTree : M Nat := Expr.denote (mainAst _)

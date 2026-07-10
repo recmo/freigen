@@ -328,96 +328,47 @@ end M
 
 end IxPFunctor
 
-/-- First-order effect signature: operation names, input payload, and output payload. -/
-structure EffSig where
-  ε : Type u
-  input : ε → Type u
-  output : ε → Type u
-
-/-- First-order scoped-bind signature: an operation has an input, an output, and a family of
-    block branches, each with its own result type. -/
-structure BindSig where
-  ε : Type u
-  input : ε → Type u
-  output : ε → Type u
-  branch : ε → Type u
-  branchOutput : (e : ε) → branch e → Type u
-
-/-- A higher-order operation signature.  Each operation has ordinary input/output payloads and
-    a family of sub-computations.  A sub-computation is parameterized by `branchInput`; this is
-    the value dynamically bound in that branch. -/
+/-- A higher-order operation signature. Ordinary effects have no branches. -/
 structure HSig where
-  ε : Type u
-  input : ε → Type u
-  output : ε → Type u
-  branch : ε → Type u
-  branchInput : (e : ε) → branch e → Type u
-  branchOutput : (e : ε) → branch e → Type u
+  op : Type u
+  input : op → Type u
+  output : op → Type u
+  branch : op → Type u
+  branchInput : (e : op) → branch e → Type u
+  branchOutput : (e : op) → branch e → Type u
 
-/-- Encode dynamic branch binders in the existing indexed core by indexing a block with both its
-    static branch and the value supplied to that branch. -/
-@[reducible] def HSig.toBindSig (H : HSig.{u}) : BindSig.{u} where
-  ε := H.ε
-  input := H.input
-  output := H.output
-  branch := fun e => (b : H.branch e) × H.branchInput e b
-  branchOutput := fun e b => H.branchOutput e b.1
+/-- A block invocation pairs its branch with the value dynamically bound in it. -/
+abbrev HSig.Block (H : HSig.{u}) (e : H.op) := (b : H.branch e) × H.branchInput e b
 
-/-- Empty first-order signature.  Unified higher-order trees use only the scoped channel; call
-    events used to tie recursive knots remain an internal first-order effect. -/
-abbrev NoEff : EffSig.{u} where
-  ε := PEmpty
-  input := fun e => nomatch e
-  output := fun e => nomatch e
+inductive Ix (H : HSig.{u}) : Type u where
+  | normal
+  | block (e : H.op) : H.Block e → Ix H
 
+@[reducible] def result (H : HSig.{u}) (alpha : Type u) : Ix H → Type u
+  | .normal => alpha
+  | .block e bx => H.branchOutput e bx.1
 
-/-- Internal result labels for the scoped tree.  The normal label is the public computation path;
-    block labels name a scoped block, whose result type is recovered from the bind signature. -/
-inductive Ix (𝓑 : BindSig.{u}) : Type u where
-  | normal : Ix 𝓑
-  | block (e : 𝓑.ε) : 𝓑.branch e → Ix 𝓑
+inductive Pos (H : HSig.{u}) (alpha : Type u) : Ix H → Type u where
+  | ret {i} : result H alpha i → Pos H alpha i
+  | tau {i} : Pos H alpha i
+  | fail {i} : Pos H alpha i
+  | op {i} (e : H.op) : H.input e → Pos H alpha i
 
-/-- The Lean result type attached to an internal result label. -/
-@[reducible] def result (𝓑 : BindSig.{u})
-    (α : Type u) : Ix 𝓑 → Type u
-  | .normal => α
-  | .block e b => 𝓑.branchOutput e b
+inductive Ar {H : HSig.{u}} {alpha : Type u} : {i : Ix H} → Pos H alpha i → Type u where
+  | tau {i : Ix H} : Ar (Pos.tau (i := i))
+  | block {i : Ix H} {e : H.op} {input : H.input e} :
+      (bx : H.Block e) → Ar (Pos.op (i := i) e input)
+  | cont {i : Ix H} {e : H.op} {input : H.input e} :
+      H.output e → Ar (Pos.op (i := i) e input)
 
-/-- Positions of one scoped interaction-tree step at internal result label `i`. -/
-inductive Pos (𝓔 : EffSig.{u}) (𝓑 : BindSig.{u}) (α : Type u) :
-    Ix 𝓑 → Type u where
-  | ret {i : Ix 𝓑} : result 𝓑 α i → Pos 𝓔 𝓑 α i
-  | tau {i : Ix 𝓑} : Pos 𝓔 𝓑 α i
-  | fail {i : Ix 𝓑} : Pos 𝓔 𝓑 α i
-  | vis {i : Ix 𝓑} (e : 𝓔.ε) : 𝓔.input e → Pos 𝓔 𝓑 α i
-  | bindEff {i : Ix 𝓑} (e : 𝓑.ε) : 𝓑.input e → Pos 𝓔 𝓑 α i
-
-/-- Child names for one position.  Keeping this as an inductive keeps all child labels in the
-    signature universe directly. -/
-inductive Ar {𝓔 : EffSig.{u}} {𝓑 : BindSig.{u}} {α : Type u} :
-    {i : Ix 𝓑} → Pos 𝓔 𝓑 α i → Type u where
-  | tau {i : Ix 𝓑} : Ar (Pos.tau (i := i))
-  | vis {i : Ix 𝓑} {e : 𝓔.ε} {input : 𝓔.input e} :
-      𝓔.output e → Ar (Pos.vis (i := i) e input)
-  | block {i : Ix 𝓑} {e : 𝓑.ε} {input : 𝓑.input e} :
-      (b : 𝓑.branch e) → Ar (Pos.bindEff (i := i) e input)
-  | cont {i : Ix 𝓑} {e : 𝓑.ε} {input : 𝓑.input e} :
-      𝓑.output e → Ar (Pos.bindEff (i := i) e input)
-
-/-- Result label of each child.  For `bindEff`, block children jump to their named block label,
-    while the operation continuation stays at the ambient label. -/
-@[reducible] def next {𝓔 : EffSig.{u}} {𝓑 : BindSig.{u}} {α : Type u} {i : Ix 𝓑} :
-    (p : Pos 𝓔 𝓑 α i) → Ar p → Ix 𝓑
+@[reducible] def next {H : HSig.{u}} {alpha : Type u} {i : Ix H} :
+    (p : Pos H alpha i) → Ar p → Ix H
   | .tau, .tau => i
-  | .vis _ _, .vis _ => i
-  | .bindEff e _, .block b => .block e b
-  | .bindEff _ _, .cont _ => i
+  | .op e _, .block bx => .block e bx
+  | .op _ _, .cont _ => i
 
-/-- The indexed polynomial functor for scoped interaction-tree steps at public result type `α`.
-    The index is small (`Ix 𝓑`), not `Type`, so small signatures produce a `Type` carrier. -/
-@[reducible] def P (𝓔 : EffSig.{u}) (𝓑 : BindSig.{u}) (α : Type u) :
-    IxPFunctor (Ix 𝓑) where
-  Pos := Pos 𝓔 𝓑 α
+@[reducible] def P (H : HSig.{u}) (alpha : Type u) : IxPFunctor (Ix H) where
+  Pos := Pos H alpha
   Ar := Ar
   next := next
 
