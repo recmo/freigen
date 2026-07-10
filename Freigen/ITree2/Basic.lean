@@ -18,6 +18,9 @@ abbrev Tree (𝓔 : EffSig.{u}) (𝓑 : BindSig.{u}) (α : Type u) (i : Ix 𝓑)
 abbrev CompE (𝓔 : EffSig.{u}) (𝓑 : BindSig.{u}) (α : Type u) :=
   Tree 𝓔 𝓑 α .normal
 
+/-- Public computation type for a unified higher-order signature. -/
+abbrev HComp (H : HSig.{u}) (α : Type u) := CompE NoEff H.toBindSig α
+
 /-- Internal block fiber for a scoped operation branch. -/
 abbrev BlockE (𝓔 : EffSig.{u}) (𝓑 : BindSig.{u}) (α : Type u)
     (e : 𝓑.ε) (b : 𝓑.branch e) :=

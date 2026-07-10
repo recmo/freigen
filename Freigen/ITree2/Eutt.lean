@@ -117,6 +117,34 @@ theorem eutt_tau_left {α : Type u} {x y : CompE 𝓔 𝓑 α} (h : Eutt x y) :
   · exact .tauL x ((eutt_closed_at hxy).mono (fun _ _ _ _ h => Or.inr h))
   · exact (eutt_closed_at hab).mono (fun _ _ _ _ h => Or.inr h)
 
+theorem EuttF.symm
+    {R : (α : Type u) → (i : Ix 𝓑) → Tree 𝓤 𝓑 α i → Tree 𝓤 𝓑 α i → Prop}
+    {α : Type u} {i : Ix 𝓑} {x y : Tree 𝓤 𝓑 α i} (h : EuttF R x y) :
+    EuttF (fun α i x y => R α i y x) y x := by
+  induction h with
+  | ret a => exact .ret a
+  | fail => exact .fail
+  | tau tx ty ht => exact .tau ty tx ht
+  | tauL tx _ ih => exact .tauR tx ih
+  | tauR ty _ ih => exact .tauL ty ih
+  | vis e input kx ky hk => exact .vis e input ky kx hk
+  | bindEff e input blocksx blocksy kx ky hb hk =>
+      exact .bindEff e input blocksy blocksx ky kx hb hk
+
+theorem eutt_symm_at {α : Type u} {i : Ix 𝓑} {x y : Tree 𝓤 𝓑 α i}
+    (h : EuttAt x y) : EuttAt y x := by
+  obtain ⟨R, hR, hxy⟩ := h
+  refine ⟨(fun α i x y => R α i y x), ?_, hxy⟩
+  intro α i a b hab
+  exact (hR α i b a hab).symm
+
+theorem eutt_symm {α : Type u} {x y : CompE 𝓤 𝓑 α} (h : Eutt x y) : Eutt y x :=
+  eutt_symm_at h
+
+theorem eutt_tau_right {α : Type u} {x y : CompE 𝓤 𝓑 α} (h : Eutt x y) :
+    Eutt x (tau y) :=
+  eutt_symm (eutt_tau_left (eutt_symm h))
+
 end CompE
 
 end ITree2

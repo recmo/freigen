@@ -343,6 +343,34 @@ structure BindSig where
   branch : ε → Type u
   branchOutput : (e : ε) → branch e → Type u
 
+/-- A higher-order operation signature.  Each operation has ordinary input/output payloads and
+    a family of sub-computations.  A sub-computation is parameterized by `branchInput`; this is
+    the value dynamically bound in that branch. -/
+structure HSig where
+  ε : Type u
+  input : ε → Type u
+  output : ε → Type u
+  branch : ε → Type u
+  branchInput : (e : ε) → branch e → Type u
+  branchOutput : (e : ε) → branch e → Type u
+
+/-- Encode dynamic branch binders in the existing indexed core by indexing a block with both its
+    static branch and the value supplied to that branch. -/
+@[reducible] def HSig.toBindSig (H : HSig.{u}) : BindSig.{u} where
+  ε := H.ε
+  input := H.input
+  output := H.output
+  branch := fun e => (b : H.branch e) × H.branchInput e b
+  branchOutput := fun e b => H.branchOutput e b.1
+
+/-- Empty first-order signature.  Unified higher-order trees use only the scoped channel; call
+    events used to tie recursive knots remain an internal first-order effect. -/
+abbrev NoEff : EffSig.{u} where
+  ε := PEmpty
+  input := fun e => nomatch e
+  output := fun e => nomatch e
+
+
 /-- Internal result labels for the scoped tree.  The normal label is the public computation path;
     block labels name a scoped block, whose result type is recovered from the bind signature. -/
 inductive Ix (𝓑 : BindSig.{u}) : Type u where

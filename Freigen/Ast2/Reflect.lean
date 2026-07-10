@@ -1,109 +1,68 @@
 import Freigen.Ast2.Basic
+import Freigen.ITree2.Eutt
 
 /-!
 # Ast2 reflection combinators
 
 This is the target surface for the Ast2 reflector: a reflection is a packed concrete AST plus a
-soundness proof against the source `Freek` program.  The combinators are the "third style" API:
+soundness proof against the source `Freek` program. The combinators are the pack-returning API:
 applying one emits exactly one AST node and extends the pending equation context when needed.
 -/
 
 namespace Freigen
 namespace Ast2
 
-/-- The base `ITree2` domain for a coded Ast2 signature. -/
-abbrev EvalM (𝓔 : EffSig) (𝓑 : BindSig) (α : Type) : Type :=
-  ITree2.CompE 𝓔.spec 𝓑.spec α
+/-! ## Unified higher-order reflection -/
 
-/-- A reflection of source `m`, conditional on pending defining equations `Φ`. -/
-def Reflection {𝓔 : EffSig} {𝓑 : BindSig} (Φ : Prop) (α : Tp0)
-    (m : Freek 𝓔.spec 𝓑.spec α.denote) : Type 2 :=
-  { e : Expr 𝓔 𝓑 Tp0.denote none α //
+abbrev EvalM (H : Signature) (α : Type) := ITree2.HComp H.spec α
+
+/-- Reflection package used during construction.  Exact equality is retained locally because
+    primitive and higher-order nodes are reflected one-for-one; the public contract is exposed
+    as `Eutt`, allowing recursive reflection to insert guarding `tau` steps. -/
+def Reflection {H : Signature} (Φ : Prop) (α : Tp)
+    (m : Freek H.spec (α.denote (ITree2.HComp H.spec))) : Type 2 :=
+  { e : Expr H (Tp.denote (ITree2.HComp H.spec)) none α //
     Φ → Expr.denote e = Freek.toITree m }
 
-/-! ## Top-down theorem form -/
+def Reflection.eutt {H : Signature} {Φ : Prop} {α : Tp}
+    {m : Freek H.spec (α.denote (ITree2.HComp H.spec))} (r : Reflection Φ α m) :
+    Φ → ITree2.CompE.Eutt (Expr.denote r.1) (Freek.toITree m) :=
+  fun h => ITree2.CompE.Eutt.of_eq (r.2 h)
 
-/-- Reflect `pure`: emit `ret` on an atom whose defining equation matches the source value. -/
-theorem reflect_ret {𝓔 : EffSig} {𝓑 : BindSig} {α : Tp0}
-    (v : α.denote) {v' : α.denote} (h : v = v') :
-    Expr.denote (.ret v : Expr 𝓔 𝓑 Tp0.denote none α) =
-      Freek.toITree (.pure v') := by
-  rw [h]
-  rfl
+def Reflection.ret {H : Signature} {Φ : Prop} {α : Tp}
+    (v : α.denote (ITree2.HComp H.spec))
+    {v' : α.denote (ITree2.HComp H.spec)} (h : Φ → v = v') :
+    Reflection (H := H) Φ α (Freek.pure (H := H.spec) v') :=
+  ⟨.ret v, fun hΦ => by rw [h hΦ]; rfl⟩
 
-/-- Reflect a primitive: emit a `bin` node binding a fresh atom `vc` with its defining equation. -/
-theorem reflect_bin {𝓔 : EffSig} {𝓑 : BindSig} {a b c α : Tp0}
+def Reflection.bin {H : Signature} {Φ : Prop} {a b c : Tp0} {α : Tp}
     (o : Bin a b c) (va : a.denote) (vb : b.denote)
-    {k : c.denote → Expr 𝓔 𝓑 Tp0.denote none α}
-    {t : EvalM 𝓔 𝓑 α.denote}
-    (ih : ∀ vc, vc = o.denote va vb → Expr.denote (k vc) = t) :
-    Expr.denote (.bin o va vb k) = t :=
-  ih _ rfl
+    {m : Freek H.spec (α.denote (ITree2.HComp H.spec))}
+    (k : ∀ vc, Reflection (Φ ∧ vc = o.denote va vb) α m) : Reflection Φ α m :=
+  ⟨.bin o va vb fun vc => (k vc).1, fun hΦ => (k _).2 ⟨hΦ, rfl⟩⟩
 
-/-- Reflect an effect node. -/
-theorem reflect_eff {𝓔 : EffSig} {𝓑 : BindSig} {α : Tp0}
-    (e : 𝓔.ε) (i : (𝓔.𝓘 e).denote) {i' : (𝓔.𝓘 e).denote}
-    {k : (𝓔.𝓞 e).denote → Expr 𝓔 𝓑 Tp0.denote none α}
-    {ks : (𝓔.𝓞 e).denote → Freek 𝓔.spec 𝓑.spec α.denote}
-    (hi : i = i') (ih : ∀ o, Expr.denote (k o) = Freek.toITree (ks o)) :
-    Expr.denote (.eff e i k) =
-      Freek.toITree (Freek.eff e i' ks) := by
-  subst hi
-  show ITree2.CompE.bind (EffSig.trigger (𝓑 := 𝓑) e i) (fun o => Expr.denote (k o)) =
-    ITree2.CompE.bind (EffSig.trigger (𝓑 := 𝓑) e i) (fun o => Freek.toITree (ks o))
-  exact congrArg (ITree2.CompE.bind (EffSig.trigger (𝓑 := 𝓑) e i)) (funext ih)
-
-/-! ## Pack-returning form -/
-
-/-- Reflect `pure`: the pack's node is `ret v`; the value condition may assume `Φ`. -/
-def Reflection.ret {𝓔 : EffSig} {𝓑 : BindSig} {Φ : Prop} {α : Tp0}
-    (v : α.denote) {v' : α.denote} (h : Φ → v = v') :
-    Reflection (𝓔 := 𝓔) (𝓑 := 𝓑) Φ α (.pure v') :=
-  ⟨.ret v, fun hΦ => by
-    rw [h hΦ]
-    rfl⟩
-
-/-- Reflect a primitive.  The continuation works under the extended equation context. -/
-def Reflection.bin {𝓔 : EffSig} {𝓑 : BindSig} {Φ : Prop} {a b c α : Tp0}
-    (o : Bin a b c) (va : a.denote) (vb : b.denote)
-    {m : Freek 𝓔.spec 𝓑.spec α.denote}
-    (k : ∀ vc, Reflection (𝓔 := 𝓔) (𝓑 := 𝓑)
-      (Φ ∧ vc = o.denote va vb) α m) :
-    Reflection (𝓔 := 𝓔) (𝓑 := 𝓑) Φ α m :=
-  ⟨.bin o va vb fun vc => (k vc).1,
-    fun hΦ => (k _).2 ⟨hΦ, rfl⟩⟩
-
-/-- Reflect an effect node. -/
-def Reflection.eff {𝓔 : EffSig} {𝓑 : BindSig} {Φ : Prop} {α : Tp0}
-    (e : 𝓔.ε) (i : (𝓔.𝓘 e).denote) {i' : (𝓔.𝓘 e).denote}
-    (hi : Φ → i = i') {ks : (𝓔.𝓞 e).denote → Freek 𝓔.spec 𝓑.spec α.denote}
-    (k : ∀ o, Reflection (𝓔 := 𝓔) (𝓑 := 𝓑) Φ α (ks o)) :
-    Reflection (𝓔 := 𝓔) (𝓑 := 𝓑) Φ α (Freek.eff e i' ks) :=
-  ⟨.eff e i fun o => (k o).1, fun hΦ => by
+def Reflection.op {H : Signature} {Φ : Prop} {α : Tp}
+    (e : H.op) (i : (H.input e).denote) {i' : (H.input e).denote} (hi : Φ → i = i')
+    {srcBlocks : (b : H.branch e) → (H.branchInput e b).denote →
+      Freek H.spec (H.branchOutput e b).denote}
+    (blocks : ∀ b x, Reflection Φ (.base (H.branchOutput e b)) (srcBlocks b x))
+    {ks : (H.output e).denote →
+      Freek H.spec (α.denote (ITree2.HComp H.spec))}
+    (k : ∀ o, Reflection Φ α (ks o)) :
+    Reflection Φ α (.op e i' srcBlocks ks) :=
+  ⟨.op e i (fun b x => (blocks b x).1) (fun o => (k o).1), fun hΦ => by
     rw [hi hΦ]
-    show ITree2.CompE.bind (EffSig.trigger (𝓑 := 𝓑) e i') (fun o =>
-        Expr.denote ((k o).1)) =
-      ITree2.CompE.bind (EffSig.trigger (𝓑 := 𝓑) e i') (fun o => Freek.toITree (ks o))
-    exact congrArg (ITree2.CompE.bind (EffSig.trigger (𝓑 := 𝓑) e i'))
-      (funext fun o => (k o).2 hΦ)⟩
+    simp only [Expr.denote, DomR.perform, DomR.bind, Freek.toITree, Freek.eval]
+    congr 1
+    · apply congrArg (fun bs : ((bx : H.spec.toBindSig.branch e) →
+          ITree2.HComp H.spec (H.spec.toBindSig.branchOutput e bx)) =>
+          ITree2.CompE.bindEff (𝓔 := ITree2.NoEff) (𝓑 := H.spec.toBindSig)
+            (α := (H.output e).denote) e i' bs ITree2.CompE.ret)
+      funext bx
+      exact (blocks bx.1 bx.2).2 hΦ
+    · funext o
+      exact (k o).2 hΦ⟩
 
-/-- Reflect a helper application using the target monad laws. -/
-def Reflection.app {𝓔 : EffSig} {𝓑 : BindSig} {Φ : Prop} {α a b : Tp0}
-    (f : a.denote → EvalM 𝓔 𝓑 b.denote) (x : a.denote)
-    {fSrc : a.denote → Freek 𝓔.spec 𝓑.spec b.denote}
-    (hf : Φ → f x = Freek.toITree (fSrc x))
-    {ks : b.denote → Freek 𝓔.spec 𝓑.spec α.denote}
-    (k : ∀ o, Reflection (𝓔 := 𝓔) (𝓑 := 𝓑) Φ α (ks o)) :
-    Reflection (𝓔 := 𝓔) (𝓑 := 𝓑) Φ α (Freek.bind (fSrc x) ks) :=
-  ⟨.app f x fun o => (k o).1, fun hΦ => by
-    calc
-      ITree2.CompE.bind (f x) (fun o => Expr.denote ((k o).1))
-          = ITree2.CompE.bind (Freek.toITree (fSrc x)) (fun o => Expr.denote ((k o).1)) := by
-              rw [hf hΦ]
-      _ = ITree2.CompE.bind (Freek.toITree (fSrc x)) (fun o => Freek.toITree (ks o)) := by
-              exact congrArg (ITree2.CompE.bind (Freek.toITree (fSrc x)))
-                (funext fun o => (k o).2 hΦ)
-      _ = Freek.toITree (Freek.bind (fSrc x) ks) := (Freek.toITree_bind (fSrc x) ks).symm⟩
 
 end Ast2
 end Freigen
