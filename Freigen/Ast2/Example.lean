@@ -28,30 +28,79 @@ abbrev Circ : Signature where
     | .assert, b => nomatch b
     | .hint result, _ => result
 
-abbrev Circuit := Freek Circ.spec
+inductive SourceOp : Type 1 where
+  | assert
+  | hint (result : Type)
+
+/-- The circuit author's signature contains host types only; it has no dependency on `Tp0`. -/
+abbrev Source : ITree2.HSig.{0, 1} where
+  op := SourceOp
+  input
+    | .assert => Bool
+    | .hint _ => Unit
+  output
+    | .assert => Unit
+    | .hint result => result
+  branch
+    | .assert => Empty
+    | .hint _ => Unit
+  branchInput
+    | .assert, b => nomatch b
+    | .hint _, _ => Unit
+  branchOutput
+    | .assert, b => nomatch b
+    | .hint result, _ => result
+
+inductive CircRel : SourceOp → CircOp → Type 1 where
+  | assert : CircRel .assert .assert
+  | hint (result : Type) (code : Tp0) (repr : result → code.denote → Prop) :
+      CircRel (.hint result) (.hint code)
+
+abbrev CircCompat : Signature.Compat Source Circ where
+  opRel := CircRel
+  input
+    | .assert, source, target => source = target
+    | .hint _ _ _, source, target => source = target
+  output
+    | .assert, source, target => source = target
+    | .hint _ _ repr, source, target => repr source target
+  branch
+    | .assert, source, _ => nomatch source
+    | .hint _ _ _, source, target => source = target
+  branchInput := by
+    intro e h w bs bt hbr source target
+    cases w with
+    | assert => exact nomatch bs
+    | hint => exact source = target
+  branchOutput := by
+    intro e h w bs bt hbr source target
+    cases w with
+    | assert => exact nomatch bs
+    | hint _ _ repr => exact repr source target
+
+def fin5NatRel : Fin 5 → Nat → Prop := fun source target => source.val = target
+
+def fin5Hint : CircRel (.hint (Fin 5)) (.hint .nat) :=
+  .hint (Fin 5) .nat fin5NatRel
+
+theorem fin5NatRel_target (target : Nat) (h : target < 5) :
+    ∃ source : Fin 5, fin5NatRel source target :=
+  ⟨⟨target, h⟩, rfl⟩
+
+abbrev Circuit (α : Type) := Freek Source α
+
 abbrev M := ITree2.CompE Circ.spec
 
 def Circuit.assert (condition : Bool) : Circuit Unit :=
-  .op .assert condition (fun b => nomatch b) .pure
+  .op SourceOp.assert condition (fun b => nomatch b) .pure
 
-def Circuit.hint (result : Tp0) (block : Circuit result.denote) : Circuit result.denote :=
-  .op (.hint result) () (fun _ _ => block) .pure
+def Circuit.hint {α : Type} (block : Circuit α) : Circuit α :=
+  .op (.hint α) () (fun _ _ => block) .pure
 
-def Circuit.evalWithHints : Circuit alpha → Option alpha :=
-  Freek.eval fun
-    | .assert, condition, _ => if condition then some () else none
-    | .hint _, _, blocks => blocks () ()
-
-def ConstraintM (alpha : Type) := (alpha → Prop) → Prop
-
-instance : Monad ConstraintM where
-  pure a := fun k => k a
-  bind m f := fun k => m fun a => f a k
-
-def Circuit.evalConstraints : Circuit alpha → ConstraintM alpha :=
-  Freek.eval fun
-    | .assert, condition, _ => fun k => condition ∧ k ()
-    | .hint _, _, _ => fun k => ∃ x, k x
+def Circuit.evalWithHints (program : Circuit α) : Option α :=
+  Freek.eval (H := Source) (M := Option) (fun
+    | SourceOp.assert, condition, _ => if condition then some () else none
+    | SourceOp.hint _, _, blocks => blocks () ()) program
 
 def sqAssertSrc (x : Nat) : Circuit Nat := do
   let y := x * x
@@ -67,7 +116,7 @@ def sumSqSrc : Nat → Circuit Nat
 
 def mainSrc : Circuit Nat := do
   let s ← sumSqSrc 3
-  let h ← Circuit.hint .nat (pure s)
+  let h ← Circuit.hint (pure s)
   let _ ← Circuit.assert (h == s)
   pure h
 
@@ -119,7 +168,6 @@ def recursiveBody (n : Nat) :
   Expr.denote (sumSqAst sqD n)
 
 def mainTree : M Nat := Expr.denote (mainAst _)
-def mainSourceTree : M Nat := Freek.toITree mainSrc
 
 def identityTree : M (Nat → M Nat) := Expr.denote (identityAst _)
 
@@ -129,25 +177,51 @@ example : ITree2.CompE.bind identityTree (fun f => f 7) =
     (fun f => f 7) = ITree2.CompE.ret 7
   rw [ITree2.CompE.bind_ret]
 
-def sqAssertReflected (x : Nat) : Reflection (H := Circ) True .nat (sqAssertSrc x) := by
+def sqAssertReflected (x : Nat) :
+    ReflectionR CircCompat True .nat Eq
+      (sqAssertSrc x) := by
   unfold sqAssertSrc Circuit.assert
   apply Reflection.bin .mul x x
   intro y
   apply Reflection.bin .le x y
   intro condition
-  apply Reflection.op (H := Circ) CircOp.assert condition
-    (i' := decide (x ≤ x * x))
+  apply Reflection.op CircCompat SourceOp.assert CircOp.assert CircRel.assert condition
+    (sourceInput := decide (x ≤ x * x))
   · rintro ⟨⟨-, hy⟩, hc⟩
     rw [hy] at hc
-    exact hc
-  · intro b
+    exact hc.symm
+  · intro b _
     exact nomatch b
   · intro _
-    apply Reflection.ret y
-    rintro ⟨⟨-, hy⟩, -⟩
-    exact hy
+    refine ⟨.ret y, ?_⟩
+    intro _ _
+    refine ⟨fun hPhi => ?_⟩
+    apply ITree2.CompE.Eutt.of_step CircCompat
+    exact .ret _ (x * x) y hPhi.1.2.symm
 
-/-! A dynamic binder used beneath recursion, which the previous two-channel AST rejected. -/
+def hintReflected (x : Nat) :
+    ReflectionR CircCompat True .nat Eq
+      (Circuit.hint (pure x)) := by
+  unfold Circuit.hint
+  apply Reflection.op CircCompat (SourceOp.hint Nat) (CircOp.hint .nat)
+    (CircRel.hint Nat .nat Eq) ()
+    (sourceInput := ())
+  · intro _
+    rfl
+  · intro _ _
+    refine ⟨.ret x, ?_⟩
+    intro _ _ _ _
+    refine ⟨fun _ => ?_⟩
+    apply ITree2.CompE.Eutt.of_step CircCompat
+    exact .ret _ x x rfl
+  · intro output
+    refine ⟨.ret output, ?_⟩
+    intro source hsource
+    refine ⟨fun _ => ?_⟩
+    apply ITree2.CompE.Eutt.of_step CircCompat
+    exact .ret _ source output hsource
+
+/-! A dynamic binder used beneath recursion. -/
 
 inductive DynOp where
   | withNat

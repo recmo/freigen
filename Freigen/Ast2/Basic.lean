@@ -1,4 +1,4 @@
-import Freigen.ITree2.Basic
+import Freigen.ITree2.Eutt
 
 namespace Freigen
 
@@ -7,7 +7,7 @@ universe u v
 /-! ## Unified higher-order source syntax -/
 
 /-- Free syntax for higher-order operations with dynamically bound block arguments. -/
-inductive Freek (H : ITree2.HSig.{u}) : Type u → Type (u+1) where
+inductive Freek (H : ITree2.HSig.{u, v}) : Type u → Type (max u v + 1) where
   | pure {α} : α → Freek H α
   | op {α} (e : H.op) : H.input e →
       ((b : H.branch e) → H.branchInput e b → Freek H (H.branchOutput e b)) →
@@ -61,11 +61,12 @@ theorem Freek.eval_bind {M : Type u → Type v} [Monad M] [LawfulMonad M] {H} {�
       rw [LawfulMonad.bind_assoc]
       exact congrArg _ (funext fun o => ih o f)
 
-def Freek.toITree {H : ITree2.HSig.{u}} {α : Type u} : Freek H α → ITree2.CompE H α :=
+def Freek.toITree {H : ITree2.HSig.{u, v}} {α : Type u} :
+    Freek H α → ITree2.CompE H α :=
   Freek.eval fun e i blocks =>
     ITree2.CompE.op e i (fun bx => blocks bx.1 bx.2) ITree2.CompE.ret
 
-theorem Freek.toITree_bind {H : ITree2.HSig.{u}} {α β : Type u}
+theorem Freek.toITree_bind {H : ITree2.HSig.{u, v}} {α β : Type u}
     (m : Freek H α) (f : α → Freek H β) :
     Freek.toITree (m.bind f) =
       ITree2.CompE.bind (Freek.toITree m) (fun a => Freek.toITree (f a)) :=
@@ -196,6 +197,10 @@ structure Signature : Type 1 where
   branch := H.branch
   branchInput := fun e b => (H.branchInput e b).denote
   branchOutput := fun e b => (H.branchOutput e b).denote
+
+/-- An AST signature correspondence is the generic interaction-tree correspondence to its spec. -/
+abbrev Signature.Compat (S : ITree2.HSig.{u, v}) (H : Signature) :=
+  ITree2.HSig.Compat S H.spec
 
 @[reducible] def DomR (H : Signature) : Option (Tp × Tp) → Type → Type
   | none => ITree2.CompE H.spec

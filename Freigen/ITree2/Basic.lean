@@ -3,30 +3,30 @@ import Freigen.ITree2.PFunctor
 namespace Freigen
 namespace ITree2
 
-universe u v
+universe u v w
 
 /-- One layer of the scoped interaction-tree polynomial at internal result label `i`. -/
-abbrev Step (H : HSig.{u}) (α : Type u)
-    (X : Ix H → Type v) (i : Ix H) :=
+abbrev Step (H : HSig.{u, v}) (α : Type u)
+    (X : Ix H → Type w) (i : Ix H) :=
   (P H α).Obj X i
 
 /-- The internal tree family.  The public computation type is the `.normal` fiber. -/
-abbrev Tree (H : HSig.{u}) (α : Type u) (i : Ix H) :=
+abbrev Tree (H : HSig.{u, v}) (α : Type u) (i : Ix H) :=
   (P H α).M i
 
 /-- Public scoped interaction trees. -/
-abbrev CompE (H : HSig.{u}) (α : Type u) :=
+abbrev CompE (H : HSig.{u, v}) (α : Type u) :=
   Tree H α .normal
 
 /-- Internal block fiber for a higher-order operation branch. -/
-abbrev BlockE (H : HSig.{u}) (α : Type u)
+abbrev BlockE (H : HSig.{u, v}) (α : Type u)
     (e : H.op) (b : H.Block e) :=
   Tree H α (.block e b)
 
 namespace Step
 
-variable {H : HSig.{u}} {α : Type u}
-  {X : Ix H → Type v}
+variable {H : HSig.{u, v}} {α : Type u}
+  {X : Ix H → Type w}
 
 /-- Return step: no recursive children. -/
 def ret {i : Ix H} (a : result H α i) : Step H α X i :=
@@ -53,7 +53,7 @@ end Step
 
 namespace CompE
 
-variable {H : HSig.{u}}
+variable {H : HSig.{u, v}}
 
 set_option backward.isDefEq.respectTransparency false
 
@@ -147,24 +147,24 @@ theorem eq_of_dest_eq {α : Type u} {x y : CompE H α} (h : dest x = dest y) : x
   eq_of_destAt_eq h
 
 /-- Corecursor specialized to the scoped computation polynomial. -/
-def corecAt {α : Type u} {X : Ix H → Type v}
+def corecAt {α : Type u} {X : Ix H → Type w}
     (f : (i : Ix H) → X i → Step H α X i) {i : Ix H} (x : X i) :
     Tree H α i :=
   IxPFunctor.M.corec (P := P H α) f x
 
-@[simp] theorem dest_corecAt {α : Type u} {X : Ix H → Type v}
+@[simp] theorem dest_corecAt {α : Type u} {X : Ix H → Type w}
     (f : (i : Ix H) → X i → Step H α X i) {i : Ix H} (x : X i) :
     destAt (corecAt f x) = (P H α).map (fun i => corecAt f (i := i)) (f i x) :=
   IxPFunctor.M.dest_corec f x
 
-@[simp] theorem raw_dest_corecAt {α : Type u} {X : Ix H → Type v}
+@[simp] theorem raw_dest_corecAt {α : Type u} {X : Ix H → Type w}
     (f : (i : Ix H) → X i → Step H α X i) {i : Ix H} (x : X i) :
     IxPFunctor.M.dest (corecAt f x) =
       (P H α).map (fun i => corecAt f (i := i)) (f i x) :=
   IxPFunctor.M.dest_corec f x
 
-private inductive RelabelBlockState (H : HSig.{u}) (α β : Type u) :
-    Ix H → Type u where
+private inductive RelabelBlockState (H : HSig.{u, v}) (α β : Type u) :
+    Ix H → Type (max u v) where
   | block {e : H.op} {b : H.Block e} :
       BlockE H α e b → RelabelBlockState H α β (.block e b)
 
@@ -191,9 +191,9 @@ def relabelBlock {α β : Type u} {e : H.op} {b : H.Block e}
   corecAt (H := H) (α := β) (relabelBlockCo (α := α) (β := β))
     (RelabelBlockState.block t)
 
-private inductive AsBlockState (H : HSig.{u}) (α : Type u)
+private inductive AsBlockState (H : HSig.{u, v}) (α : Type u)
     (root : H.op) (br : H.Block root) :
-    Ix H → Type u where
+    Ix H → Type (max u v) where
   | normal :
       CompE H (H.branchOutput root br.1) → AsBlockState H α root br (.block root br)
   | block {e : H.op} {b : H.Block e} :
@@ -344,9 +344,9 @@ theorem cases_view {α : Type u} (x : CompE H α) :
             funext h
             cases h <;> rfl)⟩))
 
-private inductive BindState (H : HSig.{u}) (α β : Type u)
+private inductive BindState (H : HSig.{u, v}) (α β : Type u)
     (target : Ix H) :
-    Ix H → Type u where
+    Ix H → Type (max u v) where
   | bind : CompE H α → BindState H α β target target
   | copy {i : Ix H} : Tree H β i → BindState H α β target i
 
@@ -923,7 +923,7 @@ end CompE
 
 namespace HSig
 
-@[reducible] def sum (H F : HSig.{u}) : HSig.{u} where
+@[reducible] def sum (H F : HSig.{u, v}) : HSig.{u, v} where
   op := H.op ⊕ F.op
   input
     | .inl e => H.input e
@@ -945,30 +945,30 @@ end HSig
 
 abbrev Sum := HSig.sum
 
-inductive CallOp : Type u where
+inductive CallOp : Type v where
   | call
 
-abbrev Call (sigma rho : Type u) : HSig.{u} where
+abbrev Call (σ ρ : Type u) : HSig.{u, v} where
   op := CallOp
-  input := fun _ => sigma
-  output := fun _ => rho
+  input := fun _ => σ
+  output := fun _ => ρ
   branch := fun _ => PEmpty
   branchInput := fun _ b => nomatch b
   branchOutput := fun _ b => nomatch b
 
 namespace CompE
 
-variable {H F : HSig.{u}}
+variable {H F : HSig.{u, v}}
 
 @[reducible] def sumIx : Ix H → Ix (Sum H F)
   | .normal => .normal
   | .block e bx => .block (.inl e) bx
 
-private inductive SumState (H F : HSig.{u}) (alpha : Type u) : Ix (Sum H F) → Type u where
-  | tree {i : Ix H} : Tree H alpha i → SumState H F alpha (sumIx i)
+private inductive SumState (H F : HSig.{u, v}) (α : Type u) : Ix (Sum H F) → Type (max u v) where
+  | tree {i : Ix H} : Tree H α i → SumState H F α (sumIx i)
 
-def sumCo : (i : Ix (Sum H F)) → SumState H F alpha i →
-    Step (Sum H F) alpha (SumState H F alpha) i
+def sumCo : (i : Ix (Sum H F)) → SumState H F α i →
+    Step (Sum H F) α (SumState H F α) i
   | _, @SumState.tree _ _ _ j t =>
       match destAt t with
       | ⟨.ret a, _⟩ => Step.ret (cast (by cases j <;> rfl) a)
@@ -978,20 +978,20 @@ def sumCo : (i : Ix (Sum H F)) → SumState H F alpha i →
           (fun bx => .tree (c (Ar.block bx)))
           (fun o => .tree (c (Ar.cont o)))
 
-def sumL {alpha : Type u} (t : CompE H alpha) : CompE (Sum H F) alpha :=
+def sumL {α : Type u} (t : CompE H α) : CompE (Sum H F) α :=
   corecAt sumCo (.tree t)
 
-@[reducible] def sourceIx : Ix H → Ix (Sum H (Call sigma rho))
+@[reducible] def sourceIx : Ix H → Ix (Sum H (Call σ ρ))
   | .normal => .normal
   | .block e bx => .block (.inl e) bx
 
-abbrev InterpState (H : HSig.{u}) (sigma rho alpha : Type u) (i : Ix H) :=
-  Tree (Sum H (Call sigma rho)) alpha (sourceIx i)
+abbrev InterpState (H : HSig.{u, v}) (σ ρ α : Type u) (i : Ix H) :=
+  Tree (Sum H (Call σ ρ)) α (sourceIx i)
 
-def interpCo {sigma rho : Type u}
-    (body : sigma → CompE (Sum H (Call sigma rho)) rho) :
-    (i : Ix H) → InterpState H sigma rho alpha i →
-      Step H alpha (InterpState H sigma rho alpha) i
+def interpCo {σ ρ : Type u}
+    (body : σ → CompE (Sum H (Call σ ρ)) ρ) :
+    (i : Ix H) → InterpState H σ ρ α i →
+      Step H α (InterpState H σ ρ α) i
   | i, t =>
       match destAt t with
       | ⟨.ret a, _⟩ => Step.ret (cast (by cases i <;> rfl) a)
@@ -1003,13 +1003,13 @@ def interpCo {sigma rho : Type u}
       | ⟨.op (.inr .call) s, c⟩ => Step.tau
           (bindAt (body s) fun o => c (Ar.cont o))
 
-def interp {sigma rho alpha : Type u}
-    (body : sigma → CompE (Sum H (Call sigma rho)) rho)
-    (t : CompE (Sum H (Call sigma rho)) alpha) : CompE H alpha :=
+def interp {σ ρ α : Type u}
+    (body : σ → CompE (Sum H (Call σ ρ)) ρ)
+    (t : CompE (Sum H (Call σ ρ)) α) : CompE H α :=
   corecAt (interpCo body) t
 
-def mrec {sigma rho : Type u}
-    (body : sigma → CompE (Sum H (Call sigma rho)) rho) : sigma → CompE H rho :=
+def mrec {σ ρ : Type u}
+    (body : σ → CompE (Sum H (Call σ ρ)) ρ) : σ → CompE H ρ :=
   fun s => interp body (body s)
 
 end CompE

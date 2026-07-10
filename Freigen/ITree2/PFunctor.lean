@@ -328,9 +328,10 @@ end M
 
 end IxPFunctor
 
-/-- A higher-order operation signature. Ordinary effects have no branches. -/
+/-- A higher-order operation signature. Operation codes and operand types may live in
+    different universes; all operand and binder types share one universe. -/
 structure HSig where
-  op : Type u
+  op : Type v
   input : op → Type u
   output : op → Type u
   branch : op → Type u
@@ -338,37 +339,39 @@ structure HSig where
   branchOutput : (e : op) → branch e → Type u
 
 /-- A block invocation pairs its branch with the value dynamically bound in it. -/
-abbrev HSig.Block (H : HSig.{u}) (e : H.op) := (b : H.branch e) × H.branchInput e b
+abbrev HSig.Block (H : HSig.{u, v}) (e : H.op) :=
+  (b : H.branch e) × H.branchInput e b
 
-inductive Ix (H : HSig.{u}) : Type u where
+inductive Ix (H : HSig.{u, v}) : Type (max v u) where
   | normal
   | block (e : H.op) : H.Block e → Ix H
 
-@[reducible] def result (H : HSig.{u}) (alpha : Type u) : Ix H → Type u
-  | .normal => alpha
+@[reducible] def result (H : HSig.{u, v}) (α : Type u) : Ix H → Type u
+  | .normal => α
   | .block e bx => H.branchOutput e bx.1
 
-inductive Pos (H : HSig.{u}) (alpha : Type u) : Ix H → Type u where
-  | ret {i} : result H alpha i → Pos H alpha i
-  | tau {i} : Pos H alpha i
-  | fail {i} : Pos H alpha i
-  | op {i} (e : H.op) : H.input e → Pos H alpha i
+inductive Pos (H : HSig.{u, v}) (α : Type u) : Ix H → Type (max v u) where
+  | ret {i} : result H α i → Pos H α i
+  | tau {i} : Pos H α i
+  | fail {i} : Pos H α i
+  | op {i} (e : H.op) : H.input e → Pos H α i
 
-inductive Ar {H : HSig.{u}} {alpha : Type u} : {i : Ix H} → Pos H alpha i → Type u where
+inductive Ar {H : HSig.{u, v}} {α : Type u} :
+    {i : Ix H} → Pos H α i → Type (max v u) where
   | tau {i : Ix H} : Ar (Pos.tau (i := i))
   | block {i : Ix H} {e : H.op} {input : H.input e} :
       (bx : H.Block e) → Ar (Pos.op (i := i) e input)
   | cont {i : Ix H} {e : H.op} {input : H.input e} :
       H.output e → Ar (Pos.op (i := i) e input)
 
-@[reducible] def next {H : HSig.{u}} {alpha : Type u} {i : Ix H} :
-    (p : Pos H alpha i) → Ar p → Ix H
+@[reducible] def next {H : HSig.{u, v}} {α : Type u} {i : Ix H} :
+    (p : Pos H α i) → Ar p → Ix H
   | .tau, .tau => i
   | .op e _, .block bx => .block e bx
   | .op _ _, .cont _ => i
 
-@[reducible] def P (H : HSig.{u}) (alpha : Type u) : IxPFunctor (Ix H) where
-  Pos := Pos H alpha
+@[reducible] def P (H : HSig.{u, v}) (α : Type u) : IxPFunctor (Ix H) where
+  Pos := Pos H α
   Ar := Ar
   next := next
 
