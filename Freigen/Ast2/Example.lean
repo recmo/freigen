@@ -45,7 +45,7 @@ abbrev CircE : EffSig := ⟨Unit, fun _ => .bool, fun _ => .unit⟩
 
 abbrev CircB : BindSig := ⟨Tp0, fun _ => .unit, id, fun _ => Unit, fun t _ => t⟩
 
-abbrev M : Type → Type 1 := ITree2.CompE CircE.spec CircB.spec
+abbrev M : Type → Type := ITree2.CompE CircE.spec CircB.spec
 
 /-- Evaluate a user-level `Circuit` program into the same `ITree2` signature used by the AST. -/
 abbrev evalC {α : Type} (p : Circuit α) : M α :=

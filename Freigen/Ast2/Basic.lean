@@ -2,15 +2,14 @@ import Freigen.ITree2.Basic
 
 namespace Freigen
 
-universe u v uEff uEffIn uBind uBindIn uBranch
+universe u v
 
 /-- The free monad over host effect and custom-control-flow signatures, in **leaf-grafting
     form**: every node carries its continuation, and `bind` is a *function* (structural
     grafting at `pure` leaves), not a constructor — which is what makes the `Monad` instance
     lawful on the nose (`pure_bind` is `rfl`; the other laws are inductions). -/
-inductive Freek (𝓔 : ITree2.EffSig.{uEff,uEffIn,u})
-    (𝓑 : ITree2.BindSig.{u,uBind,uBindIn,u,uBranch}) :
-    Type u → Type (max (u+1) uEff uEffIn uBind uBindIn uBranch) where
+inductive Freek (𝓔 : ITree2.EffSig.{u}) (𝓑 : ITree2.BindSig.{u}) :
+    Type u → Type (u+1) where
 | pure {α : Type u} : α → Freek 𝓔 𝓑 α
 | eff {α : Type u} (e : 𝓔.ε) : 𝓔.input e → (𝓔.output e → Freek 𝓔 𝓑 α) →
     Freek 𝓔 𝓑 α
@@ -90,15 +89,14 @@ theorem Freek.eval_bind {M : Type u → Type v} [Monad M] [LawfulMonad M] {𝓔 
       rw [LawfulMonad.bind_assoc]
       exact congrArg _ (funext fun o => ihk o f)
 
-def Freek.toITree {𝓔 : ITree2.EffSig.{uEff,uEffIn,u}}
-    {𝓑 : ITree2.BindSig.{u,uBind,uBindIn,u,uBranch}} {α : Type u} :
+def Freek.toITree {𝓔 : ITree2.EffSig.{u}} {𝓑 : ITree2.BindSig.{u}} {α : Type u} :
     Freek 𝓔 𝓑 α → ITree2.CompE 𝓔 𝓑 α :=
   Freek.eval (M := ITree2.CompE 𝓔 𝓑)
     (fun e i => ITree2.CompE.vis e i ITree2.CompE.ret)
     (fun e i blocks => ITree2.CompE.bindEff e i blocks ITree2.CompE.ret)
 
-theorem Freek.toITree_bind {𝓔 : ITree2.EffSig.{uEff,uEffIn,u}}
-    {𝓑 : ITree2.BindSig.{u,uBind,uBindIn,u,uBranch}} {α β : Type u}
+theorem Freek.toITree_bind {𝓔 : ITree2.EffSig.{u}} {𝓑 : ITree2.BindSig.{u}}
+    {α β : Type u}
     (m : Freek 𝓔 𝓑 α) (f : α → Freek 𝓔 𝓑 β) :
     Freek.toITree (m.bind f) =
       ITree2.CompE.bind (Freek.toITree m) (fun a => Freek.toITree (f a)) := by
@@ -161,12 +159,12 @@ namespace Tp0
 
 end Tp0
 
-abbrev circuitEff : ITree2.EffSig.{0,0,0} where
+abbrev circuitEff : ITree2.EffSig.{0} where
   ε := Unit
   input := fun _ => Bool
   output := fun _ => Unit
 
-abbrev circuitBlock : ITree2.BindSig.{0,0,0,0,0} where
+abbrev circuitBlock : ITree2.BindSig.{0} where
   ε := Tp0
   input := fun _ => Unit
   output := Tp0.denote
@@ -304,7 +302,7 @@ def EffSig.trigger {𝓔 : EffSig} {𝓑 : BindSig} (e : 𝓔.ε) (i : (𝓔.�
     call-extended domain of the enclosing `letrec` — base events plus a self-call event
     carrying an `a`-value and branching on the `b`-result. -/
 @[reducible] def DomR (𝓔 : EffSig) (𝓑 : BindSig) :
-    Option (Tp0 × Tp0) → Type → Type 1
+    Option (Tp0 × Tp0) → Type → Type
   | none => ITree2.CompE 𝓔.spec 𝓑.spec
   | some (a, b) =>
       ITree2.CompE (ITree2.SumEff 𝓔.spec (ITree2.CallEff a.denote b.denote)) 𝓑.spec
@@ -402,7 +400,7 @@ def Expr.denote {𝓔 : EffSig} {𝓑 : BindSig} :
   | _, _, .letrec body k =>
       Expr.denote (k (ITree2.CompE.mrec fun s => Expr.denote (body s)))
   | _, _, .selfCall x k  =>
-      ITree2.CompE.vis (Sum.inr ()) x fun v => Expr.denote (k v)
+      ITree2.CompE.vis (Sum.inr ITree2.CallOp.call) x fun v => Expr.denote (k v)
   | _, _, .eff e i k     => DomR.bind (DomR.lift (EffSig.trigger (𝓑 := 𝓑) e i)) fun o =>
       Expr.denote (k o)
   | _, _, .bindEff e i blocks k =>

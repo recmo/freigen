@@ -1,8 +1,7 @@
 namespace Freigen
 namespace ITree2
 
-universe u uι uPos uAr uX uY uZ uEff uEffIn uEffOut
-universe uBind uBindIn uBindOut uBranch
+universe u v w x y z
 
 /-!
 # Indexed polynomial functor for scoped interaction-tree steps
@@ -20,33 +19,33 @@ The carrier below is the indexed M-type used by the scoped computation layer.
 -/
 
 /-- An indexed polynomial functor over an index type `ι`. -/
-structure IxPFunctor.{vι,vPos,vAr} (ι : Type vι) where
-  Pos : ι → Type vPos
-  Ar : {i : ι} → Pos i → Type vAr
+structure IxPFunctor (ι : Type u) where
+  Pos : ι → Type v
+  Ar : {i : ι} → Pos i → Type w
   next : {i : ι} → (p : Pos i) → Ar p → ι
 
 namespace IxPFunctor
 
 /-- Apply an indexed polynomial functor to a family `X`. -/
-@[reducible] def Obj {ι : Type uι} (P : IxPFunctor.{uι,uPos,uAr} ι)
-    (X : ι → Type uX) (i : ι) : Type (max uPos uAr uX) :=
+@[reducible] def Obj {ι : Type u} (P : IxPFunctor ι)
+    (X : ι → Type x) (i : ι) :=
   Σ p : P.Pos i, (a : P.Ar p) → X (P.next p a)
 
 /-- Map a family morphism over an indexed polynomial functor. -/
-def map {ι : Type uι} (P : IxPFunctor.{uι,uPos,uAr} ι) {X : ι → Type uX}
-    {Y : ι → Type uY}
+def map {ι : Type u} (P : IxPFunctor ι) {X : ι → Type x}
+    {Y : ι → Type y}
     (f : (i : ι) → X i → Y i) {i : ι} : P.Obj X i → P.Obj Y i
   | ⟨p, child⟩ => ⟨p, fun a => f (P.next p a) (child a)⟩
 
-@[simp] theorem map_id {ι : Type uι} (P : IxPFunctor.{uι,uPos,uAr} ι)
-    {X : ι → Type uX} {i : ι}
+@[simp] theorem map_id {ι : Type u} (P : IxPFunctor ι)
+    {X : ι → Type x} {i : ι}
     (x : P.Obj X i) :
     P.map (fun _ x => x) x = x := by
   cases x
   rfl
 
-@[simp] theorem map_comp {ι : Type uι} (P : IxPFunctor.{uι,uPos,uAr} ι)
-    {X : ι → Type uX} {Y : ι → Type uY} {Z : ι → Type uZ}
+@[simp] theorem map_comp {ι : Type u} (P : IxPFunctor ι)
+    {X : ι → Type x} {Y : ι → Type y} {Z : ι → Type z}
     (f : (i : ι) → X i → Y i) (g : (i : ι) → Y i → Z i)
     {i : ι} (x : P.Obj X i) :
     P.map (fun i x => g i (f i x)) x = P.map g (P.map f x) := by
@@ -56,15 +55,15 @@ def map {ι : Type uι} (P : IxPFunctor.{uι,uPos,uAr} ι) {X : ι → Type uX}
 /-! ## Indexed M-type -/
 
 /-- `Approx P n i` is the depth-`n` approximation to the final coalgebra of `P` at index `i`. -/
-inductive Approx {ι : Type uι} (P : IxPFunctor.{uι,uPos,uAr} ι) :
-    Nat → ι → Type (max uι uPos uAr) where
+inductive Approx {ι : Type u} (P : IxPFunctor ι) :
+    Nat → ι → Type _ where
   | continue {i : ι} : Approx P 0 i
   | intro {n : Nat} {i : ι} (p : P.Pos i) :
       ((a : P.Ar p) → Approx P n (P.next p a)) → Approx P (n + 1) i
 
 namespace Approx
 
-variable {ι : Type uι} {P : IxPFunctor.{uι,uPos,uAr} ι}
+variable {ι : Type u} {P : IxPFunctor ι}
 
 /-- The root position of a non-trivial approximation. -/
 def head {n : Nat} {i : ι} : Approx P (n + 1) i → P.Pos i
@@ -79,7 +78,7 @@ def children {n : Nat} {i : ι} (x : Approx P (n + 1) i) :
 end Approx
 
 /-- Adjacent approximants agree when they expose the same finite prefix. -/
-inductive Agree {ι : Type uι} (P : IxPFunctor.{uι,uPos,uAr} ι) :
+inductive Agree {ι : Type u} (P : IxPFunctor ι) :
     {n : Nat} → {i : ι} → Approx P n i → Approx P (n + 1) i → Prop where
   | continue {i : ι} (x : Approx P 0 i) (y : Approx P 1 i) :
       Agree P x y
@@ -91,7 +90,7 @@ inductive Agree {ι : Type uι} (P : IxPFunctor.{uι,uPos,uAr} ι) :
 
 namespace Approx
 
-variable {ι : Type uι} {P : IxPFunctor.{uι,uPos,uAr} ι}
+variable {ι : Type u} {P : IxPFunctor ι}
 
 theorem agree_children {n : Nat} {i : ι}
     {x : Approx P (n + 1) i} {y : Approx P (n + 1 + 1) i}
@@ -149,14 +148,14 @@ theorem head_succ (n m : Nat) {i : ι} (x : (n : Nat) → Approx P n i)
 end Approx
 
 /-- The indexed M-type/final-coalgebra carrier for an indexed polynomial functor. -/
-structure M {ι : Type uι} (P : IxPFunctor.{uι,uPos,uAr} ι) (i : ι) :
-    Type (max uι uPos uAr) where
+structure M {ι : Type u} (P : IxPFunctor ι) (i : ι) :
+    Type _ where
   approx : (n : Nat) → Approx P n i
   consistent : ∀ n, Agree P (approx n) (approx (n + 1))
 
 namespace M
 
-variable {ι : Type uι} {P : IxPFunctor.{uι,uPos,uAr} ι}
+variable {ι : Type u} {P : IxPFunctor ι}
 
 theorem ext {i : ι} (x y : M P i) (h : ∀ n, x.approx n = y.approx n) : x = y := by
   cases x
@@ -258,14 +257,14 @@ theorem ofStep_dest {i : ι} (x : M P i) : ofStep (dest x) = x := by
 theorem eq_of_dest_eq {i : ι} {x y : M P i} (h : dest x = dest y) : x = y := by
   rw [← ofStep_dest x, ← ofStep_dest y, h]
 
-def sCorec {X : ι → Type uX} (f : (i : ι) → X i → P.Obj X i) :
+def sCorec {X : ι → Type x} (f : (i : ι) → X i → P.Obj X i) :
     {i : ι} → X i → (n : Nat) → Approx P n i
   | _, _, 0 => .continue
   | i, x, n + 1 =>
       match f i x with
       | ⟨p, child⟩ => .intro p fun a => sCorec f (child a) n
 
-theorem sCorec_consistent {X : ι → Type uX} (f : (i : ι) → X i → P.Obj X i) :
+theorem sCorec_consistent {X : ι → Type x} (f : (i : ι) → X i → P.Obj X i) :
     {i : ι} → (x : X i) → ∀ n, Agree P (sCorec f x n) (sCorec f x (n + 1)) := by
   intro i x n
   induction n generalizing i x with
@@ -277,12 +276,12 @@ theorem sCorec_consistent {X : ι → Type uX} (f : (i : ι) → X i → P.Obj X
       exact Agree.intro (fun a => ih (child a))
 
 /-- Indexed corecursor for the indexed M-type. -/
-def corec {X : ι → Type uX} (f : (i : ι) → X i → P.Obj X i) {i : ι}
+def corec {X : ι → Type x} (f : (i : ι) → X i → P.Obj X i) {i : ι}
     (x : X i) : M P i where
   approx := sCorec f x
   consistent := sCorec_consistent f x
 
-theorem corec_def {X : ι → Type uX} (f : (i : ι) → X i → P.Obj X i)
+theorem corec_def {X : ι → Type x} (f : (i : ι) → X i → P.Obj X i)
     {i : ι} (x : X i) :
     corec f x = ofStep (P.map (fun i => corec f (i := i)) (f i x)) := by
   apply ext
@@ -294,7 +293,7 @@ theorem corec_def {X : ι → Type uX} (f : (i : ι) → X i → P.Obj X i)
       rcases f i x with ⟨p, child⟩
       rfl
 
-theorem dest_corec {X : ι → Type uX} (f : (i : ι) → X i → P.Obj X i)
+theorem dest_corec {X : ι → Type x} (f : (i : ι) → X i → P.Obj X i)
     {i : ι} (x : X i) :
     dest (corec f x) = P.map (fun i => corec f (i := i)) (f i x) := by
   rw [corec_def, dest_ofStep]
@@ -330,60 +329,67 @@ end M
 end IxPFunctor
 
 /-- First-order effect signature: operation names, input payload, and output payload. -/
-structure EffSig.{vEff,vEffIn,vEffOut} where
-  ε : Type vEff
-  input : ε → Type vEffIn
-  output : ε → Type vEffOut
+structure EffSig where
+  ε : Type u
+  input : ε → Type u
+  output : ε → Type u
 
 /-- First-order scoped-bind signature: an operation has an input, an output, and a family of
     block branches, each with its own result type. -/
-structure BindSig.{v,vBind,vBindIn,vBindOut,vBranch} where
-  ε : Type vBind
-  input : ε → Type vBindIn
-  output : ε → Type vBindOut
-  branch : ε → Type vBranch
-  branchOutput : (e : ε) → branch e → Type v
+structure BindSig where
+  ε : Type u
+  input : ε → Type u
+  output : ε → Type u
+  branch : ε → Type u
+  branchOutput : (e : ε) → branch e → Type u
 
-/-- Positions of one scoped interaction-tree step at ambient result type `α`. -/
-inductive Pos (𝓔 : EffSig.{uEff,uEffIn,uEffOut})
-    (𝓑 : BindSig.{u,uBind,uBindIn,uBindOut,uBranch}) :
-    Type u → Type (max u uEff uEffIn uBind uBindIn) where
-  | ret {α : Type u} : α → Pos 𝓔 𝓑 α
-  | tau {α : Type u} : Pos 𝓔 𝓑 α
-  | fail {α : Type u} : Pos 𝓔 𝓑 α
-  | vis {α : Type u} (e : 𝓔.ε) : 𝓔.input e → Pos 𝓔 𝓑 α
-  | bindEff {α : Type u} (e : 𝓑.ε) : 𝓑.input e → Pos 𝓔 𝓑 α
+/-- Internal result labels for the scoped tree.  The normal label is the public computation path;
+    block labels name a scoped block, whose result type is recovered from the bind signature. -/
+inductive Ix (𝓑 : BindSig.{u}) : Type u where
+  | normal : Ix 𝓑
+  | block (e : 𝓑.ε) : 𝓑.branch e → Ix 𝓑
 
-/-- Child names for one position. -/
-@[reducible] def Ar {𝓔 : EffSig.{uEff,uEffIn,uEffOut}}
-    {𝓑 : BindSig.{u,uBind,uBindIn,uBindOut,uBranch}} {α : Type u} :
-    Pos 𝓔 𝓑 α → Type (max uEffOut uBranch uBindOut)
-  | .ret _ => PEmpty
-  | .tau => PUnit
-  | .fail => PEmpty
-  | .vis e _ => ULift.{max uEffOut uBranch uBindOut, uEffOut} (𝓔.output e)
-  | .bindEff e _ =>
-      ULift.{max uEffOut uBranch uBindOut, uBranch} (𝓑.branch e) ⊕
-        ULift.{max uEffOut uBranch uBindOut, uBindOut} (𝓑.output e)
+/-- The Lean result type attached to an internal result label. -/
+@[reducible] def result (𝓑 : BindSig.{u})
+    (α : Type u) : Ix 𝓑 → Type u
+  | .normal => α
+  | .block e b => 𝓑.branchOutput e b
 
-/-- Result type of each child.  For `bindEff`, left children are scoped blocks and right
-    children are the ordinary continuation. -/
-@[reducible] def next {𝓔 : EffSig.{uEff,uEffIn,uEffOut}}
-    {𝓑 : BindSig.{u,uBind,uBindIn,uBindOut,uBranch}} {α : Type u} :
-    (p : Pos 𝓔 𝓑 α) → Ar p → Type u
-  | .ret _, h => nomatch h
-  | .tau, _ => α
-  | .fail, h => nomatch h
-  | .vis _ _, _ => α
-  | .bindEff e _, Sum.inl b => 𝓑.branchOutput e b.down
-  | .bindEff _ _, Sum.inr _ => α
+/-- Positions of one scoped interaction-tree step at internal result label `i`. -/
+inductive Pos (𝓔 : EffSig.{u}) (𝓑 : BindSig.{u}) (α : Type u) :
+    Ix 𝓑 → Type u where
+  | ret {i : Ix 𝓑} : result 𝓑 α i → Pos 𝓔 𝓑 α i
+  | tau {i : Ix 𝓑} : Pos 𝓔 𝓑 α i
+  | fail {i : Ix 𝓑} : Pos 𝓔 𝓑 α i
+  | vis {i : Ix 𝓑} (e : 𝓔.ε) : 𝓔.input e → Pos 𝓔 𝓑 α i
+  | bindEff {i : Ix 𝓑} (e : 𝓑.ε) : 𝓑.input e → Pos 𝓔 𝓑 α i
 
-/-- The indexed polynomial functor for scoped interaction-tree steps. -/
-def P (𝓔 : EffSig.{uEff,uEffIn,uEffOut})
-    (𝓑 : BindSig.{u,uBind,uBindIn,uBindOut,uBranch}) :
-    IxPFunctor.{u+1, max u uEff uEffIn uBind uBindIn, max uEffOut uBranch uBindOut}
-      (Type u) where
-  Pos := Pos 𝓔 𝓑
+/-- Child names for one position.  Keeping this as an inductive keeps all child labels in the
+    signature universe directly. -/
+inductive Ar {𝓔 : EffSig.{u}} {𝓑 : BindSig.{u}} {α : Type u} :
+    {i : Ix 𝓑} → Pos 𝓔 𝓑 α i → Type u where
+  | tau {i : Ix 𝓑} : Ar (Pos.tau (i := i))
+  | vis {i : Ix 𝓑} {e : 𝓔.ε} {input : 𝓔.input e} :
+      𝓔.output e → Ar (Pos.vis (i := i) e input)
+  | block {i : Ix 𝓑} {e : 𝓑.ε} {input : 𝓑.input e} :
+      (b : 𝓑.branch e) → Ar (Pos.bindEff (i := i) e input)
+  | cont {i : Ix 𝓑} {e : 𝓑.ε} {input : 𝓑.input e} :
+      𝓑.output e → Ar (Pos.bindEff (i := i) e input)
+
+/-- Result label of each child.  For `bindEff`, block children jump to their named block label,
+    while the operation continuation stays at the ambient label. -/
+@[reducible] def next {𝓔 : EffSig.{u}} {𝓑 : BindSig.{u}} {α : Type u} {i : Ix 𝓑} :
+    (p : Pos 𝓔 𝓑 α i) → Ar p → Ix 𝓑
+  | .tau, .tau => i
+  | .vis _ _, .vis _ => i
+  | .bindEff e _, .block b => .block e b
+  | .bindEff _ _, .cont _ => i
+
+/-- The indexed polynomial functor for scoped interaction-tree steps at public result type `α`.
+    The index is small (`Ix 𝓑`), not `Type`, so small signatures produce a `Type` carrier. -/
+@[reducible] def P (𝓔 : EffSig.{u}) (𝓑 : BindSig.{u}) (α : Type u) :
+    IxPFunctor (Ix 𝓑) where
+  Pos := Pos 𝓔 𝓑 α
   Ar := Ar
   next := next
 

@@ -12,7 +12,7 @@ namespace Freigen
 namespace Ast2
 
 /-- The base `ITree2` domain for a coded Ast2 signature. -/
-abbrev EvalM (𝓔 : EffSig) (𝓑 : BindSig) (α : Type) : Type 1 :=
+abbrev EvalM (𝓔 : EffSig) (𝓑 : BindSig) (α : Type) : Type :=
   ITree2.CompE 𝓔.spec 𝓑.spec α
 
 /-- A reflection of source `m`, conditional on pending defining equations `Φ`. -/
