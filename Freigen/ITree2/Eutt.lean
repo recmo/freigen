@@ -33,6 +33,43 @@ def Compat.refl (H : HSig.{u, w}) : Compat H H where
   branchOutput
     | ⟨⟨rfl⟩⟩, rfl => Eq
 
+inductive Compat.SumRel {S : HSig.{u, w}} {T : HSig.{v, x}}
+    {F : HSig.{u, w}} {G : HSig.{v, x}} (C : Compat S T) (D : Compat F G) :
+    (S.op ⊕ F.op) → (T.op ⊕ G.op) → Type (max u v w x) where
+  | inl {e h} : C.opRel e h → SumRel C D (.inl e) (.inl h)
+  | inr {e h} : D.opRel e h → SumRel C D (.inr e) (.inr h)
+
+def Compat.sum {S : HSig.{u, w}} {T : HSig.{v, x}}
+    {F : HSig.{u, w}} {G : HSig.{v, x}} (C : Compat S T) (D : Compat F G) :
+    Compat (HSig.sum S F) (HSig.sum T G) where
+  opRel := SumRel C D
+  input
+    | .inl w => C.input w
+    | .inr w => D.input w
+  output
+    | .inl w => C.output w
+    | .inr w => D.output w
+  branch
+    | .inl w => C.branch w
+    | .inr w => D.branch w
+  branchInput
+    | .inl w, h => C.branchInput w h
+    | .inr w, h => D.branchInput w h
+  branchOutput
+    | .inl w, h => C.branchOutput w h
+    | .inr w, h => D.branchOutput w h
+
+def Compat.call {σ : Type u} {ρ : Type u} {σ' : Type v} {ρ' : Type v}
+    (argRel : σ → σ' → Prop) (resultRel : ρ → ρ' → Prop) :
+    Compat (Call.{u, w} σ ρ) (Call.{v, x} σ' ρ') where
+  opRel
+    | .call, .call => ULift.{max u v w x, 0} Unit
+  input _ := argRel
+  output _ := resultRel
+  branch _ source _ := nomatch source
+  branchInput _ h := nomatch h
+  branchOutput _ h := nomatch h
+
 end HSig
 
 namespace CompE
@@ -102,6 +139,74 @@ theorem Eutt.of_step {α : Type u} {β : Type v} {r : α → β → Prop} {x y}
   rcases hxy with hxy | hxy
   · exact (eutt_closed C hxy).mono C (fun _ _ _ _ _ h => Or.inl h)
   · exact hxy.mono C (fun _ _ _ _ _ h => Or.inl h)
+
+theorem Eutt.congr {α : Type u} {β : Type v} {r : α → β → Prop}
+    {x x' : CompE S α} {y y' : CompE T β}
+    (hx : x = x') (hy : y = y') (h : Eutt C r x y) : Eutt C r x' y' := by
+  cases hx
+  cases hy
+  exact h
+
+theorem Eutt.tauR {α : Type u} {β : Type v} {r : α → β → Prop}
+    {x : CompE S α} {y : CompE T β} (h : Eutt C r x y) :
+    Eutt C r x (tau y) :=
+  Eutt.of_step C (.tauR r y (eutt_closed C h))
+
+theorem Eutt.tauL {α : Type u} {β : Type v} {r : α → β → Prop}
+    {x : CompE S α} {y : CompE T β} (h : Eutt C r x y) :
+    Eutt C r (tau x) y :=
+  Eutt.of_step C (.tauL r x (eutt_closed C h))
+
+/-- Relational bind congruence.  The intermediate result relation determines which pairs of
+    continuations must themselves be bisimilar. -/
+theorem Eutt.bind {α : Type u} {β : Type v} {γ : Type u} {δ : Type v}
+    {r : α → β → Prop} {q : γ → δ → Prop}
+    {m : CompE S α} {n : CompE T β} (hm : Eutt C r m n)
+    (ks : α → CompE S γ) (kt : β → CompE T δ)
+    (hk : ∀ a b, r a b → Eutt C q (ks a) (kt b)) :
+    Eutt C q (bind m ks) (bind n kt) := by
+  let R := fun (γ : Type u) (δ : Type v) (q : γ → δ → Prop)
+      (x : CompE S γ) (y : CompE T δ) =>
+    Eutt C q x y ∨
+      ∃ (α : Type u) (β : Type v) (r : α → β → Prop)
+        (m : CompE S α) (n : CompE T β)
+        (ks : α → CompE S γ) (kt : β → CompE T δ),
+        x = CompE.bind m ks ∧ y = CompE.bind n kt ∧ Eutt C r m n ∧
+          ∀ a b, r a b → Eutt C q (ks a) (kt b)
+  refine ⟨R, ?_, Or.inr ⟨α, β, r, m, n, ks, kt, rfl, rfl, hm, hk⟩⟩
+  intro γ δ q x y hxy
+  rcases hxy with hxy | ⟨α, β, r, m, n, ks, kt, rfl, rfl, hm, hk⟩
+  · exact (eutt_closed C hxy).mono C (fun _ _ _ _ _ h => Or.inl h)
+  · let go {m : CompE S α} {n : CompE T β}
+        (step : EuttF C (fun _ _ r x y => Eutt C r x y) r m n) :
+        EuttF C R q (CompE.bind m ks) (CompE.bind n kt) := by
+        induction step with
+        | ret a b h =>
+            rw [bind_ret, bind_ret]
+            exact (eutt_closed C (hk a b h)).mono C (fun _ _ _ _ _ h => Or.inl h)
+        | fail =>
+            rw [bind_fail, bind_fail]
+            exact .fail q
+        | tau mx ny h =>
+            rw [bind_tau, bind_tau]
+            exact .tau q (CompE.bind mx ks) (CompE.bind ny kt)
+              (Or.inr ⟨_, _, _, mx, ny, ks, kt, rfl, rfl, h, hk⟩)
+        | tauL mx h ih =>
+            rw [bind_tau]
+            exact .tauL q (CompE.bind mx ks) ih
+        | tauR ny h ih =>
+            rw [bind_tau]
+            exact .tauR q (CompE.bind ny kt) ih
+        | op w sourceInput targetInput hi sourceBlocks sourceK targetBlocks targetK hb ho =>
+            rw [bind_assoc, bind_assoc]
+            exact .op q w sourceInput targetInput hi sourceBlocks
+              (fun o => CompE.bind (sourceK o) ks) targetBlocks
+              (fun o => CompE.bind (targetK o) kt)
+              (fun bs bt hbr xs xt hx => Or.inl (hb bs bt hbr xs xt hx))
+              (fun os ot hot => Or.inr
+                ⟨_, _, _, sourceK os, targetK ot, ks, kt, rfl, rfl,
+                  (ho os ot hot), hk⟩)
+    exact go (eutt_closed C hm)
 
 end CompE
 end ITree2

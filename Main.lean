@@ -1,4 +1,5 @@
 import Freigen
+import Freigen.Ast2.Compile
 import Lean
 
 open Lean Meta
@@ -22,6 +23,17 @@ unsafe def emitEntry (path : String) (decl : Name) : MetaM Unit := do
     let stmt := (mkApp pred closed).headBeta
     IO.println s!"  ⊢ {← ppExpr stmt}"
 
+/-- Render an AST2 artifact already serialized by its `#compile` command. -/
+unsafe def emitAst2Entry (path : String) (serialized sound : Name) : MetaM Unit := do
+  let contents ← evalExpr String (mkConst ``String)
+    (← mkConstWithFreshMVarLevels serialized)
+  let p : System.FilePath := path
+  if let some dir := p.parent then IO.FS.createDirAll dir
+  IO.FS.writeFile p contents
+  IO.println s!"freigen: emitted {path} ({contents.length} bytes)"
+  let statement ← inferType (← mkConstWithFreshMVarLevels sound)
+  IO.println s!"  ⊢ {← ppExpr statement}"
+
 /-- Import the given modules (loading env extensions) and flush every `#compile` artifact to disk. -/
 unsafe def runImpl (args : List String) : IO Unit := do
   if args.isEmpty then
@@ -38,10 +50,17 @@ unsafe def runImpl (args : List String) : IO Unit := do
     match env.getModuleIdxFor? decl with
     | some idx => targetMods.contains env.header.moduleNames[idx.toNat]!
     | none     => false
-  if arts.isEmpty then
+  let ast2Arts := Freigen.Ast2.compileExt.getState env |>.filter fun (_, serialized, _) =>
+    match env.getModuleIdxFor? serialized with
+    | some idx => targetMods.contains env.header.moduleNames[idx.toNat]!
+    | none     => false
+  if arts.isEmpty && ast2Arts.isEmpty then
     IO.println "freigen: no `#compile` artifacts found in the given modules"
     return
-  let act : MetaM Unit := arts.forM fun (path, decl) => emitEntry path decl
+  let act : MetaM Unit := do
+    arts.forM fun (path, decl) => emitEntry path decl
+    ast2Arts.forM fun (path, serialized, sound) =>
+      emitAst2Entry path serialized sound
   let ctx : Core.Context := { fileName := "<freigen>", fileMap := default }
   discard <| (act.run').toIO ctx { env }
 

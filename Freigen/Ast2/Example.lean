@@ -1,4 +1,4 @@
-import Freigen.Ast2.Reflect
+import Freigen.Ast2.Compile
 
 /-! A hand-reflected circuit over the unified higher-order `Freek`/`Expr` API. -/
 
@@ -28,6 +28,14 @@ abbrev Circ : Signature where
     | .assert, b => nomatch b
     | .hint result, _ => result
 
+@[ast2_render] def circRender : RenderSpec Circ where
+  opName
+    | .assert => "assert"
+    | .hint _ => "hint"
+  branches
+    | .assert => []
+    | .hint _ => [()]
+
 inductive SourceOp : Type 1 where
   | assert
   | hint (result : Type)
@@ -56,7 +64,7 @@ inductive CircRel : SourceOp → CircOp → Type 1 where
   | hint (result : Type) (code : Tp0) (repr : result → code.denote → Prop) :
       CircRel (.hint result) (.hint code)
 
-abbrev CircCompat : Signature.Compat Source Circ where
+@[ast2_compat] abbrev CircCompat : Signature.Compat Source Circ where
   opRel := CircRel
   input
     | .assert, source, target => source = target
@@ -78,6 +86,14 @@ abbrev CircCompat : Signature.Compat Source Circ where
     | assert => exact nomatch bs
     | hint _ _ repr => exact repr source target
 
+@[ast2_op] def circAssertOp : OpSpec CircCompat SourceOp.assert where
+  target := .assert
+  witness := .assert
+
+@[ast2_op] def circHintOp (repr : ReprSpec α) : OpSpec CircCompat (SourceOp.hint α) where
+  target := .hint repr.code
+  witness := .hint α repr.code repr.relates
+
 def fin5NatRel : Fin 5 → Nat → Prop := fun source target => source.val = target
 
 def fin5Hint : CircRel (.hint (Fin 5)) (.hint .nat) :=
@@ -91,10 +107,10 @@ abbrev Circuit (α : Type) := Freek Source α
 
 abbrev M := ITree2.CompE Circ.spec
 
-def Circuit.assert (condition : Bool) : Circuit Unit :=
+@[ast2_inline] def Circuit.assert (condition : Bool) : Circuit Unit :=
   .op SourceOp.assert condition (fun b => nomatch b) .pure
 
-def Circuit.hint {α : Type} (block : Circuit α) : Circuit α :=
+@[ast2_inline] def Circuit.hint {α : Type} (block : Circuit α) : Circuit α :=
   .op (.hint α) () (fun _ _ => block) .pure
 
 def Circuit.evalWithHints (program : Circuit α) : Option α :=
@@ -119,6 +135,160 @@ def mainSrc : Circuit Nat := do
   let h ← Circuit.hint (pure s)
   let _ ← Circuit.assert (h == s)
   pure h
+
+#reflect_plan mainSrc
+
+def mainMacroReflected := reflect% mainSrc
+
+example : ITree2.CompE.Eutt CircCompat Eq
+    (Freek.toITree mainSrc) (Expr.denote (mainMacroReflected.1 (Tp.denote M))) :=
+  mainMacroReflected.2
+
+example : ∃ (body : Nat → Expr Circ (Tp.denote M) none .nat)
+    (k : (Nat → M Nat) → Expr Circ (Tp.denote M) none .nat),
+    (mainMacroReflected.1 (Tp.denote M)).stripSource =
+      @Expr.lam Circ (Tp.denote M) none .nat .nat .nat body k := by
+  refine ⟨_, _, rfl⟩
+
+def symbolicHelperMain : Circuit Nat := do
+  let x ← Circuit.hint (pure 4)
+  sqAssertSrc x
+
+#reflect_plan symbolicHelperMain
+
+def symbolicHelperReflected := reflect% symbolicHelperMain
+
+reflect_def symbolicHelperNamed := symbolicHelperMain
+
+def triangularSrc : Nat → Circuit Nat
+  | 0 => pure 0
+  | n + 1 => do
+      let subtotal ← triangularSrc n
+      pure (subtotal + n + 1)
+
+def symbolicRecursiveMain : Circuit Nat := do
+  let n ← Circuit.hint (pure 5)
+  triangularSrc n
+
+#reflect_plan symbolicRecursiveMain
+
+reflect_def symbolicRecursiveReflected := symbolicRecursiveMain
+
+example : ITree2.CompE.Eutt CircCompat Eq
+    (Freek.toITree symbolicRecursiveMain)
+    (Expr.denote (symbolicRecursiveReflected (Tp.denote M))) :=
+  symbolicRecursiveReflected_sound
+
+example : (symbolicRecursiveReflected (Tp.denote M)).leadingSourceRanges.length ≥ 2 := by
+  decide
+
+#compile symbolicRecursiveMain => "build/ast2-symbolic-recursive.prog"
+
+example : ∃ (body : Nat → Expr Circ (Tp.denote M) none .nat)
+    (k : (Nat → M Nat) → Expr Circ (Tp.denote M) none .nat),
+    (symbolicHelperReflected.1 (Tp.denote M)).stripSource =
+      @Expr.lam Circ (Tp.denote M) none .nat .nat .nat body k := by
+  refine ⟨_, _, rfl⟩
+
+example : ITree2.CompE.Eutt CircCompat Eq
+    (Freek.toITree symbolicHelperMain)
+    (Expr.denote (symbolicHelperReflected.1 (Tp.denote M))) :=
+  symbolicHelperReflected.2
+
+example : ITree2.CompE.Eutt CircCompat Eq
+    (Freek.toITree symbolicHelperMain) (Expr.denote (symbolicHelperNamed (Tp.denote M))) :=
+  symbolicHelperNamed_sound
+
+def twiceSqAssertSrc (x : Nat) : Circuit Nat := do
+  let y ← sqAssertSrc x
+  sqAssertSrc y
+
+def nestedHelperMain : Circuit Nat := do
+  let x ← Circuit.hint (pure 2)
+  twiceSqAssertSrc x
+
+#reflect_plan nestedHelperMain
+
+reflect_def nestedHelperReflected := nestedHelperMain
+
+def addTwoSrc (x y : Nat) : Circuit Nat :=
+  pure (x + y)
+
+def tupledHelperMain : Circuit Nat := do
+  let x ← Circuit.hint (pure 8)
+  let y ← Circuit.hint (pure 13)
+  addTwoSrc x y
+
+#reflect_plan tupledHelperMain
+
+reflect_def tupledHelperReflected := tupledHelperMain
+
+example : ITree2.CompE.Eutt CircCompat Eq
+    (Freek.toITree tupledHelperMain)
+    (Expr.denote (tupledHelperReflected (Tp.denote M))) :=
+  tupledHelperReflected_sound
+
+example : (nestedHelperReflected (Tp.denote M)).sourceRange?.isSome := by decide
+
+example : ITree2.CompE.Eutt CircCompat Eq
+    (Freek.toITree nestedHelperMain) (Expr.denote (nestedHelperReflected (Tp.denote M))) :=
+  nestedHelperReflected_sound
+
+def discardHint {α : Type} (x : α) : Circuit Unit := do
+  let _ ← Circuit.hint (pure x)
+  pure ()
+
+def staticSpecializationMain : Circuit Unit := do
+  let _ ← discardHint 5
+  discardHint true
+
+#reflect_plan staticSpecializationMain
+
+reflect_def staticSpecializationReflected := staticSpecializationMain
+
+example : ITree2.CompE.Eutt CircCompat Eq
+    (Freek.toITree staticSpecializationMain)
+    (Expr.denote (staticSpecializationReflected (Tp.denote M))) :=
+  staticSpecializationReflected_sound
+
+def pureReflected := reflect% (pure 7 : Circuit Nat)
+
+example : (pureReflected.1 (Tp.denote M)).stripSource =
+    Expr.natLit 7 (fun n => .ret n) := rfl
+
+example : (pureReflected.1 (Tp.denote M)).sourceRange?.isSome := by decide
+
+example : ITree2.CompE.Eutt CircCompat Eq
+    (Freek.toITree (pure 7 : Circuit Nat))
+    (Expr.denote (pureReflected.1 (Tp.denote M))) :=
+  pureReflected.2
+
+def hintMacroReflected := reflect% (Circuit.hint (pure 7 : Circuit Nat))
+
+def assertMacroReflected := reflect% (Circuit.assert true)
+
+example : ITree2.CompE.Eutt CircCompat Eq
+    (Freek.toITree (Circuit.hint (pure 7 : Circuit Nat)))
+    (Expr.denote (hintMacroReflected.1 (Tp.denote M))) :=
+  hintMacroReflected.2
+
+example : ITree2.CompE.Eutt CircCompat Eq
+    (Freek.toITree (Circuit.assert true))
+    (Expr.denote (assertMacroReflected.1 (Tp.denote M))) :=
+  assertMacroReflected.2
+
+def finHintSource : Circuit (Fin 5) :=
+  Circuit.hint (pure ⟨3, by decide⟩)
+
+def finHintMacroReflected := reflect% finHintSource
+
+/-- This theorem demonstrates the intended partial representation: the generated target returns a
+    `Nat`; soundness relates it to the source `Fin 5` by value equality, without claiming an
+    equivalence between the two types. -/
+example : ITree2.CompE.Eutt CircCompat fin5NatRel
+    (Freek.toITree finHintSource)
+    (Expr.denote (finHintMacroReflected.1 (Tp.denote M))) :=
+  finHintMacroReflected.2
 
 section Ast
 
@@ -176,50 +346,6 @@ example : ITree2.CompE.bind identityTree (fun f => f 7) =
   change ITree2.CompE.bind (ITree2.CompE.ret (fun x => ITree2.CompE.ret x))
     (fun f => f 7) = ITree2.CompE.ret 7
   rw [ITree2.CompE.bind_ret]
-
-def sqAssertReflected (x : Nat) :
-    ReflectionR CircCompat True .nat Eq
-      (sqAssertSrc x) := by
-  unfold sqAssertSrc Circuit.assert
-  apply Reflection.bin .mul x x
-  intro y
-  apply Reflection.bin .le x y
-  intro condition
-  apply Reflection.op CircCompat SourceOp.assert CircOp.assert CircRel.assert condition
-    (sourceInput := decide (x ≤ x * x))
-  · rintro ⟨⟨-, hy⟩, hc⟩
-    rw [hy] at hc
-    exact hc.symm
-  · intro b _
-    exact nomatch b
-  · intro _
-    refine ⟨.ret y, ?_⟩
-    intro _ _
-    refine ⟨fun hPhi => ?_⟩
-    apply ITree2.CompE.Eutt.of_step CircCompat
-    exact .ret _ (x * x) y hPhi.1.2.symm
-
-def hintReflected (x : Nat) :
-    ReflectionR CircCompat True .nat Eq
-      (Circuit.hint (pure x)) := by
-  unfold Circuit.hint
-  apply Reflection.op CircCompat (SourceOp.hint Nat) (CircOp.hint .nat)
-    (CircRel.hint Nat .nat Eq) ()
-    (sourceInput := ())
-  · intro _
-    rfl
-  · intro _ _
-    refine ⟨.ret x, ?_⟩
-    intro _ _ _ _
-    refine ⟨fun _ => ?_⟩
-    apply ITree2.CompE.Eutt.of_step CircCompat
-    exact .ret _ x x rfl
-  · intro output
-    refine ⟨.ret output, ?_⟩
-    intro source hsource
-    refine ⟨fun _ => ?_⟩
-    apply ITree2.CompE.Eutt.of_step CircCompat
-    exact .ret _ source output hsource
 
 /-! A dynamic binder used beneath recursion. -/
 

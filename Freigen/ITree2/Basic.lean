@@ -988,11 +988,26 @@ def sumL {α : Type u} (t : CompE H α) : CompE (Sum H F) α :=
 abbrev InterpState (H : HSig.{u, v}) (σ ρ α : Type u) (i : Ix H) :=
   Tree (Sum H (Call σ ρ)) α (sourceIx i)
 
+def interpCoNormal {σ ρ : Type u}
+    (body : σ → CompE (Sum H (Call σ ρ)) ρ)
+    (t : CompE (Sum H (Call σ ρ)) α) :
+    Step H α (InterpState H σ ρ α) .normal :=
+  match dest t with
+  | ⟨.ret a, _⟩ => Step.ret a
+  | ⟨.tau, c⟩ => Step.tau (c Ar.tau)
+  | ⟨.fail, _⟩ => Step.fail
+  | ⟨.op (.inl e) input, c⟩ => Step.op e input
+      (fun bx => c (Ar.block bx))
+      (fun o => c (Ar.cont o))
+  | ⟨.op (.inr .call) s, c⟩ => Step.tau
+      (bindAt (body s) fun o => c (Ar.cont o))
+
 def interpCo {σ ρ : Type u}
     (body : σ → CompE (Sum H (Call σ ρ)) ρ) :
     (i : Ix H) → InterpState H σ ρ α i →
       Step H α (InterpState H σ ρ α) i
-  | i, t =>
+  | .normal, t => interpCoNormal body t
+  | i@(.block _ _), t =>
       match destAt t with
       | ⟨.ret a, _⟩ => Step.ret (cast (by cases i <;> rfl) a)
       | ⟨.tau, c⟩ => Step.tau (c Ar.tau)
@@ -1007,6 +1022,181 @@ def interp {σ ρ α : Type u}
     (body : σ → CompE (Sum H (Call σ ρ)) ρ)
     (t : CompE (Sum H (Call σ ρ)) α) : CompE H α :=
   corecAt (interpCo body) t
+
+@[simp] theorem interp_ret {σ ρ : Type u}
+    (body : σ → CompE (Sum H (Call σ ρ)) ρ) {α : Type u} (a : α) :
+    interp body (ret a) = ret a := by
+  apply eq_of_dest_eq
+  change destAt (interp body (ret a)) = destAt (ret a)
+  rw [interp, dest_corecAt]
+  have hn : interpCoNormal body (ret a) = Step.ret a := by
+    unfold interpCoNormal
+    rw [dest_ret]
+    rfl
+  rw [show interpCo body .normal (ret a) = Step.ret a from hn]
+  refine Sigma.ext rfl ?_
+  apply heq_of_eq
+  funext h
+  nomatch h
+
+@[simp] theorem interp_tau {σ ρ : Type u}
+    (body : σ → CompE (Sum H (Call σ ρ)) ρ) {α : Type u}
+    (t : CompE (Sum H (Call σ ρ)) α) :
+    interp body (tau t) = tau (interp body t) := by
+  apply eq_of_dest_eq
+  change destAt (interp body (tau t)) = destAt (tau (interp body t))
+  rw [interp, dest_corecAt]
+  let targetStep : Step H α (InterpState H σ ρ α) .normal :=
+    @Step.tau H α (InterpState H σ ρ α) .normal t
+  have hn : interpCoNormal body (tau t) = targetStep := by
+    unfold interpCoNormal
+    rw [dest_tau]
+    rfl
+  rw [show interpCo body .normal (tau t) = targetStep from hn]
+  dsimp [targetStep, IxPFunctor.map]
+  rw [show destAt (tau (interp body t)) = Step.tau (interp body t) from
+    dest_tauAt (interp body t)]
+  refine Sigma.ext rfl ?_
+  apply heq_of_eq
+  funext ar
+  cases ar
+  rfl
+
+@[simp] theorem interp_fail {σ ρ : Type u}
+    (body : σ → CompE (Sum H (Call σ ρ)) ρ) {α : Type u} :
+    interp body (fail : CompE (Sum H (Call σ ρ)) α) = fail := by
+  apply eq_of_dest_eq
+  change destAt (interp body (fail : CompE (Sum H (Call σ ρ)) α)) =
+    destAt (fail : CompE H α)
+  rw [interp, dest_corecAt]
+  have hn : interpCoNormal body (fail : CompE (Sum H (Call σ ρ)) α) = Step.fail := by
+    unfold interpCoNormal
+    rw [dest_fail]
+    rfl
+  rw [show interpCo body .normal
+    (fail : CompE (Sum H (Call σ ρ)) α) = Step.fail from hn]
+  refine Sigma.ext rfl ?_
+  apply heq_of_eq
+  funext h
+  nomatch h
+
+@[simp] theorem bind_call {F : HSig.{u, v}} {σ ρ α : Type u}
+    (s : σ)
+    (blocks : (b : (Sum F (Call σ ρ)).Block (.inr CallOp.call)) →
+      CompE (Sum F (Call σ ρ)) ((Sum F (Call σ ρ)).branchOutput (.inr CallOp.call) b.1))
+    (k : ρ → CompE (Sum F (Call σ ρ)) α)
+    {β : Type u} (h : α → CompE (Sum F (Call σ ρ)) β) :
+    bind (op (Sum.inr CallOp.call) s blocks k) h =
+      op (Sum.inr CallOp.call) s blocks
+        (fun o => bind (k o) h) := by
+  apply eq_of_dest_eq
+  change destAt (bind (opAt (Sum.inr CallOp.call) s
+    (fun b => asBlock (blocks b)) k) h) = _
+  rw [bind_opAt]
+  rw [dest_opAt]
+  change _ = dest (op (Sum.inr CallOp.call) s
+    blocks (fun o => bind (k o) h))
+  rw [dest_op]
+  refine Sigma.ext rfl ?_
+  apply heq_of_eq
+  funext ar
+  cases ar with
+  | block bx => exact nomatch bx.1
+  | cont o => rfl
+
+@[simp] theorem bind_op_no_branches {α β : Type u}
+    (e : H.op) (empty : ∀ b : H.branch e, False) (input : H.input e)
+    (blocks : (b : H.Block e) → CompE H (H.branchOutput e b.1))
+    (k : H.output e → CompE H α) (h : α → CompE H β) :
+    bind (op e input blocks k) h =
+      op e input blocks (fun o => bind (k o) h) := by
+  apply eq_of_dest_eq
+  change destAt (bind (opAt e input (fun b => asBlock (blocks b)) k) h) = _
+  rw [bind_opAt, dest_opAt]
+  change _ = dest (op e input blocks (fun o => bind (k o) h))
+  rw [dest_op]
+  refine Sigma.ext rfl ?_
+  apply heq_of_eq
+  funext ar
+  cases ar with
+  | block bx => exact nomatch empty bx.1
+  | cont o => rfl
+
+theorem op_eq_bind_no_branches {α : Type u}
+    (e : H.op) (empty : ∀ b : H.branch e, False) (input : H.input e)
+    (blocks : (b : H.Block e) → CompE H (H.branchOutput e b.1))
+    (k : H.output e → CompE H α) :
+    op e input blocks k = bind (op e input blocks ret) k := by
+  rw [bind_op_no_branches e empty]
+  simp only [bind_ret]
+
+@[simp] theorem interp_call {σ ρ γ : Type u}
+    (body : σ → CompE (Sum H (Call σ ρ)) ρ) (s : σ)
+    (blocks : (b : (Sum H (Call σ ρ)).Block (.inr CallOp.call)) →
+      CompE (Sum H (Call σ ρ)) ((Sum H (Call σ ρ)).branchOutput (.inr CallOp.call) b.1))
+    (k : ρ → CompE (Sum H (Call σ ρ)) γ) :
+    interp body
+      (op (Sum.inr CallOp.call) s blocks k) =
+      tau (interp body (bind (body s) k)) := by
+  apply eq_of_dest_eq
+  change destAt (interp body (op (Sum.inr CallOp.call) s
+    blocks k)) = destAt (tau (interp body (bind (body s) k)))
+  rw [interp, dest_corecAt]
+  have hn : interpCoNormal body
+      (op (Sum.inr CallOp.call) s blocks k) =
+      @Step.tau H γ (InterpState H σ ρ γ) .normal (bind (body s) k) := by
+    unfold interpCoNormal
+    rw [dest_op]
+    rfl
+  rw [show interpCo body .normal
+    (op (Sum.inr CallOp.call) s blocks k) =
+      @Step.tau H γ (InterpState H σ ρ γ) .normal (bind (body s) k) from hn]
+  dsimp [IxPFunctor.map]
+  rw [show destAt (tau (interp body (bind (body s) k))) =
+    Step.tau (interp body (bind (body s) k)) from
+      dest_tauAt (interp body (bind (body s) k))]
+  refine Sigma.ext rfl ?_
+  apply heq_of_eq
+  funext ar
+  cases ar
+  rfl
+
+theorem interp_op_no_branches {σ ρ γ : Type u}
+    (body : σ → CompE (Sum H (Call σ ρ)) ρ)
+    (e : H.op) (empty : ∀ b : H.branch e, False) (input : H.input e)
+    (blocks : (b : (Sum H (Call σ ρ)).Block (.inl e)) →
+      CompE (Sum H (Call σ ρ)) ((Sum H (Call σ ρ)).branchOutput (.inl e) b.1))
+    (k : H.output e → CompE (Sum H (Call σ ρ)) γ) :
+    interp body (op (.inl e) input blocks k) =
+      op e input (fun bx => nomatch empty bx.1) (fun o => interp body (k o)) := by
+  apply eq_of_dest_eq
+  change destAt (interp body (op (.inl e) input blocks k)) =
+    destAt (op e input (fun bx => nomatch empty bx.1) (fun o => interp body (k o)))
+  rw [interp, dest_corecAt]
+  have hn : interpCoNormal body (op (.inl e) input blocks k) =
+      Step.op e input (fun bx => nomatch empty bx.1) k := by
+    unfold interpCoNormal
+    rw [dest_op]
+    refine Sigma.ext rfl ?_
+    apply heq_of_eq
+    funext ar
+    cases ar with
+    | block bx => exact nomatch empty bx.1
+    | cont o => rfl
+  rw [show interpCo body .normal (op (.inl e) input blocks k) =
+    Step.op e input (fun bx => nomatch empty bx.1) k from hn]
+  have hd : destAt (op e input (fun bx => nomatch empty bx.1)
+      (fun o => interp body (k o))) =
+      Step.op e input
+        (fun b => asBlock ((fun bx => nomatch empty bx.1) b))
+        (fun o => interp body (k o)) := dest_op _ _ _ _
+  rw [hd]
+  refine Sigma.ext rfl ?_
+  apply heq_of_eq
+  funext ar
+  cases ar with
+  | block bx => exact nomatch empty bx.1
+  | cont o => rfl
 
 def mrec {σ ρ : Type u}
     (body : σ → CompE (Sum H (Call σ ρ)) ρ) : σ → CompE H ρ :=

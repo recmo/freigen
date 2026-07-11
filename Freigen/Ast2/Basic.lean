@@ -72,6 +72,34 @@ theorem Freek.toITree_bind {H : ITree2.HSig.{u, v}} {α β : Type u}
       ITree2.CompE.bind (Freek.toITree m) (fun a => Freek.toITree (f a)) :=
   Freek.eval_bind _ m f
 
+@[simp] theorem Freek.toITree_op {H : ITree2.HSig.{u, v}} {α : Type u}
+    (e : H.op) (input : H.input e)
+    (blocks : (b : H.branch e) → H.branchInput e b →
+      Freek H (H.branchOutput e b))
+    (k : H.output e → Freek H α) :
+    Freek.toITree (.op e input blocks k) =
+      ITree2.CompE.bind
+        (ITree2.CompE.op e input
+          (fun bx => Freek.toITree (blocks bx.1 bx.2)) ITree2.CompE.ret)
+        (fun o => Freek.toITree (k o)) := by
+  rfl
+
+def Freek.call {H : ITree2.HSig.{u, v}} {σ ρ : Type u} (s : σ) :
+    Freek (ITree2.Sum H (ITree2.Call σ ρ)) ρ :=
+  .op (.inr .call) s (fun b _ => nomatch b) .pure
+
+theorem Freek.toITree_call {H : ITree2.HSig.{u, v}} {σ ρ : Type u} (s : σ) :
+    Freek.toITree (Freek.call (H := H) (ρ := ρ) s) =
+      ITree2.CompE.op (H := ITree2.Sum H (ITree2.Call σ ρ)) (α := ρ)
+        (Sum.inr ITree2.CallOp.call) s
+        (fun bx => nomatch bx.1) ITree2.CompE.ret := by
+  unfold Freek.call Freek.toITree
+  simp only [Freek.eval, ITree2.CompE.pure_def, ITree2.CompE.bind_def]
+  rw [ITree2.CompE.bind_ret_right]
+  congr
+  funext bx
+  exact nomatch bx.1
+
 /-!
 ## The object-type universe and the AST
 
@@ -97,6 +125,16 @@ The reflector relates this AST to `Freek.toITree` in the same coinductive domain
 -/
 
 namespace Ast2
+
+/-- A source range retained by reflection. Positions use Lean's one-based line and zero-based
+    Unicode-column convention. `module` identifies the source file through the Lean search path. -/
+structure SourceRange where
+  module : Lean.Name
+  startLine : Nat
+  startColumn : Nat
+  endLine : Nat
+  endColumn : Nat
+  deriving Repr, DecidableEq
 
 /-! ### Object types -/
 
@@ -202,11 +240,20 @@ structure Signature : Type 1 where
 abbrev Signature.Compat (S : ITree2.HSig.{u, v}) (H : Signature) :=
   ITree2.HSig.Compat S H.spec
 
-@[reducible] def DomR (H : Signature) : Option (Tp × Tp) → Type → Type
-  | none => ITree2.CompE H.spec
-  | some (a, b) => ITree2.CompE
-      (ITree2.Sum H.spec
-        (ITree2.Call (a.denote (ITree2.CompE H.spec)) (b.denote (ITree2.CompE H.spec))))
+@[reducible] def DomSig (H : Signature) : Option (Tp × Tp) → ITree2.HSig
+  | none => H.spec
+  | some (a, b) => ITree2.Sum H.spec
+      (ITree2.Call (a.denote (ITree2.CompE H.spec)) (b.denote (ITree2.CompE H.spec)))
+
+@[reducible] def DomSig.baseOp (H : Signature) : (r : Option (Tp × Tp)) → H.op → (DomSig H r).op
+  | none, e => e
+  | some _, e => .inl e
+
+abbrev Signature.CompatAt (S : ITree2.HSig.{u, v}) (H : Signature)
+    (r : Option (Tp × Tp)) := ITree2.HSig.Compat S (DomSig H r)
+
+@[reducible] def DomR (H : Signature) (r : Option (Tp × Tp)) : Type → Type :=
+  ITree2.CompE (DomSig H r)
 
 def DomR.ret {H : Signature} : {r : Option (Tp × Tp)} → {α : Type} → α → DomR H r α
   | none, _, x | some _, _, x => ITree2.CompE.ret x
@@ -235,6 +282,7 @@ def DomR.perform {H : Signature} : {r : Option (Tp × Tp)} → (e : H.op) →
 /-- PHOAS target for proof-erasing reflection. Operation blocks retain the ambient recursion
     slot and bind the value dynamically supplied to each branch. -/
 inductive Expr (H : Signature) (V : Tp → Type) : Option (Tp × Tp) → Tp → Type 2 where
+  | source {r α} : SourceRange → Expr H V r α → Expr H V r α
   | ret {r α} : V α → Expr H V r α
   | natLit {r α} : Nat → (V .nat → Expr H V r α) → Expr H V r α
   | boolLit {r α} : Bool → (V .bool → Expr H V r α) → Expr H V r α
@@ -261,6 +309,7 @@ inductive Expr (H : Signature) (V : Tp → Type) : Option (Tp × Tp) → Tp → 
 def Expr.denote {H : Signature} : {r : Option (Tp × Tp)} → {α : Tp} →
     Expr H (Tp.denote (ITree2.CompE H.spec)) r α →
       DomR H r (α.denote (ITree2.CompE H.spec))
+  | _, _, .source _ body => Expr.denote body
   | _, _, .ret v => DomR.ret v
   | _, _, .natLit n k => Expr.denote (k n)
   | _, _, .boolLit b k => Expr.denote (k b)
@@ -274,13 +323,55 @@ def Expr.denote {H : Signature} : {r : Option (Tp × Tp)} → {α : Tp} →
   | _, _, .letrec body k =>
       Expr.denote (k (ITree2.CompE.mrec fun x => Expr.denote (body x)))
   | _, _, .selfCall x k =>
-      ITree2.CompE.op (Sum.inr ITree2.CallOp.call) x
-        (fun bx => nomatch bx.1) fun v => Expr.denote (k v)
+      ITree2.CompE.bind
+        (ITree2.CompE.op (Sum.inr ITree2.CallOp.call) x
+          (fun bx => nomatch bx.1) ITree2.CompE.ret)
+        fun v => Expr.denote (k v)
   | _, _, .op e i blocks k =>
       DomR.bind (DomR.perform e i fun b x => Expr.denote (blocks b x)) fun o =>
         Expr.denote (k o)
 
+/-- Remove leading provenance annotations for structural consumers that do not need them. -/
+def Expr.stripSource {H : Signature} {V : Tp → Type} :
+    {r : Option (Tp × Tp)} → {α : Tp} → Expr H V r α → Expr H V r α
+  | _, _, .source _ body => body.stripSource
+  | _, _, body => body
+
+def Expr.sourceRange? {H : Signature} {V : Tp → Type} {r : Option (Tp × Tp)} {α : Tp} :
+    Expr H V r α → Option SourceRange
+  | .source range _ => some range
+  | _ => none
+
+def Expr.leadingSourceRanges {H : Signature} {V : Tp → Type} :
+    {r : Option (Tp × Tp)} → {α : Tp} → Expr H V r α → List SourceRange
+  | _, _, .source range body => range :: body.leadingSourceRanges
+  | _, _, _ => []
+
 def Closed (H : Signature) (α : Tp) : Type 2 := ∀ V, Expr H V none α
+
+/-- A typed environment for the first-order arguments of a reflected main program. -/
+inductive MainArgs (V : Tp0 → Type) : List Tp0 → Type 1 where
+  | nil : MainArgs V []
+  | cons : V α → MainArgs V αs → MainArgs V (α :: αs)
+
+namespace MainArgs
+
+def map {V W : Tp0 → Type} (f : ∀ α, V α → W α) :
+    {αs : List Tp0} → MainArgs V αs → MainArgs W αs
+  | [], .nil => .nil
+  | _ :: _, .cons x xs => .cons (f _ x) (xs.map f)
+
+end MainArgs
+
+/-- Closed AST2 program with an external, first-order main-argument telescope.  Specialized helper
+    definitions are represented by nested `Expr.letrec` nodes in `main`. -/
+structure Program (H : Signature) (args : List Tp0) (α : Tp) : Type 2 where
+  main : ∀ V, MainArgs (fun t => V (.base t)) args → Expr H V none α
+
+def Program.denote {H : Signature} {args : List Tp0} {α : Tp}
+    (p : Program H args α)
+    (xs : MainArgs Tp0.denote args) : ITree2.CompE H.spec (α.denote (ITree2.CompE H.spec)) :=
+  Expr.denote (p.main _ xs)
 
 end Ast2
 
