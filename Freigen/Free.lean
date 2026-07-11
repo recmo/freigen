@@ -1,131 +1,101 @@
-import Freigen.ITree.Effect
-import Freigen.ITree.Basic
-
-/-!
-# `Free`: a free monad over an event signature, with an extensible scoped signature
-
-Two orthogonal extension slots:
-
-* an **event signature** `(ε, br)` — ordinary first-order effects: an event `e : ε` returns a
-  `br e`.  Interpreters treat them opaquely (via a handler).  A DSL's events are `Effect Op` for
-  a first-order signature `Op : TpF → TpF → Type`; the recursion machinery extends any event
-  signature with a call event (`ε ⊕ σ`) — the same sum extension the denotation domain uses.
-* `SOp : Type → Type` — **scoped constructs**: `SOp β` is the set of scoped operations whose
-  *in-monad block* computes a `β`.  The block is a *positive* recursive occurrence — an ordinary
-  inductive.
-
-A `FreeE ε br SOp` value is the **source of truth**.  Its only generic interpreter is `run`:
-fold the program into any monad `M`, given a handler for the events and a handler for the scoped
-ops.  *How* a particular scoped construct is interpreted (run its block, erase it, …) is
-entirely the handler's business — the examples supply their own.
-
-`Free Op SOp` abbreviates the DSL instantiation, and `Free.op` restores the 3-argument surface
-(`.op o i k`, packaging the op with its input).  `ofFree` embeds a program into the
-interaction-tree domain — generically, so the same embedding serves DSL programs and
-call-extended recursion bodies.
--/
+import Freigen.ITree.Eutt
 
 namespace Freigen
 
-/-- Free monad over an event signature `(ε, br)` and a scoped signature `SOp`.  `hop s b k`:
-    scoped op `s : SOp β`, block `b : FreeE … β` (a full computation in the *same* monad,
-    producing the witness), and continuation `k`.  The block is a *positive* recursive
-    occurrence. -/
-inductive FreeE (ε : Type) (br : ε → Type) (SOp : Type → Type) : Type → Type 1
-  | pure {α} : α → FreeE ε br SOp α
-  | op   {α} (e : ε) : (br e → FreeE ε br SOp α) → FreeE ε br SOp α
-  | hop  {α β} : SOp β → FreeE ε br SOp β → (β → FreeE ε br SOp α) → FreeE ε br SOp α
+universe u v
 
-/-- Free monad over a first-order DSL signature — the source-program surface. -/
-abbrev Free (Op : TpF → TpF → Type) (SOp : Type → Type) : Type → Type 1 :=
-  FreeE (Effect Op) Effect.arity SOp
+/-- Free syntax for higher-order operations with dynamically bound block arguments. -/
+inductive Free (H : ITree.HSig.{u, v}) : Type u → Type (max u v + 1) where
+  | pure {α} : α → Free H α
+  | op {α} (e : H.op) : H.input e →
+      ((b : H.branch e) → H.branchInput e b → Free H (H.branchOutput e b)) →
+      (H.output e → Free H α) → Free H α
 
-/-- Perform op `o` on input `i`, continuing with `k` — the 3-argument surface over the packaged
-    event. -/
-@[match_pattern]
-def Free.op {Op : TpF → TpF → Type} {SOp : Type → Type} {α : Type} {I R : TpF}
-    (o : Op I R) (i : I.denote) (k : R.denote → Free Op SOp α) : Free Op SOp α :=
-  FreeE.op (Effect.mk o i) k
+def Free.bind {H} {α β} : Free H α → (α → Free H β) → Free H β
+  | .pure a, f => f a
+  | .op e i blocks k, f => .op e i blocks fun o => (k o).bind f
 
-namespace FreeE
-variable {ε : Type} {br : ε → Type} {SOp : Type → Type}
+instance {H} : Monad (Free H) where
+  pure := Free.pure
+  bind := Free.bind
 
-/-- Monadic bind: extends the *continuation* (never the scoped block — binding after a scoped op
-    sequences what happens with its result, not the in-block computation). -/
-def bind {α γ} : FreeE ε br SOp α → (α → FreeE ε br SOp γ) → FreeE ε br SOp γ
-  | .pure a,    f => f a
-  | .op e k,    f => .op e (fun r => bind (k r) f)
-  | .hop s b k, f => .hop s b (fun x => bind (k x) f)
-
-instance : Monad (FreeE ε br SOp) where
-  pure := .pure
-  bind := bind
-
-/-- Perform an event, binding its result. -/
-def perform (e : ε) : FreeE ε br SOp (br e) := .op e .pure
-
-/-- Right identity: `bind m pure = m`. -/
-theorem bind_pure {α} (m : FreeE ε br SOp α) : bind m .pure = m := by
+theorem Free.bind_pure {H α} (m : Free H α) : m.bind .pure = m := by
   induction m with
-  | pure a => rfl
-  | op e c ih => simp only [bind]; exact congrArg (FreeE.op e) (funext ih)
-  | hop s b c _ ihc => simp only [bind]; exact congrArg (FreeE.hop s b) (funext ihc)
+  | pure => rfl
+  | op e i blocks k _ ih => exact congrArg (Free.op e i blocks) (funext ih)
 
-/-- **The generic interpreter.** Fold a program into a monad `M`, given a handler `ho` for the
-    events and a handler `hs` for the scoped ops.  `hs` receives the scoped op *and its
-    interpreted block* `M β`, and returns an `M β` — so it may run the block, ignore it, and so
-    on; all of that logic lives in the handler, not here. -/
-def run {M : Type → Type} [Monad M]
-    (ho : (e : ε) → M (br e))
-    (hs : {β : Type} → SOp β → M β → M β) :
-    {α : Type} → FreeE ε br SOp α → M α
-  | _, .pure a    => Pure.pure a
-  | _, .op e k    => ho e >>= fun r => run ho hs (k r)
-  | _, .hop s b k => hs s (run ho hs b) >>= fun x => run ho hs (k x)
-
-end FreeE
-
-namespace Free
-export FreeE (pure hop perform)
-
-/-- `bind` at the DSL surface. -/
-abbrev bind {Op : TpF → TpF → Type} {SOp : Type → Type} {α γ}
-    (m : Free Op SOp α) (f : α → Free Op SOp γ) : Free Op SOp γ := FreeE.bind m f
-
-/-- Right identity at the DSL surface. -/
-theorem bind_pure {Op : TpF → TpF → Type} {SOp : Type → Type} {α} (m : Free Op SOp α) :
-    FreeE.bind m .pure = m := FreeE.bind_pure m
-
-end Free
-
-/-- The trivial scoped signature: *no* scoped operations — the plain first-order free monad. -/
-abbrev NoScope : Type → Type := fun _ => PEmpty
-
-/-- Embed a `Free` program into the interaction-tree domain: `pure ↦ ret`, an event ↦ `vis`, a
-    scoped block runs inline (`bind`).  Generic in the event signature — the same embedding
-    serves DSL programs and call-extended recursion bodies. -/
-def ofFree {ε : Type} {br : ε → Type} {SOp : Type → Type} :
-    {α : Type} → FreeE ε br SOp α → ITree.CompE ε br α
-  | _, .pure a    => ITree.ret a
-  | _, .op e k    => ITree.vis e (fun x => ofFree (k x))
-  | _, .hop _ b k => ITree.bind (ofFree b) (fun x => ofFree (k x))
-
-/-- `ofFree` is a **monad morphism**: it commutes with `bind`. -/
-theorem ofFree_bind {ε : Type} {br : ε → Type} {SOp : Type → Type} {α γ : Type}
-    (m : FreeE ε br SOp α) (f : α → FreeE ε br SOp γ) :
-    ofFree (FreeE.bind m f) = ITree.bind (ofFree m) (fun a => ofFree (f a)) := by
+theorem Free.bind_assoc {H} {α β γ} (m : Free H α)
+    (f : α → Free H β) (g : β → Free H γ) :
+    (m.bind f).bind g = m.bind fun a => (f a).bind g := by
   induction m with
-  | pure a => simp only [FreeE.bind, ofFree, ITree.bind_ret]
-  | op e c ih =>
-      simp only [FreeE.bind, ofFree, ITree.bind_vis]
-      exact congrArg _ (funext fun r => ih r f)
-  | hop s b c _ ihc =>
-      simp only [FreeE.bind, ofFree, ITree.bind_assoc]
-      exact congrArg _ (funext fun x => ihc x f)
+  | pure => rfl
+  | op e i blocks k _ ih => exact congrArg (Free.op e i blocks) (funext fun o => ih o f)
 
-/-- `ofFree` distributes over a boolean branch. -/
-theorem ofFree_cond {ε : Type} {br : ε → Type} {SOp : Type → Type} {α : Type}
-    (c : Bool) (t e : FreeE ε br SOp α) :
-    ofFree (cond c t e) = cond c (ofFree t) (ofFree e) := by cases c <;> rfl
+instance {H} : LawfulMonad (Free H) :=
+  LawfulMonad.mk' (Free H)
+    (fun m => Free.bind_pure m)
+    (fun _ _ => rfl)
+    (fun m f g => Free.bind_assoc m f g)
+
+def Free.eval {M : Type u → Type v} [Monad M] {H α}
+    (evalOp : (e : H.op) → H.input e →
+      ((b : H.branch e) → H.branchInput e b → M (H.branchOutput e b)) →
+      M (H.output e)) : Free H α → M α
+  | .pure a => Pure.pure a
+  | .op e i blocks k => do
+      let o ← evalOp e i fun b x => Free.eval evalOp (blocks b x)
+      Free.eval evalOp (k o)
+
+theorem Free.eval_bind {M : Type u → Type v} [Monad M] [LawfulMonad M] {H} {α β}
+    (evalOp : (e : H.op) → H.input e →
+      ((b : H.branch e) → H.branchInput e b → M (H.branchOutput e b)) →
+      M (H.output e)) (m : Free H α) (f : α → Free H β) :
+    Free.eval evalOp (m.bind f) = Free.eval evalOp m >>= fun a => Free.eval evalOp (f a) := by
+  induction m with
+  | pure a =>
+      exact (pure_bind (m := M) a (fun a => Free.eval evalOp (f a))).symm
+  | op e i blocks k _ ih =>
+      simp only [Free.bind, Free.eval]
+      rw [LawfulMonad.bind_assoc]
+      exact congrArg _ (funext fun o => ih o f)
+
+def Free.toITree {H : ITree.HSig.{u, v}} {α : Type u} :
+    Free H α → ITree.CompE H α :=
+  Free.eval fun e i blocks =>
+    ITree.CompE.op e i (fun bx => blocks bx.1 bx.2) ITree.CompE.ret
+
+theorem Free.toITree_bind {H : ITree.HSig.{u, v}} {α β : Type u}
+    (m : Free H α) (f : α → Free H β) :
+    Free.toITree (m.bind f) =
+      ITree.CompE.bind (Free.toITree m) (fun a => Free.toITree (f a)) :=
+  Free.eval_bind _ m f
+
+@[simp] theorem Free.toITree_op {H : ITree.HSig.{u, v}} {α : Type u}
+    (e : H.op) (input : H.input e)
+    (blocks : (b : H.branch e) → H.branchInput e b →
+      Free H (H.branchOutput e b))
+    (k : H.output e → Free H α) :
+    Free.toITree (.op e input blocks k) =
+      ITree.CompE.bind
+        (ITree.CompE.op e input
+          (fun bx => Free.toITree (blocks bx.1 bx.2)) ITree.CompE.ret)
+        (fun o => Free.toITree (k o)) := by
+  rfl
+
+def Free.call {H : ITree.HSig.{u, v}} {σ ρ : Type u} (s : σ) :
+    Free (ITree.Sum H (ITree.Call σ ρ)) ρ :=
+  .op (.inr .call) s (fun b _ => nomatch b) .pure
+
+theorem Free.toITree_call {H : ITree.HSig.{u, v}} {σ ρ : Type u} (s : σ) :
+    Free.toITree (Free.call (H := H) (ρ := ρ) s) =
+      ITree.CompE.op (H := ITree.Sum H (ITree.Call σ ρ)) (α := ρ)
+        (Sum.inr ITree.CallOp.call) s
+        (fun bx => nomatch bx.1) ITree.CompE.ret := by
+  unfold Free.call Free.toITree
+  simp only [Free.eval, ITree.CompE.pure_def, ITree.CompE.bind_def]
+  rw [ITree.CompE.bind_ret_right]
+  congr
+  funext bx
+  exact nomatch bx.1
 
 end Freigen

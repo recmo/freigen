@@ -1,102 +1,31 @@
 # Freigen
 
-*frei* (free) + *eigen* (self) — a Lean library whose programs are **effectful free-monadic
-computations** (`Free`, the source of truth), given meaning by Lean-side interpreters and
-**reflected** into a dumb, typed imperative AST that **denotes into interaction trees**, with the
-round-trip proven sound by weak bisimulation (`≈`, `ITree.Eutt`).
+Freigen reflects higher-order free programs into a small typed AST while constructing a relational
+weak-bisimulation proof in lockstep.
 
-## The shape of a program
+## Core API
 
-A program is a `Free Op SOp α` with **two orthogonal extension slots**:
+- `ITree.HSig` describes effects and dynamically bound operation blocks. A normal first-order
+  effect is simply an operation with no branches.
+- `Free H A` is the source syntax. `Free.eval` interprets it and `Free.toITree` embeds it in the
+  coinductive semantics.
+- `Ast.Signature` is the `Tp0`-indexed reflected signature. `Signature.Compat` relates the source
+  `HSig` to it without requiring source and target carrier types to be equivalent.
+- `Ast.Expr` is the `Tp`-indexed PHOAS tree. `Expr.denote` interprets it into `ITree.CompE`.
+- `reflect% term` returns closed AST code bundled with its relational `ITree.CompE.Eutt` proof.
+- `reflect_def name := term` gives the code and theorem stable declaration names.
+- `#reflect_plan term` prints the pass-one specialization plan.
+- `#compile term => "path"` reflects, checks, serializes, and records an artifact for
+  `lake build <library>:prog`.
 
-- `Op : Type → Type → Type 1` — **first-order effects**, opaque instructions (e.g. `CircOp.assert`).
-- `SOp : Type → Type` — **scoped constructs**: each operation carries an *in-monad block* (e.g.
-  `HintS`, the out-of-circuit `hint`).  `NoScope` recovers a plain first-order DSL.
+Reflection registration is explicit data selected by the macro, not typeclass search:
+`@[ast_repr]`, `@[ast_compat]`, `@[ast_op]`, `@[ast_inline]`, and `@[ast_render]`.
 
-`Free` is the source of truth: run it in Lean, or `reflect%` it for compilation.  A scoped op's block
-is a positive recursive occurrence in the monad (the `hop` constructor) — an ordinary inductive, so
-there is no self-reference and **no function values inside ops**.
+See [`Freigen/Examples/Circuit/Basic.lean`](Freigen/Examples/Circuit/Basic.lean) for dynamic binders,
+effects, recursion, specialization, partial representations such as `Fin n` to `Nat`, source
+locations, serialization, and soundness statements. The other example modules retain storage,
+first-class function, array/vector, and recursion targets, including documented cases not yet
+supported by reflection.
 
-## Modules
-
-Six top-level concerns:
-
-- **Free monads** — `Freigen/Free.lean` — the monad `Free Op SOp` (`pure`/`op`/`hop`) + `Monad`
-  instance, and one **generic** interpreter `run`: fold a program into any monad `M`, given a handler
-  for the first-order ops and one for the scoped ops (which receives the interpreted block, so it may
-  run it, erase it, …).  Plus the trivial scoped signature `NoScope`.  *How* a scoped construct is
-  interpreted is the handler's business — supplied by each example.
-- **Semantics** — `Freigen/ITree/` — the coinductive denotation domain `Comp Op`
-  (`Effect` functor + `ret`/`tau`/`vis`/`fail`), `bind` + monad/computation laws, weak bisimulation
-  `≈` (`Eutt`) as a lawful `Setoid` with its congruence algebra, and the general-recursion combinator
-  `mrec` (with `interp` and the call-extended signature `CallOp`).
-- **AST** — `Freigen/Ast/` — `Ast.Tp` (the object-type universe `Tp` and the **reified** primitive
-  ops: total `Un`/`Bin` — arithmetic is a *typed op node*, not an opaque closure — and **partial**
-  `POp` with `Option`-valued denotation: `vget`/`vset`/`aget`/`aset`/`arrToVec`/`natToFin`) and
-  `Ast.Basic` (the dumb typed AST `Code`/`Prog`:
-  `ret`/`lit`/`un`/`bin`/`pop`/`vec`/`arr`/`fold`/`vgen`/`op`/`ite`/`call`/`scope`,
-  top-level `def_` and recursive `rec_`, PHOAS over a function family `F` and values `V`; `denoteProg`
-  **uniformly into `Comp`** — a function is a `Comp`-Kleisli subroutine, a `rec_` is tied by `mrec`;
-  `ofFree`) and `Ast.Sexp` (**the** printer: a uniform, machine-parseable S-expression
-  serialization of a closed `Prog` — fully parenthesized, prefix, every binder type-annotated;
-  the grammar is pinned in its module docstring, and it is the format `#compile` emits, the
-  examples pin, and the Rust SDK parses).  The single `pop` node carries every **proof-erased** partial
-  primitive (a bare `Nat` index, no in-bounds proof), so its denotation is *partial* — a failing
-  `POp.denote` (an out-of-range access, a size mismatch) is `fail`.  A
-  `Prog` admits `rec_`, so it has no total map into a finite monad — the AST does not assume
-  termination.  `fold` (`Fin.foldl`/`Fin.foldlM`) and `vgen` (`Vector.ofFn`) are **first-class
-  bounded loops** (a static trip count, a `Fin`-indexed body block) — loops are *kept as control
-  flow*, never unrolled, and their denotations are total and `tau`-free (so a pure loop is *equal*,
-  not merely `≈`, to its source).
-- **Reflection** — `Freigen/Reflect/` — `reflect%` compiles a `Free` program into a `Prog` with its
-  `≈`-soundness against `ofFree`.  `Reflect.Basic` reifies Lean types into `Tp`, A-normalises pure
-  computation into `un`/`bin`/`lit` (and a source `coll[i]` / `coll.set i x` into proof-erased
-  `pop` nodes), and **spills each called helper — `Free`-valued or pure — into a `def_`**
-  (definitions stay *folded*, never inlined; helper bodies may call other helpers, spilled in
-  dependency order; a reifiable pure `let` keeps its sharing) (a two-pass
-  discovery/build, monomorphised on the helper's `(name, argument-types, result-type)`); `main` may be
-  a function of the program's inputs.  `Reflect.Recursion` adds the recursion arm (a structural
-  recursion `Nat → A₁ → … → Free Op SOp ρ` on the first argument, extra `Tp`-typed state threading
-  through the tupled `rec_` state → a `rec_` node) with its `mrec` adequacy (parameterised by the
-  measure `μ = ·.1`).  **The reflector emits no `simp`** — every
-  proof it outputs is a compositional/structural term (`simp` is confined to the fixed library lemmas
-  like `adeqBody`).  Value-arm soundness: the **same walk, re-run in proof mode**, walks the source
-  at the concrete representation (`V := Tp.denote`) and, at every node, applies that node's congruence lemma (`Reflect.Sound`'s
-  `sc_op`/`sc_bind`/`sc_call`/…) to the sub-terms' equations — a proof term mirroring the source.  A
-  reflected get/set inserts **exactly the source's own in-bounds proof** (`sc_vget … h` = `dif_pos h`),
-  so the erased `fail` branch is closed *at that node* — no decidability, no global rewrite, sound for
-  a **symbolic** index at **any depth** (buried under effects, branches, or a helper call), including
-  dynamically-sized `Array` reads.  A non-reifiable argument (an in-bounds proof `j < n`) is erased
-  from the program inputs and instead quantifies the soundness statement.
-- **Examples** — `Freigen/Examples/` — the `Circuit/` folder (`CircOp` + scoped `hint`,
-  `runCirc`/`conCirc`): `Circuit.Basic` exercises the features one by one (hints, helpers, inputs,
-  monomorphisation, collections, casts, pure and effectful loops); `Storage` (hint-less `StoreOp`,
-  operational `runStore`); and `Recursion` (`countdown`/`sm`, stateful `sumAcc`/`countAsserts`).
-  Every example proves its `≈`-soundness and pins its statement/result/AST with `#guard_msgs`.
-  A *real* circuit — the Poseidon hash over BN254 `Fr` (reference constants, static round
-  schedule), reflected with kept loops and folded definitions and pinned against the circomlib
-  test vectors — lives in the downstream client (`examples/client/`), doubling as the `#compile`
-  golden test.
-- **Compilation** — `Freigen/Compile.lean` — turns the reflect-and-serialize capability into a
-  usable tool: a `DSL` type-class carrying each signature's op/scope naming (so `render`/`serialize`
-  are the argument-free `pp`/`sexp`), and a `#compile foo => "path"` command recording *which
-  reflected program to emit where*.  A Lake `library_facet prog` (in `lakefile.lean`) does the
-  writing: `lake build <lib>:prog` serializes every `#compile`'d program of `<lib>` and writes the
-  `.prog` files (the uniform S-expression format of `Ast.Sexp`).  It works
-  on **any downstream library that `require`s Freigen** — see `examples/client/`.  Since
-  `#compile` points at a `reflect%` result, an artifact only exists if its `≈`-soundness proof
-  type-checks: **every emitted file is certified against its source.**
-- **Rust SDK** — `rust/` — the consumer side of the `.prog` format: a dependency-light crate
-  (`freigen`) with an S-expression reader, a typed Rust AST mirroring `Prog`/`Code` one-to-one
-  (ready for a client compiler to walk), and a **canonical interpreter** mirroring `denoteProg` —
-  the DSL's two extension slots stay client-injectable through a `Handler` trait (a custom op is a
-  named callback; a scoped block arrives as a runnable closure, run inline by default).  Its test
-  suite parses and *executes* the goldens project's artifacts E2E on CI — `myProgram`'s witness
-  generation and the Poseidon circuit against the circomlib known-answer vectors.
-
-## One line
-
-Effects are first-order and opaque; scoped constructs carry an in-monad block and live in `hop`.
-`reflect%` compiles a `Free` program into a typed imperative `Prog` — with reified arithmetic,
-first-class functions (`def_`), and recursion (`rec_`) — and everything denotes into the same
-interaction-tree domain `Comp`, sound by the uniform `≈`: `denoteProg (reflect% foo) ≈ ofFree foo`.
+The reflector design and current limitations are documented in
+[`Freigen/Reflect/README.md`](Freigen/Reflect/README.md).

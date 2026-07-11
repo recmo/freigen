@@ -45,9 +45,8 @@ jobs:
           exit $status
 
   # Parse and *execute* the example client's golden artifacts with the Rust SDK: the compiled
-  # programs run E2E on CI (myProgram's witness generation; Poseidon against the circomlib
-  # known-answer vectors).  `emit-example` keeps the goldens honest against the compiler; this
-  # job keeps the SDK honest against the goldens.
+  # programs run E2E on CI under the higher-order circuit handler. `emit-example` keeps the golden
+  # honest against the compiler; this job keeps the SDK honest against the golden.
   rust-sdk:
     runs-on: ubuntu-latest
 

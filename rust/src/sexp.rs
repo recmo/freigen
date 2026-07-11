@@ -61,7 +61,10 @@ struct Reader<'a> {
 
 impl<'a> Reader<'a> {
     fn err<T>(&self, message: impl Into<String>) -> Result<T, SexpError> {
-        Err(SexpError { offset: self.pos, message: message.into() })
+        Err(SexpError {
+            offset: self.pos,
+            message: message.into(),
+        })
     }
 
     fn skip_ws(&mut self) {
@@ -132,7 +135,10 @@ impl<'a> Reader<'a> {
 
 /// Read exactly one S-expression, requiring the rest of the input to be whitespace.
 pub fn parse_sexp(src: &str) -> Result<Sexp, SexpError> {
-    let mut r = Reader { src: src.as_bytes(), pos: 0 };
+    let mut r = Reader {
+        src: src.as_bytes(),
+        pos: 0,
+    };
     let e = r.read()?;
     r.skip_ws();
     if r.pos != r.src.len() {

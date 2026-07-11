@@ -13,14 +13,20 @@ use num_bigint::BigUint;
 pub enum Value {
     Bool(bool),
     Nat(BigUint),
-    Field { val: BigUint, modulus: BigUint },
+    Field {
+        val: BigUint,
+        modulus: BigUint,
+    },
     Unit,
     Pair(Box<Value>, Box<Value>),
     Vec(Vec<Value>),
     Array(Vec<Value>),
     Inl(Box<Value>),
     Inr(Box<Value>),
-    Fin { val: u64, bound: u64 },
+    Fin {
+        val: u64,
+        bound: u64,
+    },
     /// The image of a literal with no serializable payload (a function-typed literal).  Inspecting
     /// it in any primitive is a runtime error.
     Opaque,
@@ -30,6 +36,7 @@ pub enum Value {
         param: String,
         body: crate::ast::Block,
         env: std::collections::HashMap<String, Value>,
+        recursive: bool,
     },
 }
 
@@ -42,7 +49,10 @@ impl Value {
     /// A field element, reduced into canonical range.
     pub fn field(val: impl Into<BigUint>, modulus: impl Into<BigUint>) -> Value {
         let modulus = modulus.into();
-        Value::Field { val: val.into() % &modulus, modulus }
+        Value::Field {
+            val: val.into() % &modulus,
+            modulus,
+        }
     }
 
     /// A field element with the modulus given in decimal (convenient for big primes).
@@ -52,7 +62,10 @@ impl Value {
     pub fn field_dec(val: &str, modulus: &str) -> Value {
         let val: BigUint = val.parse().expect("invalid decimal value");
         let modulus: BigUint = modulus.parse().expect("invalid decimal modulus");
-        Value::Field { val: val % &modulus, modulus }
+        Value::Field {
+            val: val % &modulus,
+            modulus,
+        }
     }
 }
 

@@ -57,8 +57,7 @@ fn as_atom<'a>(s: &'a Sexp, what: &str) -> Result<&'a str> {
     }
 }
 
-/// A name (`def`/`op`/`scope`/callee) is a bare token — its grammatical position disambiguates
-/// it, so the format does not quote it.
+/// Modules and operation names are bare tokens; their grammatical position disambiguates them.
 fn as_name<'a>(s: &'a Sexp, what: &str) -> Result<&'a str> {
     as_atom(s, what)
 }
@@ -89,15 +88,19 @@ fn parse_tp(s: &Sexp) -> Result<Tp> {
             _ => err(format!("unknown type `{a}`")),
         },
         Sexp::List(items) => {
-            let head = as_atom(items.first().ok_or_else(|| {
-                ParseError::Grammar("empty list is not a type".into())
-            })?, "a type head")?;
+            let head = as_atom(
+                items
+                    .first()
+                    .ok_or_else(|| ParseError::Grammar("empty list is not a type".into()))?,
+                "a type head",
+            )?;
             match (head, &items[1..]) {
                 ("zmod", [p]) => Ok(Tp::ZMod(as_biguint(p, "a modulus")?)),
                 ("fin", [n]) => Ok(Tp::Fin(as_u64(n, "a Fin bound")?)),
-                ("vec", [a, n]) => {
-                    Ok(Tp::Vec(Box::new(parse_tp(a)?), as_u64(n, "a vector length")?))
-                }
+                ("vec", [a, n]) => Ok(Tp::Vec(
+                    Box::new(parse_tp(a)?),
+                    as_u64(n, "a vector length")?,
+                )),
                 ("array", [a]) => Ok(Tp::Array(Box::new(parse_tp(a)?))),
                 ("prod", [a, b]) => Ok(Tp::Prod(Box::new(parse_tp(a)?), Box::new(parse_tp(b)?))),
                 ("sum", [a, b]) => Ok(Tp::Sum(Box::new(parse_tp(a)?), Box::new(parse_tp(b)?))),
@@ -124,7 +127,10 @@ fn parse_value(tp: &Tp, s: &Sexp) -> Result<Value> {
         },
         Tp::ZMod(p) => {
             let v = as_biguint(s, "a field literal")?;
-            Ok(Value::Field { val: v % p, modulus: p.clone() })
+            Ok(Value::Field {
+                val: v % p,
+                modulus: p.clone(),
+            })
         }
         Tp::Fin(n) => {
             let v = as_u64(s, "a fin literal")?;
@@ -137,13 +143,26 @@ fn parse_value(tp: &Tp, s: &Sexp) -> Result<Value> {
         Tp::Vec(a, n) => {
             let elems = as_list(s, "a vec literal")?;
             if elems.len() as u64 != *n {
-                return err(format!("vec literal has {} elements, type says {n}", elems.len()));
+                return err(format!(
+                    "vec literal has {} elements, type says {n}",
+                    elems.len()
+                ));
             }
-            Ok(Value::Vec(elems.iter().map(|e| parse_value(a, e)).collect::<Result<Vec<_>>>()?))
+            Ok(Value::Vec(
+                elems
+                    .iter()
+                    .map(|e| parse_value(a, e))
+                    .collect::<Result<Vec<_>>>()?,
+            ))
         }
         Tp::Array(a) => {
             let elems = as_list(s, "an array literal")?;
-            Ok(Value::Array(elems.iter().map(|e| parse_value(a, e)).collect::<Result<Vec<_>>>()?))
+            Ok(Value::Array(
+                elems
+                    .iter()
+                    .map(|e| parse_value(a, e))
+                    .collect::<Result<Vec<_>>>()?,
+            ))
         }
         Tp::Prod(a, b) => {
             let items = as_list(s, "a pair literal")?;
@@ -221,11 +240,24 @@ fn pop_op(head: &str) -> Option<POp> {
     })
 }
 
-/// Parse an expression; `tp` is the binder annotation (needed for type-directed literals).
+fn parse_branch(s: &Sexp) -> Result<Branch> {
+    let items = as_list(s, "an operation branch")?;
+    match items {
+        [head, binder, body] if as_atom(head, "a branch head")? == "branch" => Ok(Branch {
+            binder: as_var(binder)?,
+            body: parse_body(body)?,
+        }),
+        _ => err(format!("expected `(branch binder body)`, got `{s}`")),
+    }
+}
+
+/// Parse a let-bound expression; `tp` directs literal parsing.
 fn parse_expr(tp: &Tp, s: &Sexp) -> Result<Expr> {
     let items = as_list(s, "an expression")?;
     let head = as_atom(
-        items.first().ok_or_else(|| ParseError::Grammar("empty expression".into()))?,
+        items
+            .first()
+            .ok_or_else(|| ParseError::Grammar("empty expression".into()))?,
         "an expression head",
     )?;
     match (head, &items[1..]) {
@@ -238,57 +270,41 @@ fn parse_expr(tp: &Tp, s: &Sexp) -> Result<Expr> {
             POp::NatToFin(as_u64(n, "a Fin bound")?),
             vec![as_var(a)?],
         )),
-        ("vec", args) => Ok(Expr::MkVec(args.iter().map(as_var).collect::<Result<Vec<_>>>()?)),
-        ("arr", args) => Ok(Expr::MkArr(args.iter().map(as_var).collect::<Result<Vec<_>>>()?)),
-        ("fold", [n, init, binders, body]) => {
-            let binders = as_list(binders, "fold binders")?;
-            let [index, acc] = binders else {
-                return err(format!("fold expects (index acc) binders, got `{s}`"));
-            };
-            Ok(Expr::Fold {
-                count: as_u64(n, "a trip count")?,
-                init: as_var(init)?,
-                index: as_var(index)?,
-                acc: as_var(acc)?,
-                body: parse_block(body)?,
-            })
-        }
-        ("vgen", [n, binders, body]) => {
-            let binders = as_list(binders, "vgen binders")?;
-            let [index] = binders else {
-                return err(format!("vgen expects (index) binder, got `{s}`"));
-            };
-            Ok(Expr::VGen {
-                count: as_u64(n, "a trip count")?,
-                index: as_var(index)?,
-                body: parse_block(body)?,
-            })
-        }
-        ("op", [name, arg]) => Ok(Expr::Op {
+        ("vec", args) => Ok(Expr::MkVec(
+            args.iter().map(as_var).collect::<Result<Vec<_>>>()?,
+        )),
+        ("arr", args) => Ok(Expr::MkArr(
+            args.iter().map(as_var).collect::<Result<Vec<_>>>()?,
+        )),
+        ("if", [cond, then_, else_]) => Ok(Expr::If {
+            cond: as_var(cond)?,
+            then_: parse_body(then_)?,
+            else_: parse_body(else_)?,
+        }),
+        ("op", [name, input, branches @ ..]) => Ok(Expr::Op {
             name: as_name(name, "an op name")?.to_owned(),
-            arg: as_var(arg)?,
+            input: as_var(input)?,
+            branches: branches
+                .iter()
+                .map(parse_branch)
+                .collect::<Result<Vec<_>>>()?,
         }),
         ("self", [arg]) => Ok(Expr::SelfCall(as_var(arg)?)),
-        ("call", [name, args @ ..]) => Ok(Expr::Call {
-            name: as_name(name, "a callee name")?.to_owned(),
-            args: args.iter().map(as_var).collect::<Result<Vec<_>>>()?,
-        }),
-        ("scope", [name, body]) => Ok(Expr::Scope {
-            name: as_name(name, "a scope name")?.to_owned(),
-            body: parse_block(body)?,
-        }),
-        ("lam", [binders, body]) => {
-            let binders = as_list(binders, "lam binders")?;
-            let [binder] = binders else {
-                return err(format!("lam expects one ((var type)) binder, got `{s}`"));
-            };
-            let binder = as_list(binder, "a lam binder")?;
-            let [v, _tp] = binder else {
+        ("lam", [binder, body]) => {
+            let binder = as_list(binder, "a lambda binder")?;
+            let [v, param_tp] = binder else {
                 return err(format!("lam binder expects (var type), got `{s}`"));
             };
-            Ok(Expr::Lam { param: as_var(v)?, body: parse_block(body)? })
+            Ok(Expr::Lam {
+                param: as_var(v)?,
+                param_tp: parse_tp(param_tp)?,
+                body: parse_body(body)?,
+            })
         }
-        ("app", [f, arg]) => Ok(Expr::App { f: as_var(f)?, arg: as_var(arg)? }),
+        ("app", [function, argument]) => Ok(Expr::App {
+            function: as_var(function)?,
+            argument: as_var(argument)?,
+        }),
         (head, args) => {
             if let Some(o) = un_op(head) {
                 let [a] = args else {
@@ -297,11 +313,16 @@ fn parse_expr(tp: &Tp, s: &Sexp) -> Result<Expr> {
                 Ok(Expr::Un(o, as_var(a)?))
             } else if let Some(o) = bin_op(head) {
                 let [a, b] = args else {
-                    return err(format!("binary op `{head}` expects two arguments, got `{s}`"));
+                    return err(format!(
+                        "binary op `{head}` expects two arguments, got `{s}`"
+                    ));
                 };
                 Ok(Expr::Bin(o, as_var(a)?, as_var(b)?))
             } else if let Some(o) = pop_op(head) {
-                Ok(Expr::Pop(o, args.iter().map(as_var).collect::<Result<Vec<_>>>()?))
+                Ok(Expr::Pop(
+                    o,
+                    args.iter().map(as_var).collect::<Result<Vec<_>>>()?,
+                ))
             } else {
                 err(format!("malformed expression `{s}`"))
             }
@@ -313,108 +334,86 @@ fn parse_block(s: &Sexp) -> Result<Block> {
     let items = as_list(s, "a block")?;
     match items.split_first() {
         Some((head, rest)) if as_atom(head, "a block head")? == "block" && !rest.is_empty() => {
-            let (term, stmts) = rest.split_last().unwrap();
-            let stmts = stmts.iter().map(parse_stmt).collect::<Result<Vec<_>>>()?;
-            Ok(Block { stmts, term: parse_term(term)? })
+            Ok(Block {
+                commands: rest.iter().map(parse_command).collect::<Result<Vec<_>>>()?,
+            })
         }
-        _ => err(format!("expected `(block … term)`, got `{s}`")),
+        _ => err(format!("expected `(block …)`, got `{s}`")),
     }
 }
 
-fn parse_stmt(s: &Sexp) -> Result<Stmt> {
+fn parse_source(items: &[Sexp], original: &Sexp) -> Result<Command> {
+    let [module, start_line, start_column, end_line, end_column, body] = items else {
+        return err(format!("malformed source annotation `{original}`"));
+    };
+    Ok(Command::Source {
+        range: SourceRange {
+            module: as_name(module, "a source module")?.to_owned(),
+            start_line: as_u64(start_line, "a source line")?,
+            start_column: as_u64(start_column, "a source column")?,
+            end_line: as_u64(end_line, "a source line")?,
+            end_column: as_u64(end_column, "a source column")?,
+        },
+        body: parse_body(body)?,
+    })
+}
+
+fn parse_command(s: &Sexp) -> Result<Command> {
     let items = as_list(s, "a statement")?;
-    match items {
-        [head, var, tp, expr] if as_atom(head, "a statement head")? == "let" => {
+    let Some((head, args)) = items.split_first() else {
+        return err("empty statement");
+    };
+    match (as_atom(head, "a statement head")?, args) {
+        ("let", [var, tp, expr]) => {
             let tp = parse_tp(tp)?;
-            Ok(Stmt { var: as_var(var)?, expr: parse_expr(&tp, expr)?, tp })
+            Ok(Command::Let {
+                var: as_var(var)?,
+                value: parse_expr(&tp, expr)?,
+                tp,
+            })
         }
-        _ => err(format!("expected `(let var tp expr)`, got `{s}`")),
+        ("letrec", [var, binder, result_tp, body]) => {
+            let binder = as_list(binder, "a letrec binder")?;
+            let [param, param_tp] = binder else {
+                return err(format!("letrec binder expects (var type), got `{s}`"));
+            };
+            Ok(Command::LetRec {
+                var: as_var(var)?,
+                param: as_var(param)?,
+                param_tp: parse_tp(param_tp)?,
+                result_tp: parse_tp(result_tp)?,
+                body: parse_body(body)?,
+            })
+        }
+        ("source", args) => parse_source(args, s),
+        ("ret", [var]) => Ok(Command::Ret(as_var(var)?)),
+        _ => err(format!("malformed statement `{s}`")),
     }
 }
 
-fn parse_term(s: &Sexp) -> Result<Term> {
-    let items = as_list(s, "a terminator")?;
-    let head = as_atom(
-        items.first().ok_or_else(|| ParseError::Grammar("empty terminator".into()))?,
-        "a terminator head",
-    )?;
-    match (head, &items[1..]) {
-        ("ret", [v]) => Ok(Term::Ret(as_var(v)?)),
-        ("if", [c, t, e]) => Ok(Term::If {
-            cond: as_var(c)?,
-            then_: Box::new(parse_block(t)?),
-            else_: Box::new(parse_block(e)?),
+fn parse_body(s: &Sexp) -> Result<Block> {
+    let items = as_list(s, "a body")?;
+    let Some((head, args)) = items.split_first() else {
+        return err("empty body");
+    };
+    match as_atom(head, "a body head")? {
+        "block" => parse_block(s),
+        "source" => Ok(Block {
+            commands: vec![parse_source(args, s)?],
         }),
-        _ => err(format!("expected `(ret …)`/`(if …)`, got `{s}`")),
+        _ => err(format!("expected a block or source annotation, got `{s}`")),
     }
-}
-
-fn parse_params(s: &Sexp) -> Result<Vec<(Var, Tp)>> {
-    as_list(s, "a parameter list")?
-        .iter()
-        .map(|p| {
-            let items = as_list(p, "a parameter")?;
-            match items {
-                [v, tp] => Ok((as_var(v)?, parse_tp(tp)?)),
-                _ => err(format!("expected `(var tp)`, got `{p}`")),
-            }
-        })
-        .collect()
 }
 
 /// Parse a whole `.prog` artifact.
 pub fn parse_program(src: &str) -> Result<Program> {
     let sexp = parse_sexp(src)?;
     let items = as_list(&sexp, "a program")?;
-    let Some((head, decls)) = items.split_first() else {
-        return err("empty program");
-    };
-    if as_atom(head, "the program head")? != "program" {
-        return err(format!("expected `(program …)`, got `{sexp}`"));
-    }
-
-    let mut defs = Vec::new();
-    let mut main = None;
-    for decl in decls {
-        let items = as_list(decl, "a declaration")?;
-        let head = as_atom(
-            items.first().ok_or_else(|| ParseError::Grammar("empty declaration".into()))?,
-            "a declaration head",
-        )?;
-        match (head, &items[1..]) {
-            ("def" | "rec", [name, params, ret, body]) => {
-                if main.is_some() {
-                    return err("definition after main");
-                }
-                let params = parse_params(params)?;
-                if head == "rec" && params.len() != 1 {
-                    return err("a rec definition must take exactly one parameter");
-                }
-                defs.push(Def {
-                    name: as_name(name, "a definition name")?.to_owned(),
-                    params,
-                    ret: parse_tp(ret)?,
-                    body: parse_block(body)?,
-                    recursive: head == "rec",
-                });
-            }
-            ("main", [params, ret, body]) => {
-                if main.is_some() {
-                    return err("duplicate main");
-                }
-                main = Some(Def {
-                    name: "main".to_owned(),
-                    params: parse_params(params)?,
-                    ret: parse_tp(ret)?,
-                    body: parse_block(body)?,
-                    recursive: false,
-                });
-            }
-            _ => return err(format!("malformed declaration `{decl}`")),
-        }
-    }
-    match main {
-        Some(main) => Ok(Program { defs, main }),
-        None => err("program has no main"),
+    match items {
+        [head, result, body] if as_atom(head, "the program head")? == "program" => Ok(Program {
+            result: parse_tp(result)?,
+            body: parse_body(body)?,
+        }),
+        _ => err(format!("expected `(program type body)`, got `{sexp}`")),
     }
 }

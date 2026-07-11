@@ -1,291 +1,213 @@
 import Freigen.ITree.Basic
 
-/-!
-# Weak bisimulation (`eutt`) for interaction trees
-
-`Eutt` is *equivalence up to `tau`*: two computations are related when, ignoring finitely many
-silent `tau` steps, they have the same `ret`/`fail`/`vis` structure (with `eutt`-related effect
-continuations), and two divergent computations are related.  It collapses to equality on the
-`tau`-free (bounded) fragment, and lets a `tau`-guarded recursion be related to its result.
-
-We define it in the standard bisimulation-up-to-`tau` style: a one-step functor `EuttF R`
-(inductive, so finitely many `tau`s can be stripped on either side; the both-`tau` case recurses
-through `R`, which handles divergence), and `Eutt x y` as *the existence of a bisimulation* —
-`∃ R, (∀ a b, R a b → EuttF R a b) ∧ R x y`.  No native coinduction needed.
--/
-
 namespace Freigen
 namespace ITree
 
-variable {ε : Type} {br : ε → Type} {α : Type}
+universe u v w x
 
-/-! ## The one-step functor and `Eutt` (`cases_view` is now in `ITree.lean`) -/
+namespace HSig
 
-/-- One step of weak bisimulation parameterised by the relation `R` for effect continuations.
-    `tauL`/`tauR` strip a single `tau` (inductive — so finitely many can be removed); `tau` relates
-    two `tau`-headed trees through `R` (which is where divergence is handled). -/
-inductive EuttF (R : CompE ε br α → CompE ε br α → Prop) : CompE ε br α → CompE ε br α → Prop where
-  | ret  (a : α) : EuttF R (ret a) (ret a)
-  | fail : EuttF R (fail : CompE ε br α) fail
-  | vis  (e : ε) (kx ky : br e → CompE ε br α) (h : ∀ i, R (kx i) (ky i)) :
-      EuttF R (vis e kx) (vis e ky)
-  | tau  (tx ty : CompE ε br α) (h : R tx ty) : EuttF R (tau tx) (tau ty)
-  | tauL {y : CompE ε br α} (tx : CompE ε br α) (h : EuttF R tx y) : EuttF R (tau tx) y
-  | tauR {x : CompE ε br α} (ty : CompE ε br α) (h : EuttF R x ty) : EuttF R x (tau ty)
+/-- How operations in two higher-order signatures correspond. -/
+structure Compat (S : HSig.{u, w}) (T : HSig.{v, x}) where
+  opRel : S.op → T.op → Type (max u v w x)
+  input : {e : S.op} → {h : T.op} → opRel e h → S.input e → T.input h → Prop
+  output : {e : S.op} → {h : T.op} → opRel e h → S.output e → T.output h → Prop
+  branch : {e : S.op} → {h : T.op} → opRel e h → S.branch e → T.branch h → Prop
+  branchInput : {e : S.op} → {h : T.op} → (w : opRel e h) →
+    {bs : S.branch e} → {bt : T.branch h} → branch w bs bt →
+    S.branchInput e bs → T.branchInput h bt → Prop
+  branchOutput : {e : S.op} → {h : T.op} → (w : opRel e h) →
+    {bs : S.branch e} → {bt : T.branch h} → branch w bs bt →
+    S.branchOutput e bs → T.branchOutput h bt → Prop
 
-/-- `x ≈ y`: there is a bisimulation (`EuttF`-closed relation) relating `x` and `y`. -/
-def Eutt (x y : CompE ε br α) : Prop :=
-  ∃ R : CompE ε br α → CompE ε br α → Prop, (∀ a b, R a b → EuttF R a b) ∧ R x y
+def Compat.refl (H : HSig.{u, w}) : Compat H H where
+  opRel e h := ULift.{max u w, 0} (PLift.{0} (e = h))
+  input
+    | ⟨⟨rfl⟩⟩ => Eq
+  output
+    | ⟨⟨rfl⟩⟩ => Eq
+  branch
+    | ⟨⟨rfl⟩⟩ => Eq
+  branchInput
+    | ⟨⟨rfl⟩⟩, rfl => Eq
+  branchOutput
+    | ⟨⟨rfl⟩⟩, rfl => Eq
 
+inductive Compat.SumRel {S : HSig.{u, w}} {T : HSig.{v, x}}
+    {F : HSig.{u, w}} {G : HSig.{v, x}} (C : Compat S T) (D : Compat F G) :
+    (S.op ⊕ F.op) → (T.op ⊕ G.op) → Type (max u v w x) where
+  | inl {e h} : C.opRel e h → SumRel C D (.inl e) (.inl h)
+  | inr {e h} : D.opRel e h → SumRel C D (.inr e) (.inr h)
 
-/-! ## Reflexivity / equality -/
+def Compat.sum {S : HSig.{u, w}} {T : HSig.{v, x}}
+    {F : HSig.{u, w}} {G : HSig.{v, x}} (C : Compat S T) (D : Compat F G) :
+    Compat (HSig.sum S F) (HSig.sum T G) where
+  opRel := SumRel C D
+  input
+    | .inl w => C.input w
+    | .inr w => D.input w
+  output
+    | .inl w => C.output w
+    | .inr w => D.output w
+  branch
+    | .inl w => C.branch w
+    | .inr w => D.branch w
+  branchInput
+    | .inl w, h => C.branchInput w h
+    | .inr w, h => D.branchInput w h
+  branchOutput
+    | .inl w, h => C.branchOutput w h
+    | .inr w, h => D.branchOutput w h
 
-/-- One step relating a tree to itself, for any relation reflexive on the relevant children. -/
-theorem euttF_diag {R : CompE ε br α → CompE ε br α → Prop} (hR : ∀ x, R x x) (a : CompE ε br α) :
-    EuttF R a a := by
-  rcases cases_view a with ⟨v, rfl⟩ | rfl | ⟨t, rfl⟩ | ⟨e, k, rfl⟩
-  · exact .ret v
-  · exact .fail
-  · exact .tau t t (hR t)
-  · exact .vis e k k (fun _ => hR _)
+def Compat.call {σ : Type u} {ρ : Type u} {σ' : Type v} {ρ' : Type v}
+    (argRel : σ → σ' → Prop) (resultRel : ρ → ρ' → Prop) :
+    Compat (Call.{u, w} σ ρ) (Call.{v, x} σ' ρ') where
+  opRel
+    | .call, .call => ULift.{max u v w x, 0} Unit
+  input _ := argRel
+  output _ := resultRel
+  branch _ source _ := nomatch source
+  branchInput _ h := nomatch h
+  branchOutput _ h := nomatch h
 
-/-- Reflexivity (holds even for divergent trees, via the `tau` case). -/
-theorem eutt_refl (x : CompE ε br α) : Eutt x x :=
-  ⟨Eq, fun _ _ h => h ▸ euttF_diag (fun _ => rfl) _, rfl⟩
+end HSig
 
-theorem Eutt.of_eq {x y : CompE ε br α} (h : x = y) : Eutt x y := h ▸ eutt_refl x
+namespace CompE
 
-/-- A leading `tau` can be stripped: `tau t ≈ t`. -/
-theorem eutt_tau (t : CompE ε br α) : Eutt (tau t) t := by
-  refine ⟨fun x y => x = tau y ∨ x = y, ?_, Or.inl rfl⟩
-  rintro a b (rfl | rfl)
-  · exact .tauL b (euttF_diag (fun _ => Or.inr rfl) b)
-  · exact euttF_diag (fun _ => Or.inr rfl) a
+variable {S : HSig.{u, w}} {T : HSig.{v, x}} (C : HSig.Compat S T)
 
-/-! ## The `Eutt` algebra: monotonicity, congruences
+/-- One weak-bisimulation step under a correspondence between higher-order signatures. -/
+inductive EuttF
+    (R : (α : Type u) → (β : Type v) → (α → β → Prop) → CompE S α → CompE T β → Prop) :
+    {α : Type u} → {β : Type v} → (α → β → Prop) → CompE S α → CompE T β → Prop where
+  | ret (r : α → β → Prop) (a : α) (b : β) (h : r a b) : EuttF R r (ret a) (ret b)
+  | fail (r : α → β → Prop) : EuttF R r (fail (H := S)) (fail (H := T))
+  | tau (r : α → β → Prop) (x : CompE S α) (y : CompE T β) (h : R α β r x y) :
+      EuttF R r (tau x) (tau y)
+  | tauL (r : α → β → Prop) (x : CompE S α) {y : CompE T β} (h : EuttF R r x y) :
+      EuttF R r (tau x) y
+  | tauR (r : α → β → Prop) {x : CompE S α} (y : CompE T β) (h : EuttF R r x y) :
+      EuttF R r x (tau y)
+  | op (r : α → β → Prop) {e : S.op} {h : T.op} (w : C.opRel e h)
+      (sourceInput : S.input e) (targetInput : T.input h)
+      (hi : C.input w sourceInput targetInput)
+      (sourceBlocks : (b : S.branch e) → S.branchInput e b →
+        CompE S (S.branchOutput e b))
+      (sourceK : S.output e → CompE S α)
+      (targetBlocks : (b : T.branch h) → T.branchInput h b →
+        CompE T (T.branchOutput h b))
+      (targetK : T.output h → CompE T β)
+      (hb : ∀ bs bt, (hbr : C.branch w bs bt) → ∀ xs xt,
+        C.branchInput w hbr xs xt →
+        R _ _ (C.branchOutput w hbr) (sourceBlocks bs xs) (targetBlocks bt xt))
+      (hk : ∀ os ot, C.output w os ot → R α β r (sourceK os) (targetK ot)) :
+      EuttF R r
+        (bind (op e sourceInput (fun bx => sourceBlocks bx.1 bx.2) ret) sourceK)
+        (bind (op h targetInput (fun bx => targetBlocks bx.1 bx.2) ret) targetK)
 
-These are the lemmas that let `≈` be *constructed* rather than only stated — exactly what's needed
-to discharge the soundness of a reflected program whose denotation is `≈` (not `=`) to its source. -/
+/-- Weak bisimulation whose visible operations are matched through `C`. -/
+def Eutt {α : Type u} {β : Type v} (r : α → β → Prop) (x : CompE S α) (y : CompE T β) : Prop :=
+  ∃ R, (∀ α β r x y, R α β r x y → EuttF C R r x y) ∧ R α β r x y
 
-/-- `EuttF` is monotone in its relation argument. -/
-theorem EuttF.mono {R R' : CompE ε br α → CompE ε br α → Prop} (h : ∀ a b, R a b → R' a b)
-    {x y : CompE ε br α} (he : EuttF R x y) : EuttF R' x y := by
-  induction he with
-  | ret a            => exact .ret a
-  | fail             => exact .fail
-  | vis e kx ky hk   => exact .vis e kx ky (fun i => h _ _ (hk i))
-  | tau tx ty ht     => exact .tau tx ty (h _ _ ht)
-  | tauL tx _ ih     => exact .tauL tx ih
-  | tauR ty _ ih     => exact .tauR ty ih
-
-/-- `Eutt` is itself a bisimulation (the largest one): one `EuttF`-step relating through `Eutt`. -/
-theorem eutt_closed {x y : CompE ε br α} (h : Eutt x y) : EuttF Eutt x y := by
-  obtain ⟨R, hR, hxy⟩ := h
-  exact (hR x y hxy).mono (fun a b hab => ⟨R, hR, hab⟩)
-
-/-- Strip a leading `tau` on the left while keeping the relation: `x ≈ y → tau x ≈ y`. -/
-theorem eutt_tau_left {x y : CompE ε br α} (h : Eutt x y) : Eutt (tau x) y := by
-  refine ⟨fun a b => (a = tau x ∧ b = y) ∨ Eutt a b, ?_, Or.inl ⟨rfl, rfl⟩⟩
-  rintro a b (⟨rfl, rfl⟩ | hab)
-  · exact .tauL x ((eutt_closed h).mono (fun _ _ h => Or.inr h))
-  · exact (eutt_closed hab).mono (fun _ _ h => Or.inr h)
-
-/-- `vis`-congruence: related continuations give related `vis` nodes. -/
-theorem eutt_vis_cong (e : ε) {k1 k2 : br e → CompE ε br α}
-    (h : ∀ i, Eutt (k1 i) (k2 i)) : Eutt (vis e k1) (vis e k2) := by
-  refine ⟨fun a b => (a = vis e k1 ∧ b = vis e k2) ∨ Eutt a b, ?_, Or.inl ⟨rfl, rfl⟩⟩
-  rintro a b (⟨rfl, rfl⟩ | hab)
-  · exact .vis e k1 k2 (fun i => Or.inr (h i))
-  · exact (eutt_closed hab).mono (fun _ _ h => Or.inr h)
-
-/-- **`bind`-congruence for `≈`**: bisimilar prefixes with pointwise-bisimilar continuations give
-    bisimilar binds.  Proved by bisimulation, casing on the prefix relation by *induction* on one
-    `EuttF`-step (so the finitely-many leading `tau`s of the prefix are stripped). -/
-theorem eutt_bind_cong {β : Type} {m1 m2 : CompE ε br α} {k1 k2 : α → CompE ε br β}
-    (hm : Eutt m1 m2) (hk : ∀ x, Eutt (k1 x) (k2 x)) : Eutt (bind m1 k1) (bind m2 k2) := by
-  refine ⟨fun a b => (∃ p q, Eutt p q ∧ a = bind p k1 ∧ b = bind q k2) ∨ Eutt a b, ?_,
-    Or.inl ⟨m1, m2, hm, rfl, rfl⟩⟩
-  rintro a b (⟨p, q, hpq, rfl, rfl⟩ | hab)
-  · have hE := eutt_closed hpq
-    clear hpq
-    induction hE with
-    | ret x =>
-      rw [bind_ret, bind_ret]
-      exact (eutt_closed (hk x)).mono (fun _ _ h => Or.inr h)
-    | fail => rw [bind_fail, bind_fail]; exact .fail
-    | vis e kx ky hkk =>
-      rw [bind_vis, bind_vis]
-      exact .vis e _ _ (fun i => Or.inl ⟨kx i, ky i, hkk i, rfl, rfl⟩)
-    | tau tx ty ht =>
-      rw [bind_tau, bind_tau]
-      exact .tau _ _ (Or.inl ⟨tx, ty, ht, rfl, rfl⟩)
-    | tauL tx _ ih => rw [bind_tau]; exact .tauL _ ih
-    | tauR ty _ ih => rw [bind_tau]; exact .tauR _ ih
-  · exact (eutt_closed hab).mono (fun _ _ h => Or.inr h)
-
-/-! ## Symmetry and transitivity
-
-`Eutt` is symmetric (flip the bisimulation) and transitive.  Transitivity is the hard coinductive
-lemma: simple induction on the two one-step relations gets stuck on the `tau`/`tauL` interleaving,
-so we go through leading-`tau` cancellation (`eutt_untau_left/right`), finite `tau`-stripping
-(`Strip`), and head-matching (`match_ret`/`match_fail`/`match_vis`), then assemble.  The `ret`/`tau`/
-`vis`/`fail` constructors are `def`s over `M.mk`, so the inversions use `dest`-based injectivity. -/
-
-theorem EuttF.symm {R : CompE ε br α → CompE ε br α → Prop} {x y} (h : EuttF R x y) :
-    EuttF (fun a b => R b a) y x := by
+theorem EuttF.mono
+    {R R' : (α : Type u) → (β : Type v) → (α → β → Prop) → CompE S α → CompE T β → Prop}
+    (hm : ∀ α β r x y, R α β r x y → R' α β r x y)
+    {α : Type u} {β : Type v} {r : α → β → Prop} {x y} (h : EuttF C R r x y) :
+    EuttF C R' r x y := by
   induction h with
-  | ret a => exact .ret a
-  | fail => exact .fail
-  | vis e kx ky hk => exact .vis e ky kx (fun i => hk i)
-  | tau tx ty ht => exact .tau ty tx ht
-  | tauL tx _ ih => exact .tauR tx ih
-  | tauR ty _ ih => exact .tauL ty ih
+  | ret => exact .ret _ _ _ ‹_›
+  | fail => exact .fail _
+  | tau x y h => exact .tau _ x y (hm _ _ _ _ _ h)
+  | tauL x h ih => exact .tauL _ x ih
+  | tauR y h ih => exact .tauR _ y ih
+  | op w sourceInput targetInput hi sourceBlocks sourceK targetBlocks targetK hb hk =>
+      exact .op _ w sourceInput targetInput hi sourceBlocks sourceK targetBlocks targetK
+        (fun bs bt hbr xs xt hx => hm _ _ _ _ _ (hb bs bt hbr xs xt hx))
+        (fun os ot ho => hm _ _ _ _ _ (hk os ot ho))
 
-theorem Eutt.symm {x y : CompE ε br α} (h : Eutt x y) : Eutt y x := by
+theorem eutt_closed {α : Type u} {β : Type v} {r : α → β → Prop} {x y}
+    (h : Eutt C r x y) : EuttF C (fun _ _ r x y => Eutt C r x y) r x y := by
   obtain ⟨R, hR, hxy⟩ := h
-  exact ⟨fun a b => R b a, fun a b hab => (hR b a hab).symm, hxy⟩
+  exact (hR α β r x y hxy).mono C (fun _ _ _ _ _ h => ⟨R, hR, h⟩)
 
-theorem dfst {x y : CompE ε br α} (h : x = y) : x.dest.1 = y.dest.1 := by rw [h]
-theorem tau_inj {s t : CompE ε br α} (h : tau s = tau t) : s = t := by
-  have := congrArg PFunctor.M.dest h; rw [dest_tau, dest_tau] at this
-  injection this with _ hc; exact congrFun hc PUnit.unit
-theorem ret_inj {a b : α} (h : (ret a : CompE ε br α) = ret b) : a = b := by
-  have := dfst h; rw [dest_ret, dest_ret] at this; exact Pos.ret.inj this
+theorem Eutt.of_step {α : Type u} {β : Type v} {r : α → β → Prop} {x y}
+    (h : EuttF C (fun _ _ r x y => Eutt C r x y) r x y) : Eutt C r x y := by
+  let R := fun (α : Type u) (β : Type v) (r : α → β → Prop) (x : CompE S α) (y : CompE T β) =>
+    Eutt C r x y ∨ EuttF C (fun _ _ r x y => Eutt C r x y) r x y
+  refine ⟨R, ?_, Or.inr h⟩
+  intro α β r x y hxy
+  rcases hxy with hxy | hxy
+  · exact (eutt_closed C hxy).mono C (fun _ _ _ _ _ h => Or.inl h)
+  · exact hxy.mono C (fun _ _ _ _ _ h => Or.inl h)
 
-theorem eutt_untau_left {x y : CompE ε br α} (h : Eutt (tau x) y) : Eutt x y := by
-  obtain ⟨R, hR, h0⟩ := h
-  refine ⟨fun a b => R a b ∨ R (tau a) b, ?_, Or.inr h0⟩
-  have key : ∀ w b, EuttF R w b → ∀ a, w = tau a → EuttF (fun a b => R a b ∨ R (tau a) b) a b := by
-    intro w b hwb
-    induction hwb with
-    | ret c => intro a hw; exact absurd (dfst hw) (by simp)
-    | fail => intro a hw; exact absurd (dfst hw) (by simp)
-    | vis e kx ky _ => intro a hw; exact absurd (dfst hw) (by simp)
-    | tau ta tb ht => intro a hw; obtain rfl := tau_inj hw
-                      exact .tauR tb ((hR ta tb ht).mono (fun _ _ h => Or.inl h))
-    | tauL tx h' _ => intro a hw; obtain rfl := tau_inj hw
-                      exact h'.mono (fun _ _ h => Or.inl h)
-    | tauR tb h' ih => intro a hw; exact .tauR tb (ih a hw)
-  rintro a b (hab | hab)
-  · exact (hR a b hab).mono (fun _ _ h => Or.inl h)
-  · exact key (tau a) b (hR (tau a) b hab) a rfl
+theorem Eutt.congr {α : Type u} {β : Type v} {r : α → β → Prop}
+    {x x' : CompE S α} {y y' : CompE T β}
+    (hx : x = x') (hy : y = y') (h : Eutt C r x y) : Eutt C r x' y' := by
+  cases hx
+  cases hy
+  exact h
 
-theorem eutt_untau_right {x y : CompE ε br α} (h : Eutt x (tau y)) : Eutt x y :=
-  (eutt_untau_left h.symm).symm
+theorem Eutt.tauR {α : Type u} {β : Type v} {r : α → β → Prop}
+    {x : CompE S α} {y : CompE T β} (h : Eutt C r x y) :
+    Eutt C r x (tau y) :=
+  Eutt.of_step C (.tauR r y (eutt_closed C h))
 
-inductive Strip : CompE ε br α → CompE ε br α → Prop
-  | refl (x : CompE ε br α) : Strip x x
-  | tau {t y : CompE ε br α} : Strip t y → Strip (tau t) y
+theorem Eutt.tauL {α : Type u} {β : Type v} {r : α → β → Prop}
+    {x : CompE S α} {y : CompE T β} (h : Eutt C r x y) :
+    Eutt C r (tau x) y :=
+  Eutt.of_step C (.tauL r x (eutt_closed C h))
 
-theorem euttF_strip_left {R : CompE ε br α → CompE ε br α → Prop} {x x' z}
-    (s : Strip x x') (h : EuttF R x' z) : EuttF R x z := by
-  induction s with
-  | refl _ => exact h
-  | tau _ ih => exact .tauL _ (ih h)
-theorem euttF_strip_right {R : CompE ε br α → CompE ε br α → Prop} {x z z'}
-    (s : Strip z z') (h : EuttF R x z') : EuttF R x z := by
-  induction s with
-  | refl _ => exact h
-  | tau _ ih => exact .tauR _ (ih h)
+/-- Relational bind congruence.  The intermediate result relation determines which pairs of
+    continuations must themselves be bisimilar. -/
+theorem Eutt.bind {α : Type u} {β : Type v} {γ : Type u} {δ : Type v}
+    {r : α → β → Prop} {q : γ → δ → Prop}
+    {m : CompE S α} {n : CompE T β} (hm : Eutt C r m n)
+    (ks : α → CompE S γ) (kt : β → CompE T δ)
+    (hk : ∀ a b, r a b → Eutt C q (ks a) (kt b)) :
+    Eutt C q (bind m ks) (bind n kt) := by
+  let R := fun (γ : Type u) (δ : Type v) (q : γ → δ → Prop)
+      (x : CompE S γ) (y : CompE T δ) =>
+    Eutt C q x y ∨
+      ∃ (α : Type u) (β : Type v) (r : α → β → Prop)
+        (m : CompE S α) (n : CompE T β)
+        (ks : α → CompE S γ) (kt : β → CompE T δ),
+        x = CompE.bind m ks ∧ y = CompE.bind n kt ∧ Eutt C r m n ∧
+          ∀ a b, r a b → Eutt C q (ks a) (kt b)
+  refine ⟨R, ?_, Or.inr ⟨α, β, r, m, n, ks, kt, rfl, rfl, hm, hk⟩⟩
+  intro γ δ q x y hxy
+  rcases hxy with hxy | ⟨α, β, r, m, n, ks, kt, rfl, rfl, hm, hk⟩
+  · exact (eutt_closed C hxy).mono C (fun _ _ _ _ _ h => Or.inl h)
+  · let go {m : CompE S α} {n : CompE T β}
+        (step : EuttF C (fun _ _ r x y => Eutt C r x y) r m n) :
+        EuttF C R q (CompE.bind m ks) (CompE.bind n kt) := by
+        induction step with
+        | ret a b h =>
+            rw [bind_ret, bind_ret]
+            exact (eutt_closed C (hk a b h)).mono C (fun _ _ _ _ _ h => Or.inl h)
+        | fail =>
+            rw [bind_fail, bind_fail]
+            exact .fail q
+        | tau mx ny h =>
+            rw [bind_tau, bind_tau]
+            exact .tau q (CompE.bind mx ks) (CompE.bind ny kt)
+              (Or.inr ⟨_, _, _, mx, ny, ks, kt, rfl, rfl, h, hk⟩)
+        | tauL mx h ih =>
+            rw [bind_tau]
+            exact .tauL q (CompE.bind mx ks) ih
+        | tauR ny h ih =>
+            rw [bind_tau]
+            exact .tauR q (CompE.bind ny kt) ih
+        | op w sourceInput targetInput hi sourceBlocks sourceK targetBlocks targetK hb ho =>
+            rw [bind_assoc, bind_assoc]
+            exact .op q w sourceInput targetInput hi sourceBlocks
+              (fun o => CompE.bind (sourceK o) ks) targetBlocks
+              (fun o => CompE.bind (targetK o) kt)
+              (fun bs bt hbr xs xt hx => Or.inl (hb bs bt hbr xs xt hx))
+              (fun os ot hot => Or.inr
+                ⟨_, _, _, sourceK os, targetK ot, ks, kt, rfl, rfl,
+                  (ho os ot hot), hk⟩)
+    exact go (eutt_closed C hm)
 
-theorem vis_inj {e1 e2 : ε} {k1 : br e1 → CompE ε br α}
-    {k2 : br e2 → CompE ε br α} (h : vis e1 k1 = vis e2 k2) :
-    e1 = e2 ∧ HEq k1 k2 := by
-  have := congrArg PFunctor.M.dest h; rw [dest_vis, dest_vis] at this
-  injection this with hp hc; injection hp with he; exact ⟨he, hc⟩
-
-theorem match_ret {a : α} {x y : CompE ε br α} (hxy : Eutt x y) (s : Strip x (ret a)) :
-    Strip y (ret a) := by
-  generalize hu : (ret a : CompE ε br α) = u at s ⊢
-  induction s generalizing y with
-  | refl _ =>
-    subst hu
-    obtain ⟨R, hR, h0⟩ := hxy
-    have key : ∀ w z, EuttF R w z → w = ret a → Strip z (ret a) := by
-      intro w z hwz
-      induction hwz with
-      | ret b => intro hw; obtain rfl := ret_inj hw; exact .refl _
-      | fail => intro hw; exact absurd (dfst hw) (by simp)
-      | vis e kx ky _ => intro hw; exact absurd (dfst hw) (by simp)
-      | tau ta tb _ => intro hw; exact absurd (dfst hw) (by simp)
-      | tauL tx _ _ => intro hw; exact absurd (dfst hw) (by simp)
-      | tauR tb _ ih => intro hw; exact .tau (ih hw)
-    exact key (ret a) y (hR _ _ h0) rfl
-  | tau s' ih => exact ih (eutt_untau_left hxy) hu
-
-theorem match_fail {x y : CompE ε br α} (hxy : Eutt x y) (s : Strip x fail) :
-    Strip y fail := by
-  generalize hu : (fail : CompE ε br α) = u at s ⊢
-  induction s generalizing y with
-  | refl _ =>
-    subst hu
-    obtain ⟨R, hR, h0⟩ := hxy
-    have key : ∀ w z, EuttF R w z → w = (fail : CompE ε br α) → Strip z fail := by
-      intro w z hwz
-      induction hwz with
-      | ret b => intro hw; exact absurd (dfst hw) (by simp)
-      | fail => intro hw; exact .refl _
-      | vis e kx ky _ => intro hw; exact absurd (dfst hw) (by simp)
-      | tau ta tb _ => intro hw; exact absurd (dfst hw) (by simp)
-      | tauL tx _ _ => intro hw; exact absurd (dfst hw) (by simp)
-      | tauR tb _ ih => intro hw; exact .tau (ih hw)
-    exact key fail y (hR _ _ h0) rfl
-  | tau s' ih => exact ih (eutt_untau_left hxy) hu
-
-theorem match_vis {e : ε} {k : br e → CompE ε br α} {x y : CompE ε br α}
-    (hxy : Eutt x y) (s : Strip x (vis e k)) :
-    ∃ k', Strip y (vis e k') ∧ ∀ i, Eutt (k i) (k' i) := by
-  generalize hu : (vis e k : CompE ε br α) = u at s ⊢
-  induction s generalizing y with
-  | refl _ =>
-    subst hu
-    obtain ⟨R, hR, h0⟩ := hxy
-    have key : ∀ w z, EuttF R w z → w = vis e k →
-        ∃ k', Strip z (vis e k') ∧ ∀ i, R (k i) (k' i) := by
-      intro w z hwz
-      induction hwz with
-      | ret b => intro hw; exact absurd (dfst hw) (by simp)
-      | fail => intro hw; exact absurd (dfst hw) (by simp)
-      | tau ta tb _ => intro hw; exact absurd (dfst hw) (by simp)
-      | tauL tx _ _ => intro hw; exact absurd (dfst hw) (by simp)
-      | vis e2 kx ky hkk =>
-          intro hw
-          obtain ⟨rfl, hk⟩ := vis_inj hw
-          obtain rfl := eq_of_heq hk
-          exact ⟨ky, .refl _, hkk⟩
-      | tauR tb _ ih => intro hw; obtain ⟨k', hs, hk⟩ := ih hw; exact ⟨k', .tau hs, hk⟩
-    obtain ⟨k', hs, hk⟩ := key (vis e k) y (hR _ _ h0) rfl
-    exact ⟨k', hs, fun i => ⟨R, hR, hk i⟩⟩
-  | tau s' ih => exact ih (eutt_untau_left hxy) hu
-
-theorem Eutt.trans {x y z : CompE ε br α} (hxy : Eutt x y) (hyz : Eutt y z) : Eutt x z := by
-  refine ⟨fun a c => ∃ b, Eutt a b ∧ Eutt b c, ?_, ⟨y, hxy, hyz⟩⟩
-  rintro a c ⟨b, hab, hbc⟩
-  rcases cases_view a with ⟨v, rfl⟩ | rfl | ⟨t, rfl⟩ | ⟨e, k, rfl⟩
-  · exact euttF_strip_right (match_ret hbc (match_ret hab (.refl _))) (.ret v)
-  · exact euttF_strip_right (match_fail hbc (match_fail hab (.refl _))) .fail
-  · rcases cases_view c with ⟨v, rfl⟩ | rfl | ⟨tc, rfl⟩ | ⟨ec, kc, rfl⟩
-    · exact euttF_strip_left (match_ret hab.symm (match_ret hbc.symm (.refl _))) (.ret v)
-    · exact euttF_strip_left (match_fail hab.symm (match_fail hbc.symm (.refl _))) .fail
-    · exact .tau t tc ⟨b, eutt_untau_left hab, eutt_untau_right hbc⟩
-    · obtain ⟨kb, sb, hkb⟩ := match_vis hbc.symm (.refl _)
-      obtain ⟨kt, st, hkt⟩ := match_vis hab.symm sb
-      exact euttF_strip_left st (.vis ec kt kc (fun i => ⟨kb i, (hkt i).symm, (hkb i).symm⟩))
-  · obtain ⟨kb, sb, hkb⟩ := match_vis hab (.refl _)
-    obtain ⟨kc, sc, hkc⟩ := match_vis hbc sb
-    exact euttF_strip_right sc (.vis e k kc (fun i => ⟨kb i, hkb i, hkc i⟩))
-
-
-/-! ## `Eutt` is an equivalence: the `Setoid` instance
-
-With reflexivity, symmetry, and transitivity in hand, weak bisimulation is a genuine equivalence
-relation, so `CompE ε br α` is a lawful `Setoid` and `≈` supports `calc`/`Trans`. -/
-
-instance : Setoid (CompE ε br α) where
-  r := Eutt
-  iseqv := ⟨eutt_refl, Eutt.symm, Eutt.trans⟩
-
-instance : Trans (@Eutt ε br α) (@Eutt ε br α) (@Eutt ε br α) := ⟨Eutt.trans⟩
-
+end CompE
 end ITree
 end Freigen

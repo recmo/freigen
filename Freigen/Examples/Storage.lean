@@ -1,64 +1,110 @@
-import Freigen.Free
-import Freigen.Reflect.Basic
 import Freigen.Compile
 
 /-!
-# The `StoreOp` DSL — a **hint-less** (`NoScope`) example
+# Storage effects
 
-A mutable store of naturals addressed by naturals.  No scoped constructs (`NoScope`), so the program
-is a plain first-order free monad and never carries a `hop` node — yet it reuses the *same*
-`Free`/`run`/`reflect%`/`denoteProg` pipeline as the circuit, with the scoped handler vacuous.
+The storage example is expressed with the unified higher-order signature. Its
+operations simply have no branches. This keeps storage on the same `Free`/`ITree`/relational
+reflection path as scoped circuit effects.
 -/
 
-namespace Freigen
+namespace Freigen.Ast.StorageExample
 
-/-- Store operations: read/write a `Nat` cell addressed by a `Nat`. -/
-inductive StoreOp : TpF → TpF → Type
-  | get : StoreOp .nat .nat
-  | set : StoreOp (.prod .nat .nat) .unit
+inductive StoreOp where
+  | get
+  | set
 
-def get (a : Nat) : Free StoreOp NoScope Nat := Free.op StoreOp.get a .pure
-def set (a v : Nat) : Free StoreOp NoScope Unit := Free.op StoreOp.set (a, v) .pure
+abbrev Source : ITree.HSig where
+  op := StoreOp
+  input
+    | .get => Nat
+    | .set => Nat × Nat
+  output
+    | .get => Nat
+    | .set => Unit
+  branch := fun _ => Empty
+  branchInput := fun _ b => nomatch b
+  branchOutput := fun _ b => nomatch b
 
-/-- Operational semantics into a state monad (the store is a function `Nat → Nat`).  There are no
-    scoped ops (`NoScope`), so the scoped handler is vacuous. -/
-def runStore {α} (p : Free StoreOp NoScope α) : StateM (Nat → Nat) α :=
-  p.run (fun e => match e with
-    | .mk .get a      => fun s => (s a, s)
-    | .mk .set (a, v) => fun s => ((), fun x => if x == a then v else s x))
-    (fun s _ => s.elim)
+abbrev Target : Signature where
+  op := StoreOp
+  input
+    | .get => .nat
+    | .set => .prod .nat .nat
+  output
+    | .get => .nat
+    | .set => .unit
+  branch := fun _ => Empty
+  branchInput := fun _ b => nomatch b
+  branchOutput := fun _ b => nomatch b
 
-/-- Op names for the serializer. -/
-def storeName {I R : TpF} : StoreOp I R → String | .get => "get" | .set => "set"
+inductive StoreRel : StoreOp → StoreOp → Type where
+  | get : StoreRel .get .get
+  | set : StoreRel .set .set
 
-/-- The DSL instance: `NoScope` has no scoped constructs, so `scopeName` is vacuous. -/
-instance : DSL StoreOp NoScope where
-  opName := storeName
-  scopeName s := s.elim
+@[ast_compat] abbrev Compat : Signature.Compat Source Target where
+  opRel := StoreRel
+  input
+    | .get, source, target => source = target
+    | .set, source, target =>
+        source.1 = target.1 ∧ source.2 = target.2
+  output
+    | .get, source, target => source = target
+    | .set, source, target => source = target
+  branch := by
+    intro _ _ _ source
+    exact nomatch source
+  branchInput := by
+    intro _ _ _ source
+    exact nomatch source
+  branchOutput := by
+    intro _ _ _ source
+    exact nomatch source
 
-def storeProg : Free StoreOp NoScope Nat := do
+@[ast_op] def getOp : OpSpec Compat StoreOp.get where
+  target := .get
+  witness := .get
+
+@[ast_op] def setOp : OpSpec Compat StoreOp.set where
+  target := .set
+  witness := .set
+
+@[ast_render] def render : RenderSpec Target where
+  opName
+    | .get => "get"
+    | .set => "set"
+  branches := fun _ => []
+
+abbrev Store (A : Type) := Free Source A
+
+@[ast_inline] def get (address : Nat) : Store Nat :=
+  .op .get address (fun b => nomatch b) .pure
+
+@[ast_inline] def set (address value : Nat) : Store Unit :=
+  .op .set (address, value) (fun b => nomatch b) .pure
+
+def run {A : Type} (program : Store A) : StateM (Nat → Nat) A :=
+  Free.eval (H := Source) (M := StateM (Nat → Nat))
+    (fun e input _ => match e with
+      | StoreOp.get => fun store => (store input, store)
+      | StoreOp.set =>
+          fun store => ((), fun x => if x = input.1 then input.2 else store x)) program
+
+def program : Store Nat := do
   set 0 42
   get 0
 
-/-- info: 42 -/
-#guard_msgs in #eval (runStore storeProg).run' (fun _ => 0)
+example : (run program).run' (fun _ => 0) = 42 := rfl
 
-/-- The same `reflect%` pipeline; no `hop` nodes, soundness for free. -/
-reflect_def storeC := storeProg
-/-- info: Freigen.storeC_sound : ITree.Eutt (denoteProg (storeC (KC StoreOp) (Tp.denote StoreOp)) HList.nil) (ofFree storeProg) -/
-#guard_msgs (whitespace := lax) in
-#check storeC_sound
+def getProgram : Store Nat := get 0
 
-/-- info:
-(program
-  (main () nat
-    (block
-      (let v0 (prod nat nat) (lit (0 42)))
-      (let v1 unit (op set v0))
-      (let v2 nat (lit 0))
-      (let v3 nat (op get v2))
-      (ret v3))))
--/
-#guard_msgs (whitespace := lax) in #eval IO.println (serialize storeC)
+reflect_def reflected := getProgram
 
-end Freigen
+example : ITree.CompE.Eutt Compat Eq (Free.toITree getProgram)
+    (Expr.denote (reflected (Tp.denote (ITree.CompE Target.spec)))) :=
+  reflected_sound
+
+-- Future acceptance target: pair-valued operation inputs are not yet reified generically.
+-- reflect_def storeAndLoadReflected := program
+
+end Freigen.Ast.StorageExample

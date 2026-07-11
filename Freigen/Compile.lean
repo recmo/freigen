@@ -1,83 +1,88 @@
-import Freigen.Ast.Sexp
 import Freigen.Reflect.Basic
+import Freigen.Ast.Sexp
 import Lean.Elab.Command
 import Lean.Elab.SyntheticMVars
 
-/-!
-# Compilation front-end: from a `Free` program to a file on disk
+namespace Freigen.Ast
 
-`reflect%` produces a `Prog` (+ its `≈`-soundness); `sexp` serializes one to a `String`.  This module turns
-that capability into a *devex*:
+open Lean Meta Elab Term Command
 
-* a **`DSL`** type-class carrying the per-signature op/scope naming, so `serialize` needs no
-  ad-hoc arguments;
-* a persistent **environment extension** (`compileExt`) recording *which declarations* to emit and
-  *where*;
-* a **`#compile prog => "path"`** command that takes the **raw `Free` program** `prog` directly —
-  it reflects it for you (`reflect% prog`) into a kernel-checked auxiliary definition and records
-  `(path, that def)`.  No `reflect%` boilerplate, no file written and no serialization here, so the
-  editor never touches the disk while you type.
+abbrev CompileArtifact := String × Name × Name
 
-Rendering (running the serializer) is deferred to the `freigen` executable, which — being a
-compiled binary — evaluates `serialize foo.1` after importing the library (emitting the uniform
-S-expression format of `Freigen.Ast.Sexp`, the one the Rust SDK parses), and also prints the
-`≈`-soundness statement proved by the reflection for your inspection.  The `lake build <lib>:prog`
-facet wires the two together.  Because `#compile prog` elaborates `reflect% prog` (a `{ Closed //
-≈-soundness }` pair) into a real definition, the artifact only exists if its soundness proof
-type-checks: **every emitted file is certified `≈` its source.**
--/
-
-open Lean Elab Command Term Meta
-
-namespace Freigen
-
-/-- The per-DSL data `serialize` needs: how to name each first-order op and each scoped construct.
-    One `instance` per signature replaces threading `name`/`sname` through every call site. -/
-class DSL (Op : TpF → TpF → Type) (SOp : Type → Type) where
-  /-- Print a first-order op (`Op I R`) as its surface name, e.g. `assert`. -/
-  opName : {I R : TpF} → Op I R → String
-  /-- Print a scoped construct (`SOp β`) as its surface name, e.g. `hint`. -/
-  scopeName : {β : Type} → SOp β → String
-
-/-- Serialize a closed program using its DSL instance — the argument-free `sexp` (this is what
-    `#compile` writes into `.prog` artifacts). -/
-def serialize {Op SOp} [inst : DSL Op SOp] {mainArgs α} (c : Closed Op SOp mainArgs α) : String :=
-  sexp inst.opName inst.scopeName c
-
-/-! ## The artifact registry -/
-
-/-- One compilation artifact: an output path and the reflected declaration to serialize into it. -/
-abbrev Artifact := String × Name
-
-/-- Persistent env extension collecting every `#compile` artifact in a module.  The `freigen`
-    executable reads this (with `loadExts := true`) after importing a library. -/
-initialize compileExt : SimplePersistentEnvExtension Artifact (Array Artifact) ←
+initialize compileExt : SimplePersistentEnvExtension CompileArtifact (Array CompileArtifact) ←
   registerSimplePersistentEnvExtension {
     addEntryFn := Array.push
-    addImportedFn := fun ass => ass.foldl (· ++ ·) #[]
+    addImportedFn := fun arrays => arrays.foldl (· ++ ·) #[]
   }
 
-/-- `#compile prog => "path"` reflects the raw `Free` program `prog` (`reflect% prog`) into a
-    kernel-checked auxiliary definition and records it for `lake build <lib>:prog` to serialize and
-    write to `path`.  `prog` is anything `reflect%` accepts — a value, a function of its inputs, or a
-    structural recursion — whose signature has a `[DSL]` instance. -/
-elab "#compile " prog:term " => " path:str : command => do
-  -- Reflect `prog` and its soundness proof, fully elaborated and closed.
-  let (value, type, levelParams) ← liftTermElabM do
-    let e ← elabTermAndSynthesize (← `(reflect% $prog)) none
-    synthesizeSyntheticMVarsNoPostponing
-    let e ← instantiateMVars e
-    let type ← instantiateMVars (← inferType e)
-    let levelParams := (collectLevelParams (collectLevelParams {} e) type).params.toList
-    pure (e, type, levelParams)
-  -- Materialise it as a compiled definition (kernel-checks the ≈-soundness proof; lets the emitter
-  -- evaluate `serialize`).  Name it after the source, uniquely per module.
-  let base : Name := if prog.raw.isIdent then prog.raw.getId else `compiled
-  let idx := (compileExt.getState (← getEnv)).size
-  let auxName := (← getMainModule) ++ base ++ Name.mkSimple s!"reflected_{idx}"
-  liftCoreM <| addAndCompile <| .defnDecl {
-    name := auxName, levelParams, type, value
-    hints := .opaque, safety := .safe, all := [auxName] }
-  modifyEnv (compileExt.addEntry · (path.getString, auxName))
+private def registryEntries : CoreM (Array Name) := do
+  let env ← getEnv
+  return env.constants.toList.foldl (init := #[]) fun entries entry =>
+    if astRenderAttr.hasTag env entry.1 then entries.push entry.1 else entries
 
-end Freigen
+private def resolveRender (H : Lean.Expr) : MetaM Lean.Expr := do
+  let expected ← mkAppM ``RenderSpec #[H]
+  let saved ← get
+  for candidate in ← registryEntries do
+    try
+      let value ← mkConstWithFreshMVarLevels candidate
+      let ⟨args, _, result⟩ ← forallMetaTelescope (← inferType value)
+      unless ← isDefEq result expected do throwError "not this renderer"
+      for arg in args do
+        unless ← arg.mvarId!.isAssigned do
+          throwError "renderer has unresolved parameters"
+      return ← instantiateMVars (mkAppN value args)
+    catch _ => set saved
+  throwError "#compile: target signature has no @[ast_render] declaration"
+
+/-- Reflect, kernel-check, serialize, and register an AST program for the `:prog` facet. -/
+elab "#compile " program:term " => " path:str : command => do
+  let (reflected, targetSig) ← liftTermElabM do
+    let source ← elabTermAndSynthesize program none
+    let source ← instantiateMVars source
+    let plan ← Reflector.discover source
+    let reflected ← elabTermAndSynthesize (← `(reflect% $program)) none
+    synthesizeSyntheticMVarsNoPostponing
+    pure (← instantiateMVars reflected, plan.targetSig)
+  let idx := (compileExt.getState (← getEnv)).size
+  let base : Name := if program.raw.isIdent then program.raw.getId else `compiled
+  let reflectedName := (← getMainModule) ++ base ++ Name.mkSimple s!"ast_reflected_{idx}"
+  let reflectedType ← liftTermElabM <| inferType reflected
+  liftCoreM <| addAndCompile <| .defnDecl {
+    name := reflectedName
+    levelParams := (collectLevelParams (collectLevelParams {} reflected) reflectedType).params.toList
+    type := reflectedType
+    value := reflected
+    hints := .opaque
+    safety := .safe
+  }
+  let (serialized, soundName) ← liftTermElabM do
+    let reflectedConst ← mkConstWithFreshMVarLevels reflectedName
+    let code ← mkAppM ``Subtype.val #[reflectedConst]
+    let render ← resolveRender targetSig
+    let serialized ← mkAppM ``serialize #[render, code]
+    pure (serialized, reflectedName.appendAfter "_sound")
+  let serializedType ← liftTermElabM <| inferType serialized
+  let serializedName := reflectedName.appendAfter "_sexp"
+  liftCoreM <| addAndCompile <| .defnDecl {
+    name := serializedName
+    levelParams := []
+    type := serializedType
+    value := serialized
+    hints := .opaque
+    safety := .safe
+  }
+  -- A named theorem makes the certificate inspectable independently of the serialized string.
+  let soundValue ← liftTermElabM do
+    let reflectedConst ← mkConstWithFreshMVarLevels reflectedName
+    mkAppM ``Subtype.property #[reflectedConst]
+  let soundType ← liftTermElabM <| inferType soundValue
+  liftCoreM <| addDecl <| .thmDecl {
+    name := soundName
+    levelParams := []
+    type := soundType
+    value := soundValue
+  }
+  modifyEnv (compileExt.addEntry · (path.getString, serializedName, soundName))
+
+end Freigen.Ast

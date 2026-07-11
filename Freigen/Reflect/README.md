@@ -1,17 +1,16 @@
-# AST2 Reflector Design
+# AST Reflector Design
 
 ## Public surface
 
-The AST2 frontend owns the same surface syntax as the original frontend when its module is
-imported:
+Importing `Freigen.Reflect.Basic` provides:
 
 - `reflect% program`
 - `reflect_def name := program`
 - `#compile program => "path"`
 
-`reflect%` returns closed PHOAS code together with a relational `ITree2.CompE.Eutt` theorem.
+`reflect%` returns closed PHOAS code together with a relational `ITree.CompE.Eutt` theorem.
 The source and target signatures, representations, operation mappings, and serialization data are
-declarations tagged with `ast2_compat`, `ast2_repr`, `ast2_op`, and `ast2_render`. They are explicit
+declarations tagged with `ast_compat`, `ast_repr`, `ast_op`, and `ast_render`. They are explicit
 elaborator inputs, not typeclasses.
 
 ## Pass 1: discovery
@@ -33,7 +32,7 @@ Pass 2 maintains three distinct forms of every represented atom:
 
 - a generic PHOAS atom `V α`, used only by closed AST code;
 - a semantic target atom `α.denote`, used by `Expr.denote`;
-- a source atom, used only by the source `Freek` term and proof.
+- a source atom, used only by the source `Free` term and proof.
 
 The environment also stores `Φ → Rel source target`. A source-only variable or relation proof is
 rejected if it occurs in the generated AST projection.

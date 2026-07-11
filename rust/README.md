@@ -1,37 +1,25 @@
-# `freigen` — the Rust SDK
+# `freigen` Rust SDK
 
-The consumer side of Freigen's compiler output.  Freigen (the Lean library at the repository root)
-reflects free-monadic programs into a typed imperative AST and emits it as a **uniform S-expression
-artifact** (`.prog`); this crate parses that format and runs it.
+The Rust consumer for Freigen's promoted AST format. It parses `.prog` S-expressions into a typed
+tree and executes closed programs with a client-supplied effect handler.
 
-- `sexp` — a minimal S-expression reader (lists and bare atoms — names included; quoted strings
-  are reserved for guest-language string literals; whitespace-insensitive).
-- `ast` — the typed Rust AST, mirroring the Lean-side `Prog`/`Code` one-to-one: a program is a
-  list of `def`/`rec` definitions ending in `main`; a body is a block of single-assignment,
-  type-annotated `let`s ending in a return or a branch; loops (`fold`/`vgen`) are first-class and
-  never unrolled; custom effects are opaque named nodes.  This is the structure a **client
-  compiler** walks.
-- `parse` — `.prog` → `ast::Program`, with type-directed literal parsing (a field element knows
-  its modulus, a `Fin` its bound).
-- `value` / `interp` — a **canonical interpreter** mirroring the Lean denotation `denoteProg`,
-  for executing compiled programs in tests.  The source DSL's two extension slots stay
-  client-injectable through the `Handler` trait:
-  - `op(name, arg)` — the denotation of a custom first-order effect (e.g. `assert`);
-  - `scope(name, block)` — the denotation of a scoped construct; the block arrives as a runnable
-    closure, so a handler may run it inline (the default — witness generation for a `hint`),
-    substitute a value, or fail.
+- `sexp` reads the uniform S-expression layer.
+- `ast` mirrors `Ast.Expr`: typed lets, expression-valued conditionals, lambdas and applications,
+  inline `letrec`/self calls, source ranges, and higher-order operations with branch closures.
+- `parse` is the inverse of `Freigen/Ast/Sexp.lean`.
+- `interp` evaluates the pure fragment and passes operations to `Handler::op`. The handler receives
+  the operation input and `BranchCalls`; each branch can be invoked with its dynamically bound
+  input, ignored, or invoked more than once according to the target semantics.
 
-  Failure is first-class: a partial primitive whose erased proof obligation does not hold (an
-  out-of-range access, a size mismatch) evaluates to `Error::Fail` — the image of `ITree.fail`.
-  A *reflected* program carries a Lean-side proof that this cannot happen on the source's inputs.
-
-The grammar of the format is pinned in `Freigen/Ast/Sexp.lean` (the emitter); `parse` is its
-inverse.
+The promoted object universe currently emits `Nat`, `Bool`, `Unit`, products, and Kleisli function
+types. Additional runtime value variants remain reserved for future Lean representations.
 
 ## Tests
 
-`cargo test` runs the unit suite plus the end-to-end tests in `tests/examples.rs`, which parse and
-execute the goldens project's artifacts (`examples/client/expected/*.prog`): `myProgram`'s witness
-generation, and the Poseidon circuit against the circomlib known-answer vectors.  CI runs this
-next to the Lean jobs, so every emitted program is certified `≈` its source *and* executes to the
-pinned results through an independent interpreter.
+```sh
+cargo test
+```
+
+The suite covers source annotations, expression conditionals, functions, inline recursion, dynamic
+operation branches, and parsing/executing the artifact emitted by the downstream Lean client.
+Poseidon remains a Lean known-answer target until the reflected AST has a `ZMod` representation.

@@ -1,11 +1,12 @@
-import Freigen.Free
-import Freigen.ITree.Effect
+import Freigen.ITree.PFunctor
 import Freigen.ITree.Basic
 import Freigen.ITree.Eutt
-import Freigen.Ast.Tp
+import Freigen.Free
 import Freigen.Ast.Basic
 import Freigen.Ast.Sexp
+import Freigen.Reflect.Attributes
 import Freigen.Reflect.Sound
+import Freigen.Reflect.Registry
 import Freigen.Reflect.Basic
 import Freigen.Compile
 import Freigen.Examples.Circuit.Basic
@@ -15,34 +16,19 @@ import Freigen.Examples.OfFnClone
 import Freigen.Examples.FirstClass
 
 /-!
-# Freigen — the root module
+# Freigen
 
-`import Freigen` brings in the whole library.  Directories are pure namespaces (mathlib-style:
-no per-directory umbrella modules); this file lists every module, and the lakefile's
-`.andSubmodules` glob makes CI build any module even if it goes missing from this list.
+`import Freigen` exposes the unified implementation:
 
-Module map (details in each module's own docstring; the full story is in the README):
+* `Freigen.Free` is the higher-order free syntax over an `ITree.HSig`. Operations may contain
+  dynamically bound blocks; ordinary effects are operations with no branches.
+* `Freigen.ITree` provides higher-order signatures, interaction trees, recursion, interpretation,
+  and relational weak bisimulation.
+* `Freigen.Ast` provides the `Tp`-indexed PHOAS syntax, its denotation, source locations, and the
+  S-expression serializer.
+* `Freigen.Reflect` provides explicit representation/signature registries, structural soundness
+  lemmas, and the two-pass `reflect%`, `reflect_def`, and `#reflect_plan` elaborators.
+* `Freigen.Compile` provides `#compile program => "path"` for the `:prog` Lake facet.
 
-- `Freigen.Free` — the free monad `Free Op SOp` (`pure`/`op`/`hop`) and the generic interpreter
-  `run`.
-- `Freigen.ITree.Basic`/`.Effect`/`.Eutt` — the coinductive denotation domain `Comp Op`
-  (`ret`/`tau`/`vis`/`fail`), `bind` + its laws, the general-recursion combinator `mrec` (with
-  `interp` and the call-extended signature `CallOp`), and weak bisimulation `≈` with its
-  congruence algebra.
-- `Freigen.Ast.Tp`/`.Basic`/`.Sexp` — the object-type universe and reified primitives, the dumb
-  typed AST `Code`/`Prog` with its uniform denotation `denoteProg` into `Comp`, and the
-  S-expression serialization (**the** printer; grammar pinned in `Ast.Sexp`).
-- `Freigen.Reflect.Sound`/`.Basic` — `reflect%` compiles a `Free` program (a value, a function
-  of its inputs, or a structural recursion — one unified walk: a recursive definition spills as
-  a `rec_` like any recursive helper) into a `Prog` bundled with its `≈`-soundness against
-  `ofFree`: per-node congruence lemmas (`=` and, past recursion, `≈`), the mode-parametric walk,
-  and the `reflect%`/`reflect_def` elaborators.
-- `Freigen.Compile` — the `DSL` class, `serialize`, and the `#compile prog => "path"` command
-  behind the `lake build <lib>:prog` facet.
-- `Freigen.Examples.Circuit.Basic`/`.Storage`/`.Recursion`/`.OfFnClone` — the Lean-side
-  unit-test suite (`CircOp` + scoped `hint`, the hint-less `StoreOp`, `rec_` programs, and a
-  `Vector.ofFn` clone whose worker spills as a recursive definition over `push`), each example
-  pinning its runtime result, soundness statement, and serialized AST with `#guard_msgs`.  The end-to-end
-  path — `#compile` → `.prog` artifact → parsed and executed by the Rust SDK — is exercised by
-  the separate goldens project (`examples/client/`) on CI.
+The former first-order/scoped implementation and all version-suffixed modules have been removed.
 -/

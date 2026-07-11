@@ -1,421 +1,1208 @@
-import Mathlib.Data.PFunctor.Univariate.M
-import Freigen.ITree.Effect
-
-/-!
-# Interaction trees: a coinductive denotation domain with effects, divergence, and failure
-
-`CompE ε br α` is a Lean realisation of **interaction trees** (Xia et al.) over an *event
-signature* — a type of events `ε : Type` with a branching arity `br : ε → Type` — built as the
-final coalgebra (`PFunctor.M`) of the one-step functor
-
-```
-Pos := ret α | tau | fail | vis (e : ε)              -- positions
-Ar  := ret ↦ ∅ | tau ↦ Unit | fail ↦ ∅ | vis e ↦ br e -- arities (children)
-```
-
-so a computation is a (possibly infinite) tree whose leaves are `ret a` / `fail`, with internal
-`tau` (a silent step — the guard that makes recursion productive) and `vis e k` (perform event
-`e`, branch on its result).  This is the domain in which **recursion** denotes: `mrec` is a
-*guarded corecursion*, total without any termination proof, and divergence is an infinite chain
-of `tau`s.
-
-Everything lives in `Type 0`: events are plain data (a first-order DSL signature's events are
-`Effect Op`), and arities are computed types — no host `Type` is ever stored in a node.  That is
-what lets **function values** denote as Kleisli arrows `a.denote → Comp Op b.denote` inside the
-ordinary value universe.
-
-`Comp Op` abbreviates the instantiation at a first-order DSL signature.  General recursion
-(`interp`/`mrec`) extends an arbitrary signature with one *call* event `.inr (s : σ)` — the sum
-extension `ε ⊕ σ` — whose payload `σ` may be **any** `Type 0`, in particular a state tuple
-containing function values.
--/
+import Freigen.ITree.PFunctor
 
 namespace Freigen
 namespace ITree
 
-variable {ε : Type _} {br : ε → Type _}
+universe u v w
 
-/-! ## The one-step functor -/
+/-- One layer of the scoped interaction-tree polynomial at internal result label `i`. -/
+abbrev Step (H : HSig.{u, v}) (α : Type u)
+    (X : Ix H → Type w) (i : Ix H) :=
+  (P H α).Obj X i
 
-/-- One-step *positions* of an interaction tree. -/
-inductive Pos (ε : Type _) (α : Type _) : Type _
-  | ret  : α → Pos ε α
-  | tau  : Pos ε α
-  | fail : Pos ε α
-  | vis  : ε → Pos ε α
+/-- The internal tree family.  The public computation type is the `.normal` fiber. -/
+abbrev Tree (H : HSig.{u, v}) (α : Type u) (i : Ix H) :=
+  (P H α).M i
 
-/-- Arity (set of children) of each position. -/
-@[reducible] def Ar {ε α} (br : ε → Type _) : Pos ε α → Type _
-  | .ret _  => PEmpty
-  | .tau    => PUnit
-  | .fail   => PEmpty
-  | .vis e  => br e
+/-- Public scoped interaction trees. -/
+abbrev CompE (H : HSig.{u, v}) (α : Type u) :=
+  Tree H α .normal
 
-/-- The polynomial one-step functor of interaction trees. -/
-@[reducible] def P (ε : Type _) (br : ε → Type _) (α : Type _) : PFunctor := ⟨Pos ε α, Ar br⟩
+/-- Internal block fiber for a higher-order operation branch. -/
+abbrev BlockE (H : HSig.{u, v}) (α : Type u)
+    (e : H.op) (b : H.Block e) :=
+  Tree H α (.block e b)
 
-/-- Interaction trees over the event signature `(ε, br)` returning `α`: the final coalgebra. -/
-def CompE (ε : Type _) (br : ε → Type _) (α : Type _) : Type _ := (P ε br α).M
+namespace Step
 
-/-- Interaction trees over a first-order DSL signature. -/
-abbrev Comp (Op : TpF → TpF → Type) (α : Type) : Type := CompE (Effect Op) Effect.arity α
+variable {H : HSig.{u, v}} {α : Type u}
+  {X : Ix H → Type w}
 
-/-! ## Constructors and their destructor laws
+/-- Return step: no recursive children. -/
+def ret {i : Ix H} (a : result H α i) : Step H α X i :=
+  ⟨Pos.ret a, fun h => nomatch h⟩
 
-`M.mk`/`M.dest` are mutually inverse, so each constructor's `dest` computes by `M.dest_mk`. -/
+/-- Silent step: one child at the ambient internal label. -/
+def tau {i : Ix H} (t : X i) : Step H α X i :=
+  ⟨Pos.tau, fun
+    | Ar.tau => t⟩
 
-/-- Converge with a value. -/
-def ret (a : α) : CompE ε br α := PFunctor.M.mk ⟨Pos.ret a, PEmpty.elim⟩
-/-- A silent step (the recursion guard; an infinite chain of these is divergence). -/
-def tau (t : CompE ε br α) : CompE ε br α := PFunctor.M.mk ⟨Pos.tau, fun _ => t⟩
-/-- Abort (e.g. an out-of-bounds read on a non-`Inhabited` element type). -/
-def fail : CompE ε br α := PFunctor.M.mk ⟨Pos.fail, PEmpty.elim⟩
-/-- Perform event `e`, continue with `k` on its result. -/
-def vis (e : ε) (k : br e → CompE ε br α) : CompE ε br α := PFunctor.M.mk ⟨Pos.vis e, k⟩
+/-- Failure step: no recursive children. -/
+def fail {i : Ix H} : Step H α X i :=
+  ⟨Pos.fail, fun h => nomatch h⟩
+/-- Higher-order operation step: block children jump to their block labels; the continuation
+    children stay at the ambient internal label. -/
+def op {i : Ix H} (e : H.op) (input : H.input e)
+    (blocks : (b : H.Block e) → X (.block e b))
+    (k : H.output e → X i) : Step H α X i :=
+  ⟨Pos.op e input, fun
+    | Ar.block b => blocks b
+    | Ar.cont o => k o⟩
 
-@[simp] theorem dest_ret (a : α) :
-    (ret (ε := ε) (br := br) a).dest = ⟨Pos.ret a, PEmpty.elim⟩ := PFunctor.M.dest_mk _
-@[simp] theorem dest_tau (t : CompE ε br α) :
-    (tau t).dest = ⟨Pos.tau, fun _ => t⟩ := PFunctor.M.dest_mk _
-@[simp] theorem dest_fail :
-    (fail (ε := ε) (br := br) (α := α)).dest = ⟨Pos.fail, PEmpty.elim⟩ := PFunctor.M.dest_mk _
-@[simp] theorem dest_vis (e : ε) (k : br e → CompE ε br α) :
-    (vis e k).dest = ⟨Pos.vis e, k⟩ := PFunctor.M.dest_mk _
+end Step
 
-/-- Two trees with equal one-step unfoldings are equal (destructor is injective). -/
-theorem eq_of_dest_eq {x y : CompE ε br α} (h : x.dest = y.dest) : x = y := by
-  rw [← PFunctor.M.mk_dest x, ← PFunctor.M.mk_dest y, h]
+namespace CompE
 
-/-- A destructor view: every tree is `ret`/`fail`/`tau`/`vis`.  (Used pervasively below to case on
-    a tree by its head while keeping a real equation, rather than only its `dest`.) -/
-theorem cases_view {α : Type} (x : CompE ε br α) :
-    (∃ a, x = ret a) ∨ x = fail ∨ (∃ t, x = tau t) ∨
-      (∃ (e : ε) (k : br e → CompE ε br α), x = vis e k) := by
-  obtain ⟨p, c, hd⟩ : ∃ p c, x.dest = ⟨p, c⟩ := ⟨_, _, rfl⟩
+variable {H : HSig.{u, v}}
+
+set_option backward.isDefEq.respectTransparency false
+
+/-- Build an internal tree from one scoped interaction-tree step. -/
+def mkAt {α : Type u} {i : Ix H} (x : Step H α (Tree H α) i) :
+    Tree H α i :=
+  IxPFunctor.M.ofStep x
+
+/-- Destruct one layer of an internal tree. -/
+def destAt {α : Type u} {i : Ix H} (x : Tree H α i) :
+    Step H α (Tree H α) i :=
+  IxPFunctor.M.dest x
+
+/-- Build a public computation from one normal step. -/
+def mk {α : Type u} (x : Step H α (Tree H α) .normal) : CompE H α :=
+  mkAt x
+
+/-- Destruct one layer of a public computation. -/
+def dest {α : Type u} (x : CompE H α) :
+    Step H α (Tree H α) .normal :=
+  destAt x
+
+@[simp] theorem dest_mkAt {α : Type u} {i : Ix H}
+    (x : Step H α (Tree H α) i) : destAt (mkAt x) = x :=
+  IxPFunctor.M.dest_ofStep x
+
+@[simp] theorem raw_dest_mkAt {α : Type u} {i : Ix H}
+    (x : Step H α (Tree H α) i) : IxPFunctor.M.dest (mkAt x) = x :=
+  IxPFunctor.M.dest_ofStep x
+
+@[simp] theorem dest_mk {α : Type u} (x : Step H α (Tree H α) .normal) :
+    dest (mk x) = x :=
+  dest_mkAt x
+
+/-- Return a value at an internal result label. -/
+def retAt {α : Type u} {i : Ix H} (a : result H α i) : Tree H α i :=
+  mkAt (Step.ret a)
+
+/-- Return a public value. -/
+def ret {α : Type u} (a : α) : CompE H α :=
+  retAt (i := .normal) a
+
+/-- Silent internal step. -/
+def tauAt {α : Type u} {i : Ix H} (t : Tree H α i) : Tree H α i :=
+  mkAt (Step.tau t)
+
+/-- Silent public step. -/
+def tau {α : Type u} (t : CompE H α) : CompE H α :=
+  tauAt t
+
+/-- Internal failure. -/
+def failAt {α : Type u} {i : Ix H} : Tree H α i :=
+  mkAt Step.fail
+
+/-- Public failure. -/
+def fail {α : Type u} : CompE H α :=
+  failAt (i := .normal)
+/-- Internal higher-order operation node. -/
+def opAt {α : Type u} {i : Ix H} (e : H.op) (input : H.input e)
+    (blocks : (b : H.Block e) → BlockE H α e b)
+    (k : H.output e → Tree H α i) : Tree H α i :=
+  mkAt (Step.op e input blocks k)
+
+@[simp] theorem dest_retAt {α : Type u} {i : Ix H} (a : result H α i) :
+    destAt (retAt (H := H) a) = Step.ret a := dest_mkAt _
+
+@[simp] theorem dest_ret {α : Type u} (a : α) :
+    dest (ret (H := H) a) = Step.ret a := dest_mkAt _
+
+@[simp] theorem dest_tauAt {α : Type u} {i : Ix H} (t : Tree H α i) :
+    destAt (tauAt t) = Step.tau t := dest_mkAt _
+
+@[simp] theorem dest_tau {α : Type u} (t : CompE H α) :
+    dest (tau t) = Step.tau t := dest_mkAt _
+
+@[simp] theorem dest_failAt {α : Type u} {i : Ix H} :
+    destAt (failAt (H := H) (α := α) (i := i)) = Step.fail := dest_mkAt _
+
+@[simp] theorem dest_fail {α : Type u} :
+    dest (fail (H := H) (α := α)) = Step.fail := dest_mkAt _
+@[simp] theorem dest_opAt {α : Type u} {i : Ix H} (e : H.op) (input : H.input e)
+    (blocks : (b : H.Block e) → BlockE H α e b)
+    (k : H.output e → Tree H α i) :
+    destAt (opAt e input blocks k) = Step.op e input blocks k := dest_mkAt _
+
+theorem eq_of_destAt_eq {α : Type u} {i : Ix H} {x y : Tree H α i}
+    (h : destAt x = destAt y) : x = y :=
+  IxPFunctor.M.eq_of_dest_eq h
+
+theorem eq_of_dest_eq {α : Type u} {x y : CompE H α} (h : dest x = dest y) : x = y :=
+  eq_of_destAt_eq h
+
+/-- Corecursor specialized to the scoped computation polynomial. -/
+def corecAt {α : Type u} {X : Ix H → Type w}
+    (f : (i : Ix H) → X i → Step H α X i) {i : Ix H} (x : X i) :
+    Tree H α i :=
+  IxPFunctor.M.corec (P := P H α) f x
+
+@[simp] theorem dest_corecAt {α : Type u} {X : Ix H → Type w}
+    (f : (i : Ix H) → X i → Step H α X i) {i : Ix H} (x : X i) :
+    destAt (corecAt f x) = (P H α).map (fun i => corecAt f (i := i)) (f i x) :=
+  IxPFunctor.M.dest_corec f x
+
+@[simp] theorem raw_dest_corecAt {α : Type u} {X : Ix H → Type w}
+    (f : (i : Ix H) → X i → Step H α X i) {i : Ix H} (x : X i) :
+    IxPFunctor.M.dest (corecAt f x) =
+      (P H α).map (fun i => corecAt f (i := i)) (f i x) :=
+  IxPFunctor.M.dest_corec f x
+
+private inductive RelabelBlockState (H : HSig.{u, v}) (α β : Type u) :
+    Ix H → Type (max u v) where
+  | block {e : H.op} {b : H.Block e} :
+      BlockE H α e b → RelabelBlockState H α β (.block e b)
+
+/-- Coalgebra relabelling a block fiber from ambient normal result `α` to `β`. -/
+private def relabelBlockCo {α β : Type u} :
+    (i : Ix H) → RelabelBlockState H α β i →
+      Step H β (RelabelBlockState H α β) i
+  | .block e₀ b₀, .block t =>
+      match destAt t with
+      | ⟨.ret a, _⟩ =>
+          Step.ret (H := H) (α := β) (i := .block e₀ b₀) a
+      | ⟨.tau, c⟩ => Step.tau (.block (c Ar.tau : BlockE H α e₀ b₀))
+      | ⟨.fail, _⟩ =>
+          Step.fail (H := H) (α := β) (i := .block e₀ b₀)
+
+      | ⟨.op e input, c⟩ =>
+          Step.op e input
+            (fun b => .block (c (Ar.block b) : BlockE H α e b))
+            (fun o => .block (c (Ar.cont o) : BlockE H α e₀ b₀))
+
+/-- Relabel a block tree across a change of the public normal result type. -/
+def relabelBlock {α β : Type u} {e : H.op} {b : H.Block e}
+    (t : BlockE H α e b) : BlockE H β e b :=
+  corecAt (H := H) (α := β) (relabelBlockCo (α := α) (β := β))
+    (RelabelBlockState.block t)
+
+private inductive AsBlockState (H : HSig.{u, v}) (α : Type u)
+    (root : H.op) (br : H.Block root) :
+    Ix H → Type (max u v) where
+  | normal :
+      CompE H (H.branchOutput root br.1) → AsBlockState H α root br (.block root br)
+  | block {e : H.op} {b : H.Block e} :
+      BlockE H (H.branchOutput root br.1) e b → AsBlockState H α root br (.block e b)
+
+/-- Coalgebra embedding a public computation as a scoped block. -/
+private def asBlockCo {α : Type u} (root : H.op) (br : H.Block root) :
+    (i : Ix H) → AsBlockState H α root br i →
+      Step H α (AsBlockState H α root br) i
+  | .block _ _, .normal t =>
+      match dest t with
+      | ⟨.ret a, _⟩ => Step.ret a
+      | ⟨.tau, c⟩ => Step.tau (.normal (c Ar.tau : CompE H (H.branchOutput root br.1)))
+      | ⟨.fail, _⟩ => Step.fail
+
+      | ⟨.op e input, c⟩ =>
+          Step.op e input
+            (fun b => .block (c (Ar.block b) : BlockE H (H.branchOutput root br.1) e b))
+            (fun o => .normal (c (Ar.cont o) : CompE H (H.branchOutput root br.1)))
+  | .block e₀ b₀, .block t =>
+      match destAt t with
+      | ⟨.ret a, _⟩ => Step.ret a
+      | ⟨.tau, c⟩ =>
+          Step.tau (.block (c Ar.tau : BlockE H (H.branchOutput root br.1) e₀ b₀))
+      | ⟨.fail, _⟩ => Step.fail
+
+      | ⟨.op e input, c⟩ =>
+          Step.op e input
+            (fun b => .block (c (Ar.block b) : BlockE H (H.branchOutput root br.1) e b))
+            (fun o => .block (c (Ar.cont o) : BlockE H (H.branchOutput root br.1) e₀ b₀))
+
+/-- Embed a public computation returning a branch result as the corresponding internal block. -/
+def asBlock {α : Type u} {e : H.op} {b : H.Block e}
+    (t : CompE H (H.branchOutput e b.1)) : BlockE H α e b :=
+  corecAt (H := H) (α := α) (asBlockCo (α := α) e b)
+    (AsBlockState.normal t)
+
+/-- Public scoped bind node.  Public block computations are embedded into the corresponding
+    internal block fibers. -/
+def op {α : Type u} (e : H.op) (input : H.input e)
+    (blocks : (b : H.Block e) → CompE H (H.branchOutput e b.1))
+    (k : H.output e → CompE H α) : CompE H α :=
+  opAt e input (fun b => asBlock (blocks b)) k
+
+@[simp] theorem dest_op {α : Type u} (e : H.op) (input : H.input e)
+    (blocks : (b : H.Block e) → CompE H (H.branchOutput e b.1))
+    (k : H.output e → CompE H α) :
+    dest (op e input blocks k) =
+      Step.op e input (fun b => asBlock (blocks b)) k := dest_mkAt _
+
+/-- A destructor view for every internal result label.  At block labels, `ret` returns the
+    branch result computed from the label. -/
+theorem cases_viewAt {α : Type u} {i : Ix H} (x : Tree H α i) :
+    (∃ a : result H α i, x = retAt a) ∨
+    x = failAt ∨
+    (∃ t : Tree H α i, x = tauAt t) ∨
+    (∃ (e : H.op) (input : H.input e)
+      (blocks : (b : H.Block e) → BlockE H α e b)
+      (k : H.output e → Tree H α i), x = opAt e input blocks k) := by
+  obtain ⟨p, c, hd⟩ : ∃ p c, destAt x = ⟨p, c⟩ := ⟨_, _, rfl⟩
   match p, c, hd with
   | .ret a, c, hd =>
-    exact Or.inl ⟨a, eq_of_dest_eq (by
-      rw [hd, dest_ret]; exact Sigma.ext rfl (heq_of_eq (funext fun e => e.elim)))⟩
+      exact Or.inl ⟨a, eq_of_destAt_eq (by
+        rw [hd, dest_retAt]
+        refine Sigma.ext rfl ?_
+        apply heq_of_eq
+        funext h
+        nomatch h)⟩
   | .fail, c, hd =>
-    exact Or.inr (Or.inl (eq_of_dest_eq (by
-      rw [hd, dest_fail]; exact Sigma.ext rfl (heq_of_eq (funext fun e => e.elim)))))
+      exact Or.inr (Or.inl (eq_of_destAt_eq (by
+        rw [hd, dest_failAt]
+        refine Sigma.ext rfl ?_
+        apply heq_of_eq
+        funext h
+        nomatch h)))
   | .tau, c, hd =>
-    exact Or.inr (Or.inr (Or.inl ⟨c PUnit.unit, eq_of_dest_eq (by rw [hd, dest_tau])⟩))
-  | .vis e, c, hd =>
-    exact Or.inr (Or.inr (Or.inr ⟨e, c, eq_of_dest_eq (by rw [hd, dest_vis])⟩))
+      exact Or.inr (Or.inr (Or.inl ⟨c Ar.tau, eq_of_destAt_eq (by
+        rw [hd, dest_tauAt]
+        refine Sigma.ext rfl ?_
+        apply heq_of_eq
+        funext h
+        cases h
+        rfl)⟩))
 
-/-! ## Bind, by corecursion
+  | .op e input, c, hd =>
+      exact Or.inr (Or.inr (Or.inr
+        ⟨e, input, (fun b => (c (Ar.block b) : BlockE H α e b)),
+          (fun o => c (Ar.cont o)),
+          eq_of_destAt_eq (by
+            rw [hd]
+            change ⟨Pos.op e input, c⟩ =
+              destAt (opAt e input
+                (fun b => (c (Ar.block b) : BlockE H α e b))
+                (fun o => c (Ar.cont o)))
+            rw [dest_opAt]
+            refine Sigma.ext rfl ?_
+            apply heq_of_eq
+            funext h
+            cases h <;> rfl)⟩))
 
-State of the corecursion is `CompE ε br α ⊕ CompE ε br β`: `inl` is "still running the first tree"
-(splice in `k a` at each `ret a`), `inr` is "copying the spliced result tree". -/
+/-- A destructor view for public computations.  Scoped block children are exposed in the
+    internal block fibers, which is the form used by the monad laws. -/
+theorem cases_view {α : Type u} (x : CompE H α) :
+    (∃ a, x = ret a) ∨
+    x = fail ∨
+    (∃ t, x = tau t) ∨
+    (∃ (e : H.op) (input : H.input e)
+      (blocks : (b : H.Block e) → BlockE H α e b)
+      (k : H.output e → CompE H α), x = opAt e input blocks k) := by
+  obtain ⟨p, c, hd⟩ : ∃ p c, dest x = ⟨p, c⟩ := ⟨_, _, rfl⟩
+  match p, c, hd with
+  | .ret a, c, hd =>
+      exact Or.inl ⟨a, eq_of_dest_eq (by
+        rw [hd, dest_ret]
+        refine Sigma.ext rfl ?_
+        apply heq_of_eq
+        funext h
+        nomatch h)⟩
+  | .fail, c, hd =>
+      exact Or.inr (Or.inl (eq_of_dest_eq (by
+        rw [hd, dest_fail]
+        refine Sigma.ext rfl ?_
+        apply heq_of_eq
+        funext h
+        nomatch h)))
+  | .tau, c, hd =>
+      exact Or.inr (Or.inr (Or.inl ⟨c Ar.tau, eq_of_dest_eq (by
+        rw [hd, dest_tau]
+        refine Sigma.ext rfl ?_
+        apply heq_of_eq
+        funext h
+        cases h
+        rfl)⟩))
 
-/-- The bind coalgebra (one step). -/
-def bindCo {α β : Type} (k : α → CompE ε br β) :
-    (CompE ε br α ⊕ CompE ε br β) → (P ε br β).Obj (CompE ε br α ⊕ CompE ε br β)
-  | .inl m =>
-    match m.dest with
-    | ⟨p, c⟩ =>
-      match p, c with
-      | .ret a, _ => match (k a).dest with | ⟨b, g⟩ => ⟨b, fun i => .inr (g i)⟩
-      | .tau,  c => ⟨Pos.tau, fun u => .inl (c u)⟩
-      | .fail, _ => ⟨Pos.fail, PEmpty.elim⟩
-      | .vis e, c => ⟨Pos.vis e, fun i => .inl (c i)⟩
-  | .inr t =>
-    match t.dest with | ⟨b, g⟩ => ⟨b, fun i => .inr (g i)⟩
+  | .op e input, c, hd =>
+      exact Or.inr (Or.inr (Or.inr
+        ⟨e, input, (fun b => (c (Ar.block b) : BlockE H α e b)),
+          (fun o => c (Ar.cont o)),
+          eq_of_dest_eq (by
+            rw [hd]
+            change ⟨Pos.op e input, c⟩ =
+              destAt (opAt e input
+                (fun b => (c (Ar.block b) : BlockE H α e b))
+                (fun o => c (Ar.cont o)))
+            rw [dest_opAt]
+            refine Sigma.ext rfl ?_
+            apply heq_of_eq
+            funext h
+            cases h <;> rfl)⟩))
 
-/-- Monadic bind on interaction trees. -/
-def bind {α β : Type _} (m : CompE ε br α) (k : α → CompE ε br β) : CompE ε br β :=
-  PFunctor.M.corec (bindCo k) (.inl m)
+private inductive BindState (H : HSig.{u, v}) (α β : Type u)
+    (target : Ix H) :
+    Ix H → Type (max u v) where
+  | bind : CompE H α → BindState H α β target target
+  | copy {i : Ix H} : Tree H β i → BindState H α β target i
 
-/-- Copying an already-built tree (the `inr` state) is the identity. -/
-theorem corec_inr {α β : Type} (k : α → CompE ε br β) (t : CompE ε br β) :
-    PFunctor.M.corec (bindCo k) (.inr t) = t := by
-  refine PFunctor.M.bisim
-    (fun x y => x = PFunctor.M.corec (bindCo k) (.inr y)) ?_ _ _ rfl
-  intro x y hxy
-  subst hxy
-  obtain ⟨b, g, hy⟩ : ∃ b g, y.dest = ⟨b, g⟩ := ⟨_, _, rfl⟩
-  refine ⟨b, fun i => PFunctor.M.corec (bindCo k) (.inr (g i)), g, ?_, hy, fun i => rfl⟩
-  rw [PFunctor.M.dest_corec]
-  simp only [bindCo, hy, PFunctor.map]
+private def bindCo {α β : Type u} {target : Ix H}
+    (k : α → Tree H β target) :
+    (i : Ix H) → BindState H α β target i →
+      Step H β (BindState H α β target) i
+  | _, .copy t =>
+      match destAt t with
+      | ⟨p, c⟩ => ⟨p, fun a => .copy (c a)⟩
+  | _, .bind m =>
+      match dest m with
+      | ⟨.ret a, _⟩ =>
+          match destAt (k a) with
+          | ⟨p, c⟩ => ⟨p, fun x => .copy (c x)⟩
+      | ⟨.tau, c⟩ => Step.tau (.bind (c Ar.tau : CompE H α))
+      | ⟨.fail, _⟩ => Step.fail
+
+      | ⟨.op e input, c⟩ =>
+          Step.op e input
+            (fun b => .copy (relabelBlock (c (Ar.block b) : BlockE H α e b)))
+            (fun o => .bind (c (Ar.cont o) : CompE H α))
+
+@[simp] private theorem bindCo_bind_ret {α β : Type u} {target : Ix H}
+    (k : α → Tree H β target) (a : α) :
+    bindCo (H := H) (target := target) k target (.bind (ret a)) =
+      match destAt (k a) with
+      | ⟨p, c⟩ => ⟨p, fun x => BindState.copy (H := H) (target := target) (c x)⟩ := by
+  rw [bindCo, dest_ret]
   rfl
 
-/-! ### Bind computation laws -/
+@[simp] private theorem bindCo_bind_tau {α β : Type u} {target : Ix H}
+    (k : α → Tree H β target) (t : CompE H α) :
+    bindCo (H := H) (target := target) k target (.bind (tau t)) =
+      Step.tau (BindState.bind (H := H) (β := β) (target := target) t) := by
+  rw [bindCo, dest_tau]
+  rfl
 
-@[simp] theorem bind_ret {α β : Type} (a : α) (k : α → CompE ε br β) : bind (ret a) k = k a := by
-  apply eq_of_dest_eq
-  obtain ⟨b, g, hk⟩ : ∃ b g, (k a).dest = ⟨b, g⟩ := ⟨_, _, rfl⟩
-  rw [bind, PFunctor.M.dest_corec]
-  simp only [bindCo, dest_ret, hk, PFunctor.map, Function.comp_def, corec_inr]
+@[simp] private theorem bindCo_bind_fail {α β : Type u} {target : Ix H}
+    (k : α → Tree H β target) :
+    bindCo (H := H) (target := target) k target
+        (.bind (fail : CompE H α)) =
+      Step.fail := by
+  rw [bindCo, dest_fail]
+  rfl
 
-@[simp] theorem bind_tau {α β : Type} (t : CompE ε br α) (k : α → CompE ε br β) :
-    bind (tau t) k = tau (bind t k) := by
-  apply eq_of_dest_eq
-  simp only [bind, PFunctor.M.dest_corec, bindCo, dest_tau, PFunctor.map, Function.comp_def]
+@[simp] private theorem bindCo_bind_opAt {α β : Type u} {target : Ix H}
+    (k : α → Tree H β target) (e : H.op) (input : H.input e)
+    (blocks : (b : H.Block e) → BlockE H α e b)
+    (c : H.output e → CompE H α) :
+    bindCo (H := H) (target := target) k target
+        (.bind (opAt e input blocks c)) =
+      Step.op e input
+        (fun b => BindState.copy (H := H) (target := target)
+          (relabelBlock (α := α) (β := β) (blocks b)))
+        (fun o => BindState.bind (H := H) (β := β) (target := target) (c o)) := by
+  rw [bindCo]
+  change (match destAt (opAt e input blocks c) with
+    | ⟨.ret a, _⟩ =>
+        match destAt (k a) with
+        | ⟨p, c⟩ => ⟨p, fun x => BindState.copy (H := H) (target := target) (c x)⟩
+    | ⟨.tau, c⟩ =>
+        Step.tau (BindState.bind (H := H) (β := β) (target := target)
+          (c Ar.tau : CompE H α))
+    | ⟨.fail, _⟩ => Step.fail
 
-@[simp] theorem bind_fail {α β : Type} (k : α → CompE ε br β) :
-    bind (fail : CompE ε br α) k = fail := by
-  apply eq_of_dest_eq
-  simp only [bind, PFunctor.M.dest_corec, bindCo, dest_fail, PFunctor.map, Function.comp_def]
-  congr 1
-  funext e
-  exact e.elim
+    | ⟨.op e input, c⟩ =>
+        Step.op e input
+          (fun b => BindState.copy (H := H) (target := target)
+            (relabelBlock (α := α) (β := β)
+              (c (Ar.block b) : BlockE H α e b)))
+          (fun o => BindState.bind (H := H) (β := β) (target := target)
+            (c (Ar.cont o) : CompE H α))) =
+      Step.op e input
+        (fun b => BindState.copy (H := H) (target := target)
+          (relabelBlock (α := α) (β := β) (blocks b)))
+        (fun o => BindState.bind (H := H) (β := β) (target := target) (c o))
+  rw [dest_opAt]
+  rfl
 
-@[simp] theorem bind_vis {α β : Type} (e : ε) (c : br e → CompE ε br α)
-    (k : α → CompE ε br β) :
-    bind (vis e c) k = vis e (fun i => bind (c i) k) := by
-  apply eq_of_dest_eq
-  simp only [bind, PFunctor.M.dest_corec, bindCo, dest_vis, PFunctor.map, Function.comp_def]
+/-- Monadic bind: graft at `ret` leaves and continue through operation continuations, but do not
+    bind under scoped blocks. -/
+def bindAt {α β : Type u} {i : Ix H} (m : CompE H α)
+    (k : α → Tree H β i) : Tree H β i :=
+  corecAt (bindCo (target := i) k) (.bind m)
 
-/-- Interaction trees are a monad (`pure = ret`, `bind` as above). -/
-instance : Monad (CompE ε br) where
+/-- Public monadic bind. -/
+def bind {α β : Type u} (m : CompE H α) (k : α → CompE H β) :
+    CompE H β :=
+  bindAt m k
+
+instance : Monad (CompE H) where
   pure := ret
   bind := bind
 
-@[simp] theorem pure_def {α} (a : α) : (pure a : CompE ε br α) = ret a := rfl
-@[simp] theorem bind_def {α β} (m : CompE ε br α) (k : α → CompE ε br β) :
+@[simp] theorem pure_def {α : Type u} (a : α) : (pure a : CompE H α) = ret a := rfl
+
+@[simp] theorem bind_def {α β : Type u} (m : CompE H α) (k : α → CompE H β) :
     m >>= k = bind m k := rfl
 
-/-- Right identity: `bind m ret = m` (by bisimulation). -/
-theorem bind_ret_right {α} (m : CompE ε br α) : bind m ret = m := by
-  suffices H : ∀ x y : CompE ε br α, (x = bind y ret ∨ x = y) → x = y from H _ _ (Or.inl rfl)
-  refine PFunctor.M.bisim _ ?_
-  rintro x y (rfl | rfl)
-  · rcases cases_view y with ⟨a, rfl⟩ | rfl | ⟨t', rfl⟩ | ⟨e, c, rfl⟩
-    · rw [bind_ret]
-      exact ⟨Pos.ret a, PEmpty.elim, PEmpty.elim, dest_ret a, dest_ret a, fun i => i.elim⟩
-    · rw [bind_fail]
-      exact ⟨Pos.fail, PEmpty.elim, PEmpty.elim, dest_fail, dest_fail, fun i => i.elim⟩
-    · rw [bind_tau]
-      exact ⟨Pos.tau, _, _, dest_tau _, dest_tau _, fun _ => Or.inl rfl⟩
-    · rw [bind_vis]
-      exact ⟨Pos.vis e, _, _, dest_vis _ _, dest_vis _ _, fun i => Or.inl rfl⟩
-  · obtain ⟨p, c, hd⟩ : ∃ p c, x.dest = ⟨p, c⟩ := ⟨_, _, rfl⟩
-    exact ⟨p, c, c, hd, hd, fun _ => Or.inr rfl⟩
+theorem corec_copy {α β : Type u} {i : Ix H}
+    {target : Ix H} (k : α → Tree H β target)
+    (t : Tree H β i) :
+    IxPFunctor.M.corec (P := P H β) (bindCo (target := target) k)
+      (.copy t : BindState H α β target i) = t := by
+  refine IxPFunctor.M.bisim (P := P H β)
+    (fun i x y =>
+      x = IxPFunctor.M.corec (P := P H β) (bindCo (target := target) k)
+        (.copy y : BindState H α β target i)) ?_ _ _ rfl
+  intro i x y hxy
+  subst hxy
+  obtain ⟨p, c, hy⟩ : ∃ p c, destAt y = ⟨p, c⟩ := ⟨_, _, rfl⟩
+  refine ⟨p,
+    fun a => IxPFunctor.M.corec (P := P H β) (bindCo (target := target) k)
+      (.copy (c a) : BindState H α β target ((P H β).next p a)),
+    c, ?_, hy, fun a => rfl⟩
+  rw [IxPFunctor.M.dest_corec]
+  change (P H β).map
+      (fun i => IxPFunctor.M.corec (P := P H β) (bindCo (target := target) k) (i := i))
+      (bindCo (H := H) (target := target) k i
+        (.copy y : BindState H α β target i)) =
+    ⟨p,
+      fun a => IxPFunctor.M.corec (P := P H β) (bindCo (target := target) k)
+        (.copy (c a) : BindState H α β target ((P H β).next p a))⟩
+  rw [bindCo, hy]
+  rfl
 
-/-- Associativity of `bind` (by bisimulation). -/
-theorem bind_assoc {α β γ} (m : CompE ε br α) (k : α → CompE ε br β) (h : β → CompE ε br γ) :
+@[simp] theorem bind_ret {α β : Type u} (a : α) (k : α → CompE H β) :
+    bind (ret a) k = k a := by
+  apply eq_of_dest_eq
+  change destAt (bind (ret a) k) = destAt (k a)
+  obtain ⟨p, c, hk⟩ : ∃ p c, destAt (k a) = ⟨p, c⟩ := ⟨_, _, rfl⟩
+  rw [bind, bindAt, dest_corecAt, bindCo_bind_ret, hk]
+  refine Sigma.ext rfl ?_
+  apply heq_of_eq
+  funext x
+  exact corec_copy (k := k) (c x)
+
+@[simp] theorem bind_tau {α β : Type u} (t : CompE H α) (k : α → CompE H β) :
+    bind (tau t) k = tau (bind t k) := by
+  apply eq_of_dest_eq
+  change destAt (bindAt (tau t) k) = destAt (tauAt (bindAt t k))
+  rw [bindAt, dest_corecAt, bindCo_bind_tau, dest_tauAt]
+  simp only [IxPFunctor.map, Step.tau]
+  refine Sigma.ext rfl ?_
+  apply heq_of_eq
+  funext x
+  cases x
+  rfl
+
+@[simp] theorem bind_fail {α β : Type u} (k : α → CompE H β) :
+    bind (fail : CompE H α) k = fail := by
+  apply eq_of_dest_eq
+  change destAt (bindAt (fail : CompE H α) k) =
+    destAt (failAt (H := H) (α := β) (i := .normal))
+  rw [bindAt, dest_corecAt, bindCo_bind_fail, dest_failAt]
+  simp only [IxPFunctor.map, Step.fail]
+  refine Sigma.ext rfl ?_
+  apply heq_of_eq
+  funext x
+  nomatch x
+
+@[simp] theorem bind_opAt {α β : Type u} (e : H.op) (input : H.input e)
+    (blocks : (b : H.Block e) → BlockE H α e b)
+    (c : H.output e → CompE H α) (k : α → CompE H β) :
+    bind (opAt e input blocks c) k =
+      opAt e input (fun b => relabelBlock (blocks b)) (fun o => bind (c o) k) := by
+  apply eq_of_dest_eq
+  change destAt (bind (opAt e input blocks c) k) =
+    destAt (opAt e input (fun b => relabelBlock (blocks b)) (fun o => bind (c o) k))
+  rw [bind, bindAt, dest_corecAt, bindCo_bind_opAt, dest_opAt]
+  refine Sigma.ext rfl ?_
+  apply heq_of_eq
+  funext x
+  cases x with
+  | block b =>
+      exact corec_copy (k := k) (relabelBlock (α := α) (β := β) (blocks b))
+  | cont o =>
+      rfl
+
+private inductive RelabelIdRel {α : Type u} :
+    (i : Ix H) → Tree H α i → Tree H α i → Prop where
+  | block {e : H.op} {b : H.Block e} (t : BlockE H α e b) :
+      RelabelIdRel (.block e b) (relabelBlock (α := α) (β := α) t) t
+  | eq {i : Ix H} {x y : Tree H α i} (hxy : x = y) : RelabelIdRel i x y
+
+private theorem relabelBlock_id {α : Type u} {e : H.op} {b : H.Block e}
+    (t : BlockE H α e b) : relabelBlock (α := α) (β := α) t = t := by
+  refine IxPFunctor.M.bisim (P := P H α) RelabelIdRel ?_ _ _ (.block t)
+  intro i x y hxy
+  cases hxy with
+  | eq hxy =>
+      cases hxy
+      obtain ⟨p, c, hd⟩ : ∃ p c, IxPFunctor.M.dest x = ⟨p, c⟩ := ⟨_, _, rfl⟩
+      exact ⟨p, c, c, hd, hd, fun _ => .eq rfl⟩
+  | block t =>
+      rcases cases_viewAt t with
+        ⟨a, ht⟩ | ht | ⟨t', ht⟩ | ⟨e, input, blocks, k, ht⟩
+      · cases ht
+        refine ⟨(Step.ret a).1, (Step.ret a).2, (Step.ret a).2, ?_,
+          raw_dest_mkAt (Step.ret a), fun h => nomatch h⟩
+        rw [relabelBlock, raw_dest_corecAt]
+        change (P H α).map
+            (fun i => corecAt (relabelBlockCo (α := α) (β := α)) (i := i))
+            (relabelBlockCo (H := H) (α := α) (β := α) _ (.block (retAt a))) =
+          Step.ret a
+        rw [relabelBlockCo, dest_retAt]
+        simp only [IxPFunctor.map, Step.ret]
+        refine Sigma.ext rfl ?_
+        apply heq_of_eq
+        funext x
+        nomatch x
+      · cases ht
+        refine ⟨(Step.fail : Step H α (Tree H α) _).1,
+          (Step.fail : Step H α (Tree H α) _).2,
+          (Step.fail : Step H α (Tree H α) _).2, ?_,
+          raw_dest_mkAt Step.fail, fun h => nomatch h⟩
+        rw [relabelBlock, raw_dest_corecAt]
+        change (P H α).map
+            (fun i => corecAt (relabelBlockCo (α := α) (β := α)) (i := i))
+            (relabelBlockCo (H := H) (α := α) (β := α) _ (.block failAt)) =
+          Step.fail
+        rw [relabelBlockCo, dest_failAt]
+        simp only [IxPFunctor.map, Step.fail]
+        refine Sigma.ext rfl ?_
+        apply heq_of_eq
+        funext x
+        nomatch x
+      · cases ht
+        refine ⟨(Step.tau (relabelBlock (α := α) (β := α) t')).1,
+          (Step.tau (relabelBlock (α := α) (β := α) t')).2,
+          (Step.tau t').2, ?_, raw_dest_mkAt (Step.tau t'), ?_⟩
+        · rw [relabelBlock, raw_dest_corecAt]
+          change (P H α).map
+              (fun i => corecAt (relabelBlockCo (α := α) (β := α)) (i := i))
+              (relabelBlockCo (H := H) (α := α) (β := α) _ (.block (tauAt t'))) =
+            Step.tau (relabelBlock (α := α) (β := α) t')
+          rw [relabelBlockCo, dest_tauAt]
+          simp only [IxPFunctor.map, Step.tau]
+          refine Sigma.ext rfl ?_
+          apply heq_of_eq
+          funext x
+          cases x
+          rfl
+        · intro x
+          cases x
+          exact .block t'
+
+      · cases ht
+        refine ⟨(Step.op e input
+            (fun b => relabelBlock (α := α) (β := α) (blocks b))
+            (fun o => relabelBlock (α := α) (β := α) (k o))).1,
+          (Step.op e input
+            (fun b => relabelBlock (α := α) (β := α) (blocks b))
+            (fun o => relabelBlock (α := α) (β := α) (k o))).2,
+          (Step.op e input blocks k).2, ?_,
+          raw_dest_mkAt (Step.op e input blocks k), ?_⟩
+        · rw [relabelBlock, raw_dest_corecAt]
+          change (P H α).map
+              (fun i => corecAt (relabelBlockCo (α := α) (β := α)) (i := i))
+              (relabelBlockCo (H := H) (α := α) (β := α) _
+                (.block (opAt e input blocks k))) =
+            Step.op e input
+              (fun b => relabelBlock (α := α) (β := α) (blocks b))
+              (fun o => relabelBlock (α := α) (β := α) (k o))
+          rw [relabelBlockCo, dest_opAt]
+          simp only [IxPFunctor.map, Step.op]
+          refine Sigma.ext rfl ?_
+          apply heq_of_eq
+          funext x
+          cases x <;> rfl
+        · intro x
+          cases x with
+          | block b => exact .block (blocks b)
+          | cont o => exact .block (k o)
+
+private theorem dest_relabelBlock {α β : Type u} {e₀ : H.op} {b₀ : H.Block e₀}
+    (t : BlockE H α e₀ b₀) :
+    destAt (relabelBlock (α := α) (β := β) t) =
+      match destAt t with
+      | ⟨.ret a, _⟩ => Step.ret a
+      | ⟨.tau, c⟩ =>
+          Step.tau (relabelBlock (α := α) (β := β)
+            (c Ar.tau : BlockE H α e₀ b₀))
+      | ⟨.fail, _⟩ => Step.fail
+
+      | ⟨.op e input, c⟩ =>
+          Step.op e input
+            (fun b => relabelBlock (α := α) (β := β)
+              (c (Ar.block b) : BlockE H α e b))
+            (fun o => relabelBlock (α := α) (β := β)
+              (c (Ar.cont o) : BlockE H α e₀ b₀)) := by
+  obtain ⟨p, c, ht⟩ : ∃ p c, destAt t = ⟨p, c⟩ := ⟨_, _, rfl⟩
+  match p, c, ht with
+  | .ret a, c, ht =>
+      rw [ht, relabelBlock, dest_corecAt]
+      change (P H β).map
+          (fun i => corecAt (relabelBlockCo (α := α) (β := β)) (i := i))
+          (relabelBlockCo (H := H) (α := α) (β := β) _ (.block t)) =
+        Step.ret (H := H) (α := β) (i := .block e₀ b₀) a
+      rw [relabelBlockCo, ht]
+      simp only [IxPFunctor.map, Step.ret]
+      refine Sigma.ext rfl ?_
+      apply heq_of_eq
+      funext h
+      nomatch h
+  | .fail, c, ht =>
+      rw [ht, relabelBlock, dest_corecAt]
+      change (P H β).map
+          (fun i => corecAt (relabelBlockCo (α := α) (β := β)) (i := i))
+          (relabelBlockCo (H := H) (α := α) (β := β) _ (.block t)) =
+        Step.fail (H := H) (α := β) (i := .block e₀ b₀)
+      rw [relabelBlockCo, ht]
+      simp only [IxPFunctor.map, Step.fail]
+      refine Sigma.ext rfl ?_
+      apply heq_of_eq
+      funext h
+      nomatch h
+  | .tau, c, ht =>
+      rw [ht, relabelBlock, dest_corecAt]
+      change (P H β).map
+          (fun i => corecAt (relabelBlockCo (α := α) (β := β)) (i := i))
+          (relabelBlockCo (H := H) (α := α) (β := β) _ (.block t)) =
+        Step.tau (relabelBlock (α := α) (β := β)
+          (c Ar.tau : BlockE H α e₀ b₀))
+      rw [relabelBlockCo, ht]
+      simp only [IxPFunctor.map, Step.tau]
+      refine Sigma.ext rfl ?_
+      apply heq_of_eq
+      funext h
+      cases h
+      rfl
+
+  | .op e input, c, ht =>
+      rw [ht, relabelBlock, dest_corecAt]
+      change (P H β).map
+          (fun i => corecAt (relabelBlockCo (α := α) (β := β)) (i := i))
+          (relabelBlockCo (H := H) (α := α) (β := β) _ (.block t)) =
+        Step.op e input
+          (fun b => relabelBlock (α := α) (β := β)
+            (c (Ar.block b) : BlockE H α e b))
+          (fun o => relabelBlock (α := α) (β := β)
+            (c (Ar.cont o) : BlockE H α e₀ b₀))
+      rw [relabelBlockCo, ht]
+      simp only [IxPFunctor.map, Step.op]
+      refine Sigma.ext rfl ?_
+      apply heq_of_eq
+      funext h
+      cases h <;> rfl
+
+private inductive RelabelCompRel {α β γ : Type u} :
+    (i : Ix H) → Tree H γ i → Tree H γ i → Prop where
+  | block {e : H.op} {b : H.Block e} (t : BlockE H α e b) :
+      RelabelCompRel (.block e b)
+        (relabelBlock (α := β) (β := γ) (relabelBlock (α := α) (β := β) t))
+        (relabelBlock (α := α) (β := γ) t)
+  | eq {i : Ix H} {x y : Tree H γ i} (hxy : x = y) : RelabelCompRel i x y
+
+private theorem relabelBlock_comp {α β γ : Type u} {e : H.op} {b : H.Block e}
+    (t : BlockE H α e b) :
+    relabelBlock (α := β) (β := γ) (relabelBlock (α := α) (β := β) t) =
+      relabelBlock (α := α) (β := γ) t := by
+  refine IxPFunctor.M.bisim (P := P H γ) RelabelCompRel ?_ _ _ (.block t)
+  intro i x y hxy
+  cases hxy with
+  | eq hxy =>
+      cases hxy
+      obtain ⟨p, c, hd⟩ : ∃ p c, IxPFunctor.M.dest x = ⟨p, c⟩ := ⟨_, _, rfl⟩
+      exact ⟨p, c, c, hd, hd, fun _ => .eq rfl⟩
+  | block t =>
+      rcases cases_viewAt t with
+        ⟨a, ht⟩ | ht | ⟨t', ht⟩ | ⟨e, input, blocks, k, ht⟩
+      · cases ht
+        let lhs := relabelBlock (H := H) (α := β) (β := γ)
+          (relabelBlock (α := α) (β := β) (retAt a))
+        let rhs := relabelBlock (H := H) (α := α) (β := γ) (retAt a)
+        have hdest : IxPFunctor.M.dest lhs = IxPFunctor.M.dest rhs := by
+          change destAt lhs = destAt rhs
+          dsimp [lhs, rhs]
+          rw [dest_relabelBlock, dest_relabelBlock, dest_retAt]
+          rw [dest_relabelBlock, dest_retAt]
+          simp only [Step.ret]
+        obtain ⟨p, c, hy⟩ : ∃ p c, IxPFunctor.M.dest rhs = ⟨p, c⟩ := ⟨_, _, rfl⟩
+        exact ⟨p, c, c, hdest.trans hy, hy, fun _ => .eq rfl⟩
+      ·
+        let lhs := relabelBlock (H := H) (α := β) (β := γ)
+          (relabelBlock (α := α) (β := β) t)
+        let rhs := relabelBlock (H := H) (α := α) (β := γ)
+          t
+        have hdest : IxPFunctor.M.dest lhs = IxPFunctor.M.dest rhs := by
+          cases ht
+          change destAt lhs = destAt rhs
+          dsimp [lhs, rhs]
+          rw [dest_relabelBlock, dest_relabelBlock, dest_failAt]
+          rw [dest_relabelBlock, dest_failAt]
+          simp only [Step.fail]
+        obtain ⟨p, c, hy⟩ : ∃ p c, IxPFunctor.M.dest rhs = ⟨p, c⟩ := ⟨_, _, rfl⟩
+        exact ⟨p, c, c, hdest.trans hy, hy, fun _ => .eq rfl⟩
+      · cases ht
+        let sx : Step H γ (Tree H γ) _ :=
+          Step.tau (relabelBlock (α := β) (β := γ)
+            (relabelBlock (α := α) (β := β) t'))
+        let sy : Step H γ (Tree H γ) _ :=
+          Step.tau (relabelBlock (α := α) (β := γ) t')
+        refine ⟨sx.1, sx.2, sy.2, ?_, ?_, ?_⟩
+        · change destAt (relabelBlock (relabelBlock (tauAt t'))) = sx
+          rw [dest_relabelBlock, dest_relabelBlock, dest_tauAt]
+          rfl
+        · change destAt (relabelBlock (tauAt t')) = sy
+          rw [dest_relabelBlock, dest_tauAt]
+          rfl
+        · intro h
+          cases h
+          exact .block t'
+      · cases ht
+        let sx : Step H γ (Tree H γ) _ :=
+          Step.op e input
+            (fun b => relabelBlock (α := β) (β := γ)
+              (relabelBlock (α := α) (β := β) (blocks b)))
+            (fun o => relabelBlock (α := β) (β := γ)
+              (relabelBlock (α := α) (β := β) (k o)))
+        let sy : Step H γ (Tree H γ) _ :=
+          Step.op e input
+            (fun b => relabelBlock (α := α) (β := γ) (blocks b))
+            (fun o => relabelBlock (α := α) (β := γ) (k o))
+        refine ⟨sx.1, sx.2, sy.2, ?_, ?_, ?_⟩
+        · change destAt (relabelBlock (α := β) (β := γ)
+              (relabelBlock (α := α) (β := β) (opAt e input blocks k))) = sx
+          rw [dest_relabelBlock, dest_relabelBlock, dest_opAt]
+          simp only [Step.op]
+          dsimp [sx, Step.op]
+        · change destAt (relabelBlock (α := α) (β := γ) (opAt e input blocks k)) = sy
+          rw [dest_relabelBlock, dest_opAt]
+          simp only [Step.op]
+          dsimp [sy, Step.op]
+        · intro h
+          cases h with
+          | block b => exact .block (blocks b)
+          | cont o => exact .block (k o)
+
+private inductive BindRightRel {α : Type u} :
+    (i : Ix H) → Tree H α i → Tree H α i → Prop where
+  | root (m : CompE H α) : BindRightRel .normal (bind m ret) m
+  | eq {i : Ix H} {x y : Tree H α i} (hxy : x = y) : BindRightRel i x y
+
+theorem bind_ret_right {α : Type u} (m : CompE H α) : bind m ret = m := by
+  refine IxPFunctor.M.bisim (P := P H α) BindRightRel ?_ _ _ (.root m)
+  intro i x y hxy
+  cases hxy with
+  | eq hxy =>
+      cases hxy
+      obtain ⟨p, c, hd⟩ : ∃ p c, IxPFunctor.M.dest x = ⟨p, c⟩ := ⟨_, _, rfl⟩
+      exact ⟨p, c, c, hd, hd, fun _ => .eq rfl⟩
+  | root m =>
+      rcases cases_view m with
+        ⟨a, hm⟩ | hm | ⟨t, hm⟩ | ⟨e, input, blocks, k, hm⟩
+      · cases hm
+        rw [bind_ret]
+        let s : Step H α (Tree H α) .normal := Step.ret a
+        refine ⟨s.1, s.2, s.2, ?_, ?_, fun h => nomatch h⟩
+        · exact raw_dest_mkAt s
+        · exact raw_dest_mkAt s
+      · cases hm
+        rw [bind_fail]
+        refine ⟨(Step.fail : Step H α (Tree H α) .normal).1,
+          (Step.fail : Step H α (Tree H α) .normal).2,
+          (Step.fail : Step H α (Tree H α) .normal).2,
+          raw_dest_mkAt Step.fail, raw_dest_mkAt Step.fail, fun h => nomatch h⟩
+      · cases hm
+        rw [bind_tau]
+        refine ⟨(Step.tau (bind t ret)).1, (Step.tau (bind t ret)).2,
+          (Step.tau t).2, raw_dest_mkAt (Step.tau (bind t ret)),
+          raw_dest_mkAt (Step.tau t), ?_⟩
+        intro h
+        cases h
+        exact .root t
+
+      · cases hm
+        rw [bind_opAt]
+        refine ⟨(Step.op e input
+            (fun b => relabelBlock (α := α) (β := α) (blocks b))
+            (fun o => bind (k o) ret)).1,
+          (Step.op e input
+            (fun b => relabelBlock (α := α) (β := α) (blocks b))
+            (fun o => bind (k o) ret)).2,
+          (Step.op e input blocks k).2,
+          raw_dest_mkAt (Step.op e input
+            (fun b => relabelBlock (α := α) (β := α) (blocks b))
+            (fun o => bind (k o) ret)),
+          raw_dest_mkAt (Step.op e input blocks k), ?_⟩
+        intro h
+        cases h with
+        | block b => exact .eq (relabelBlock_id (blocks b))
+        | cont o => exact .root (k o)
+
+private inductive BindAssocRel {α β γ : Type u}
+    (k : α → CompE H β) (h : β → CompE H γ) :
+    (i : Ix H) → Tree H γ i → Tree H γ i → Prop where
+  | root (m : CompE H α) :
+      BindAssocRel k h .normal
+        (bind (bind m k) h)
+        (bind m fun a => bind (k a) h)
+  | eq {i : Ix H} {x y : Tree H γ i} (hxy : x = y) : BindAssocRel k h i x y
+
+theorem bind_assoc {α β γ : Type u} (m : CompE H α)
+    (k : α → CompE H β) (h : β → CompE H γ) :
     bind (bind m k) h = bind m (fun a => bind (k a) h) := by
-  suffices H : ∀ x y : CompE ε br γ,
-      ((∃ m, x = bind (bind m k) h ∧ y = bind m (fun a => bind (k a) h)) ∨ x = y) → x = y from
-    H _ _ (Or.inl ⟨m, rfl, rfl⟩)
-  refine PFunctor.M.bisim _ ?_
-  rintro x y (⟨m, rfl, rfl⟩ | rfl)
-  · rcases cases_view m with ⟨a, rfl⟩ | rfl | ⟨t, rfl⟩ | ⟨e, c, rfl⟩
-    · rw [bind_ret, bind_ret]
-      obtain ⟨p, c', hd'⟩ : ∃ p c', (bind (k a) h).dest = ⟨p, c'⟩ := ⟨_, _, rfl⟩
-      exact ⟨p, c', c', hd', hd', fun _ => Or.inr rfl⟩
-    · rw [bind_fail, bind_fail, bind_fail]
-      exact ⟨Pos.fail, PEmpty.elim, PEmpty.elim, dest_fail, dest_fail, fun i => i.elim⟩
-    · rw [bind_tau, bind_tau, bind_tau]
-      exact ⟨Pos.tau, _, _, dest_tau _, dest_tau _, fun _ => Or.inl ⟨t, rfl, rfl⟩⟩
-    · rw [bind_vis, bind_vis, bind_vis]
-      exact ⟨Pos.vis e, _, _, dest_vis _ _, dest_vis _ _, fun i => Or.inl ⟨c i, rfl, rfl⟩⟩
-  · obtain ⟨p, c, hd⟩ : ∃ p c, x.dest = ⟨p, c⟩ := ⟨_, _, rfl⟩
-    exact ⟨p, c, c, hd, hd, fun _ => Or.inr rfl⟩
+  refine IxPFunctor.M.bisim (P := P H γ) (BindAssocRel k h) ?_ _ _ (.root m)
+  intro i x y hxy
+  cases hxy with
+  | eq hxy =>
+      cases hxy
+      obtain ⟨p, c, hd⟩ : ∃ p c, IxPFunctor.M.dest x = ⟨p, c⟩ := ⟨_, _, rfl⟩
+      exact ⟨p, c, c, hd, hd, fun _ => .eq rfl⟩
+  | root m =>
+      rcases cases_view m with
+        ⟨a, hm⟩ | hm | ⟨t, hm⟩ | ⟨e, input, blocks, c, hm⟩
+      · cases hm
+        rw [bind_ret, bind_ret]
+        obtain ⟨p, child, hd⟩ :
+            ∃ p child, IxPFunctor.M.dest (bind (k a) h) = ⟨p, child⟩ := ⟨_, _, rfl⟩
+        exact ⟨p, child, child, hd, hd, fun _ => .eq rfl⟩
+      · cases hm
+        rw [bind_fail, bind_fail, bind_fail]
+        let s : Step H γ (Tree H γ) .normal := Step.fail
+        refine ⟨s.1, s.2, s.2, ?_, ?_, fun h => nomatch h⟩
+        · exact raw_dest_mkAt s
+        · exact raw_dest_mkAt s
+      · cases hm
+        rw [bind_tau, bind_tau, bind_tau]
+        refine ⟨(Step.tau (bind (bind t k) h)).1,
+          (Step.tau (bind (bind t k) h)).2,
+          (Step.tau (bind t fun a => bind (k a) h)).2,
+          raw_dest_mkAt (Step.tau (bind (bind t k) h)),
+          raw_dest_mkAt (Step.tau (bind t fun a => bind (k a) h)), ?_⟩
+        intro h'
+        cases h'
+        exact .root t
 
-/-- With all three `bind` laws proved, interaction trees are a **lawful monad**. -/
-instance : LawfulMonad (CompE ε br) :=
+      · cases hm
+        rw [bind_opAt, bind_opAt, bind_opAt]
+        refine ⟨(Step.op e input
+            (fun b => relabelBlock (α := β) (β := γ)
+              (relabelBlock (α := α) (β := β) (blocks b)))
+            (fun o => bind (bind (c o) k) h)).1,
+          (Step.op e input
+            (fun b => relabelBlock (α := β) (β := γ)
+              (relabelBlock (α := α) (β := β) (blocks b)))
+            (fun o => bind (bind (c o) k) h)).2,
+          (Step.op e input
+            (fun b => relabelBlock (α := α) (β := γ) (blocks b))
+            (fun o => bind (c o) fun a => bind (k a) h)).2,
+          raw_dest_mkAt (Step.op e input
+            (fun b => relabelBlock (α := β) (β := γ)
+              (relabelBlock (α := α) (β := β) (blocks b)))
+            (fun o => bind (bind (c o) k) h)),
+          raw_dest_mkAt (Step.op e input
+            (fun b => relabelBlock (α := α) (β := γ) (blocks b))
+            (fun o => bind (c o) fun a => bind (k a) h)), ?_⟩
+        intro h'
+        cases h' with
+        | block b => exact .eq (relabelBlock_comp (blocks b))
+        | cont o => exact .root (c o)
+
+instance : LawfulMonad (CompE H) :=
   LawfulMonad.mk' _
-    (fun x => bind_ret_right x)
+    (fun m => bind_ret_right m)
     (fun a k => bind_ret a k)
     (fun m k h => bind_assoc m k h)
 
-/-! ## General recursion: `mrec`
+end CompE
 
-A recursive call is a node *inside* the tree, so the continuation after it is preserved (this is
-what makes non-tail recursion work).  We extend the event signature with one call event — the
-**sum extension** `ε ⊕ σ` (a call carries its argument `s : σ`, and branches on the result `ρ`)
-— let the body be a tree over the extended signature (calls allowed in any position), and tie
-the knot by **interpreting** every call back into the body, guarded by a `tau`.
+/-! ## Higher-order signature sums and guarded recursion -/
 
-The call payload `σ` is an arbitrary `Type 0` — in particular a state tuple *containing function
-values* (Kleisli arrows are `Type 0` here); nothing restricts recursion to first-order state. -/
+namespace HSig
 
-variable {σ ρ : Type}
+@[reducible] def sum (H F : HSig.{u, v}) : HSig.{u, v} where
+  op := H.op ⊕ F.op
+  input
+    | .inl e => H.input e
+    | .inr e => F.input e
+  output
+    | .inl e => H.output e
+    | .inr e => F.output e
+  branch
+    | .inl e => H.branch e
+    | .inr e => F.branch e
+  branchInput
+    | .inl e, b => H.branchInput e b
+    | .inr e, b => F.branchInput e b
+  branchOutput
+    | .inl e, b => H.branchOutput e b
+    | .inr e, b => F.branchOutput e b
 
-/-- The branching arity of the sum-extended signature: base events keep theirs; a call branches
-    on the recursion's result type `ρ`. -/
-@[reducible] def callBr (br : ε → Type) (ρ : Type) : ε ⊕ σ → Type :=
-  Sum.elim br (fun _ => ρ)
+end HSig
 
-/-- One step of interpreting a body tree: base events pass through; a call `.inr s` is replaced
-    by the body re-run on `s` (with the call's continuation spliced after), guarded by a `tau`
-    (which makes the corecursion productive). -/
-def interpCo (body : σ → CompE (ε ⊕ σ) (callBr br ρ) ρ) {γ : Type} :
-    CompE (ε ⊕ σ) (callBr br ρ) γ → (P ε br γ).Obj (CompE (ε ⊕ σ) (callBr br ρ) γ)
-  | t =>
-    match t.dest with
-    | ⟨.ret b, _⟩ => ⟨Pos.ret b, PEmpty.elim⟩
-    | ⟨.tau, c⟩   => ⟨Pos.tau, c⟩
-    | ⟨.fail, _⟩  => ⟨Pos.fail, PEmpty.elim⟩
-    | ⟨.vis e, c⟩ =>
-      match e, c with
-      | .inl e', c => ⟨Pos.vis e', c⟩
-      | .inr s, c  => ⟨Pos.tau, fun _ => bind (body s) c⟩
+abbrev Sum := HSig.sum
 
-/-- Interpret a body tree (calls allowed) into a plain tree, by guarded corecursion. -/
-def interp (body : σ → CompE (ε ⊕ σ) (callBr br ρ) ρ) {γ : Type}
-    (t : CompE (ε ⊕ σ) (callBr br ρ) γ) : CompE ε br γ :=
-  PFunctor.M.corec (interpCo body) t
+inductive CallOp : Type v where
+  | call
 
-/-- **General recursion.** `mrec body` ties the recursive knot: run the body, interpreting each
-    self-call by re-running the body.  The body may call itself in any position (the continuation
-    after a call is kept in the tree), so both tail and non-tail recursion are supported. -/
-def mrec (body : σ → CompE (ε ⊕ σ) (callBr br ρ) ρ) (s : σ) : CompE ε br ρ :=
-  interp body (body s)
+abbrev Call (σ ρ : Type u) : HSig.{u, v} where
+  op := CallOp
+  input := fun _ => σ
+  output := fun _ => ρ
+  branch := fun _ => PEmpty
+  branchInput := fun _ b => nomatch b
+  branchOutput := fun _ b => nomatch b
 
-/-! ### `interp` computation laws -/
+namespace CompE
 
-@[simp] theorem interp_ret (body : σ → CompE (ε ⊕ σ) (callBr br ρ) ρ) {γ} (b : γ) :
-    interp body (ret b) = ret b := by
+variable {H F : HSig.{u, v}}
+
+@[reducible] def sumIx : Ix H → Ix (Sum H F)
+  | .normal => .normal
+  | .block e bx => .block (.inl e) bx
+
+private inductive SumState (H F : HSig.{u, v}) (α : Type u) : Ix (Sum H F) → Type (max u v) where
+  | tree {i : Ix H} : Tree H α i → SumState H F α (sumIx i)
+
+def sumCo : (i : Ix (Sum H F)) → SumState H F α i →
+    Step (Sum H F) α (SumState H F α) i
+  | _, @SumState.tree _ _ _ j t =>
+      match destAt t with
+      | ⟨.ret a, _⟩ => Step.ret (cast (by cases j <;> rfl) a)
+      | ⟨.tau, c⟩ => Step.tau (.tree (c Ar.tau))
+      | ⟨.fail, _⟩ => Step.fail
+      | ⟨.op e input, c⟩ => Step.op (.inl e) input
+          (fun bx => .tree (c (Ar.block bx)))
+          (fun o => .tree (c (Ar.cont o)))
+
+def sumL {α : Type u} (t : CompE H α) : CompE (Sum H F) α :=
+  corecAt sumCo (.tree t)
+
+@[reducible] def sourceIx : Ix H → Ix (Sum H (Call σ ρ))
+  | .normal => .normal
+  | .block e bx => .block (.inl e) bx
+
+abbrev InterpState (H : HSig.{u, v}) (σ ρ α : Type u) (i : Ix H) :=
+  Tree (Sum H (Call σ ρ)) α (sourceIx i)
+
+def interpCoNormal {σ ρ : Type u}
+    (body : σ → CompE (Sum H (Call σ ρ)) ρ)
+    (t : CompE (Sum H (Call σ ρ)) α) :
+    Step H α (InterpState H σ ρ α) .normal :=
+  match dest t with
+  | ⟨.ret a, _⟩ => Step.ret a
+  | ⟨.tau, c⟩ => Step.tau (c Ar.tau)
+  | ⟨.fail, _⟩ => Step.fail
+  | ⟨.op (.inl e) input, c⟩ => Step.op e input
+      (fun bx => c (Ar.block bx))
+      (fun o => c (Ar.cont o))
+  | ⟨.op (.inr .call) s, c⟩ => Step.tau
+      (bindAt (body s) fun o => c (Ar.cont o))
+
+def interpCo {σ ρ : Type u}
+    (body : σ → CompE (Sum H (Call σ ρ)) ρ) :
+    (i : Ix H) → InterpState H σ ρ α i →
+      Step H α (InterpState H σ ρ α) i
+  | .normal, t => interpCoNormal body t
+  | i@(.block _ _), t =>
+      match destAt t with
+      | ⟨.ret a, _⟩ => Step.ret (cast (by cases i <;> rfl) a)
+      | ⟨.tau, c⟩ => Step.tau (c Ar.tau)
+      | ⟨.fail, _⟩ => Step.fail
+      | ⟨.op (.inl e) input, c⟩ => Step.op e input
+          (fun bx => c (Ar.block bx))
+          (fun o => c (Ar.cont o))
+      | ⟨.op (.inr .call) s, c⟩ => Step.tau
+          (bindAt (body s) fun o => c (Ar.cont o))
+
+def interp {σ ρ α : Type u}
+    (body : σ → CompE (Sum H (Call σ ρ)) ρ)
+    (t : CompE (Sum H (Call σ ρ)) α) : CompE H α :=
+  corecAt (interpCo body) t
+
+@[simp] theorem interp_ret {σ ρ : Type u}
+    (body : σ → CompE (Sum H (Call σ ρ)) ρ) {α : Type u} (a : α) :
+    interp body (ret a) = ret a := by
   apply eq_of_dest_eq
-  simp only [interp, PFunctor.M.dest_corec, interpCo, dest_ret, PFunctor.map, Function.comp_def]
-  congr 1; funext e; exact e.elim
+  change destAt (interp body (ret a)) = destAt (ret a)
+  rw [interp, dest_corecAt]
+  have hn : interpCoNormal body (ret a) = Step.ret a := by
+    unfold interpCoNormal
+    rw [dest_ret]
+    rfl
+  rw [show interpCo body .normal (ret a) = Step.ret a from hn]
+  refine Sigma.ext rfl ?_
+  apply heq_of_eq
+  funext h
+  nomatch h
 
-@[simp] theorem interp_tau (body : σ → CompE (ε ⊕ σ) (callBr br ρ) ρ) {γ}
-    (t : CompE (ε ⊕ σ) (callBr br ρ) γ) :
+@[simp] theorem interp_tau {σ ρ : Type u}
+    (body : σ → CompE (Sum H (Call σ ρ)) ρ) {α : Type u}
+    (t : CompE (Sum H (Call σ ρ)) α) :
     interp body (tau t) = tau (interp body t) := by
   apply eq_of_dest_eq
-  simp only [interp, PFunctor.M.dest_corec, interpCo, dest_tau, PFunctor.map, Function.comp_def]
+  change destAt (interp body (tau t)) = destAt (tau (interp body t))
+  rw [interp, dest_corecAt]
+  let targetStep : Step H α (InterpState H σ ρ α) .normal :=
+    @Step.tau H α (InterpState H σ ρ α) .normal t
+  have hn : interpCoNormal body (tau t) = targetStep := by
+    unfold interpCoNormal
+    rw [dest_tau]
+    rfl
+  rw [show interpCo body .normal (tau t) = targetStep from hn]
+  dsimp [targetStep, IxPFunctor.map]
+  rw [show destAt (tau (interp body t)) = Step.tau (interp body t) from
+    dest_tauAt (interp body t)]
+  refine Sigma.ext rfl ?_
+  apply heq_of_eq
+  funext ar
+  cases ar
+  rfl
 
-@[simp] theorem interp_fail (body : σ → CompE (ε ⊕ σ) (callBr br ρ) ρ) {γ} :
-    interp body (fail : CompE (ε ⊕ σ) (callBr br ρ) γ) = fail := by
+@[simp] theorem interp_fail {σ ρ : Type u}
+    (body : σ → CompE (Sum H (Call σ ρ)) ρ) {α : Type u} :
+    interp body (fail : CompE (Sum H (Call σ ρ)) α) = fail := by
   apply eq_of_dest_eq
-  simp only [interp, PFunctor.M.dest_corec, interpCo, dest_fail, PFunctor.map, Function.comp_def]
-  congr 1; funext e; exact e.elim
+  change destAt (interp body (fail : CompE (Sum H (Call σ ρ)) α)) =
+    destAt (fail : CompE H α)
+  rw [interp, dest_corecAt]
+  have hn : interpCoNormal body (fail : CompE (Sum H (Call σ ρ)) α) = Step.fail := by
+    unfold interpCoNormal
+    rw [dest_fail]
+    rfl
+  rw [show interpCo body .normal
+    (fail : CompE (Sum H (Call σ ρ)) α) = Step.fail from hn]
+  refine Sigma.ext rfl ?_
+  apply heq_of_eq
+  funext h
+  nomatch h
 
-/-- Base events pass through interpretation unchanged. -/
-@[simp] theorem interp_vis_base (body : σ → CompE (ε ⊕ σ) (callBr br ρ) ρ) {γ}
-    (e : ε) (c : br e → CompE (ε ⊕ σ) (callBr br ρ) γ) :
-    interp body (vis (Sum.inl e) c) = vis e (fun x => interp body (c x)) := by
+@[simp] theorem bind_call {F : HSig.{u, v}} {σ ρ α : Type u}
+    (s : σ)
+    (blocks : (b : (Sum F (Call σ ρ)).Block (.inr CallOp.call)) →
+      CompE (Sum F (Call σ ρ)) ((Sum F (Call σ ρ)).branchOutput (.inr CallOp.call) b.1))
+    (k : ρ → CompE (Sum F (Call σ ρ)) α)
+    {β : Type u} (h : α → CompE (Sum F (Call σ ρ)) β) :
+    bind (op (Sum.inr CallOp.call) s blocks k) h =
+      op (Sum.inr CallOp.call) s blocks
+        (fun o => bind (k o) h) := by
   apply eq_of_dest_eq
-  simp only [interp, PFunctor.M.dest_corec, interpCo, dest_vis, PFunctor.map, Function.comp_def]
+  change destAt (bind (opAt (Sum.inr CallOp.call) s
+    (fun b => asBlock (blocks b)) k) h) = _
+  rw [bind_opAt]
+  rw [dest_opAt]
+  change _ = dest (op (Sum.inr CallOp.call) s
+    blocks (fun o => bind (k o) h))
+  rw [dest_op]
+  refine Sigma.ext rfl ?_
+  apply heq_of_eq
+  funext ar
+  cases ar with
+  | block bx => exact nomatch bx.1
+  | cont o => rfl
 
-/-- A self-call `s` is interpreted as the body re-run on `s` (continuation `c` spliced after),
-    guarded by a `tau` — the recursion's unfolding step. -/
-@[simp] theorem interp_vis_call (body : σ → CompE (ε ⊕ σ) (callBr br ρ) ρ) {γ}
-    (s : σ) (c : ρ → CompE (ε ⊕ σ) (callBr br ρ) γ) :
-    interp body (vis (Sum.inr s) c) = tau (interp body (bind (body s) c)) := by
+@[simp] theorem bind_op_no_branches {α β : Type u}
+    (e : H.op) (empty : ∀ b : H.branch e, False) (input : H.input e)
+    (blocks : (b : H.Block e) → CompE H (H.branchOutput e b.1))
+    (k : H.output e → CompE H α) (h : α → CompE H β) :
+    bind (op e input blocks k) h =
+      op e input blocks (fun o => bind (k o) h) := by
   apply eq_of_dest_eq
-  simp only [interp, PFunctor.M.dest_corec, interpCo, dest_vis, PFunctor.map, Function.comp_def,
-             dest_tau]
+  change destAt (bind (opAt e input (fun b => asBlock (blocks b)) k) h) = _
+  rw [bind_opAt, dest_opAt]
+  change _ = dest (op e input blocks (fun o => bind (k o) h))
+  rw [dest_op]
+  refine Sigma.ext rfl ?_
+  apply heq_of_eq
+  funext ar
+  cases ar with
+  | block bx => exact nomatch empty bx.1
+  | cont o => rfl
 
-/-- **`interp` is a monad morphism**: it commutes with `bind`.  This is what makes *non-tail*
-    recursion compute correctly — the work after a recursive call (`k`) is pushed through the
-    interpretation.  Proved by bisimulation (using `bind_assoc` at the `call` step). -/
-theorem interp_bind (body : σ → CompE (ε ⊕ σ) (callBr br ρ) ρ) {β γ}
-    (m : CompE (ε ⊕ σ) (callBr br ρ) β) (k : β → CompE (ε ⊕ σ) (callBr br ρ) γ) :
-    interp body (bind m k) = bind (interp body m) (fun x => interp body (k x)) := by
-  suffices H : ∀ x y : CompE ε br γ,
-      ((∃ m : CompE (ε ⊕ σ) (callBr br ρ) β, x = interp body (bind m k) ∧
-          y = bind (interp body m) (fun x => interp body (k x))) ∨ x = y) → x = y from
-    H _ _ (Or.inl ⟨m, rfl, rfl⟩)
-  refine PFunctor.M.bisim _ ?_
-  rintro x y (⟨m, rfl, rfl⟩ | rfl)
-  · rcases cases_view m with ⟨a, rfl⟩ | rfl | ⟨t, rfl⟩ | ⟨e, c, rfl⟩
-    · rw [bind_ret, interp_ret, bind_ret]
-      obtain ⟨p, c', hd'⟩ : ∃ p c', (interp body (k a)).dest = ⟨p, c'⟩ := ⟨_, _, rfl⟩
-      exact ⟨p, c', c', hd', hd', fun _ => Or.inr rfl⟩
-    · simp only [bind_fail, interp_fail]
-      exact ⟨Pos.fail, PEmpty.elim, PEmpty.elim, dest_fail, dest_fail, fun i => i.elim⟩
-    · rw [bind_tau, interp_tau, interp_tau, bind_tau]
-      exact ⟨Pos.tau, _, _, dest_tau _, dest_tau _, fun _ => Or.inl ⟨t, rfl, rfl⟩⟩
-    · cases e with
-      | inl e' =>
-        rw [bind_vis, interp_vis_base, interp_vis_base, bind_vis]
-        exact ⟨Pos.vis e', _, _, dest_vis _ _, dest_vis _ _,
-               fun i => Or.inl ⟨c i, rfl, rfl⟩⟩
-      | inr s =>
-        rw [bind_vis, interp_vis_call, interp_vis_call, bind_tau]
-        exact ⟨Pos.tau, _, _, dest_tau _, dest_tau _,
-               fun _ => Or.inl ⟨bind (body s) c, by rw [bind_assoc]; rfl, rfl⟩⟩
-  · obtain ⟨p, c, hd⟩ : ∃ p c, x.dest = ⟨p, c⟩ := ⟨_, _, rfl⟩
-    exact ⟨p, c, c, hd, hd, fun _ => Or.inr rfl⟩
+theorem op_eq_bind_no_branches {α : Type u}
+    (e : H.op) (empty : ∀ b : H.branch e, False) (input : H.input e)
+    (blocks : (b : H.Block e) → CompE H (H.branchOutput e b.1))
+    (k : H.output e → CompE H α) :
+    op e input blocks k = bind (op e input blocks ret) k := by
+  rw [bind_op_no_branches e empty]
+  simp only [bind_ret]
 
-/-! ### Embedding a base tree into the call-extended signature
-
-A function value's denotation is a *base* tree (`.fn` denotes at the DSL events); applying one
-inside a `rec_` body splices it into the *extended* tree — `sumL` relabels events along
-`Sum.inl`, adding nothing (no `tau`s), so its computation laws are equalities. -/
-
-/-- The relabeling coalgebra. -/
-def sumLCo {γ : Type} : CompE ε br γ → (P (ε ⊕ σ) (callBr br ρ) γ).Obj (CompE ε br γ)
-  | t =>
-    match t.dest with
-    | ⟨.ret a, _⟩ => ⟨Pos.ret a, PEmpty.elim⟩
-    | ⟨.tau, c⟩   => ⟨Pos.tau, c⟩
-    | ⟨.fail, _⟩  => ⟨Pos.fail, PEmpty.elim⟩
-    | ⟨.vis e, c⟩ => ⟨Pos.vis (Sum.inl e), c⟩
-
-/-- Embed a base tree into the call-extended signature (events relabel along `inl`). -/
-def sumL {γ : Type} (t : CompE ε br γ) : CompE (ε ⊕ σ) (callBr br ρ) γ :=
-  PFunctor.M.corec sumLCo t
-
-@[simp] theorem sumL_ret {γ : Type} (a : γ) :
-    (sumL (ret a) : CompE (ε ⊕ σ) (callBr br ρ) γ) = ret a := by
+@[simp] theorem interp_call {σ ρ γ : Type u}
+    (body : σ → CompE (Sum H (Call σ ρ)) ρ) (s : σ)
+    (blocks : (b : (Sum H (Call σ ρ)).Block (.inr CallOp.call)) →
+      CompE (Sum H (Call σ ρ)) ((Sum H (Call σ ρ)).branchOutput (.inr CallOp.call) b.1))
+    (k : ρ → CompE (Sum H (Call σ ρ)) γ) :
+    interp body
+      (op (Sum.inr CallOp.call) s blocks k) =
+      tau (interp body (bind (body s) k)) := by
   apply eq_of_dest_eq
-  simp only [sumL, PFunctor.M.dest_corec, sumLCo, dest_ret, PFunctor.map, Function.comp_def]
-  congr 1; funext e; exact e.elim
+  change destAt (interp body (op (Sum.inr CallOp.call) s
+    blocks k)) = destAt (tau (interp body (bind (body s) k)))
+  rw [interp, dest_corecAt]
+  have hn : interpCoNormal body
+      (op (Sum.inr CallOp.call) s blocks k) =
+      @Step.tau H γ (InterpState H σ ρ γ) .normal (bind (body s) k) := by
+    unfold interpCoNormal
+    rw [dest_op]
+    rfl
+  rw [show interpCo body .normal
+    (op (Sum.inr CallOp.call) s blocks k) =
+      @Step.tau H γ (InterpState H σ ρ γ) .normal (bind (body s) k) from hn]
+  dsimp [IxPFunctor.map]
+  rw [show destAt (tau (interp body (bind (body s) k))) =
+    Step.tau (interp body (bind (body s) k)) from
+      dest_tauAt (interp body (bind (body s) k))]
+  refine Sigma.ext rfl ?_
+  apply heq_of_eq
+  funext ar
+  cases ar
+  rfl
 
-@[simp] theorem sumL_tau {γ : Type} (t : CompE ε br γ) :
-    (sumL (tau t) : CompE (ε ⊕ σ) (callBr br ρ) γ) = tau (sumL t) := by
+theorem interp_op_no_branches {σ ρ γ : Type u}
+    (body : σ → CompE (Sum H (Call σ ρ)) ρ)
+    (e : H.op) (empty : ∀ b : H.branch e, False) (input : H.input e)
+    (blocks : (b : (Sum H (Call σ ρ)).Block (.inl e)) →
+      CompE (Sum H (Call σ ρ)) ((Sum H (Call σ ρ)).branchOutput (.inl e) b.1))
+    (k : H.output e → CompE (Sum H (Call σ ρ)) γ) :
+    interp body (op (.inl e) input blocks k) =
+      op e input (fun bx => nomatch empty bx.1) (fun o => interp body (k o)) := by
   apply eq_of_dest_eq
-  simp only [sumL, PFunctor.M.dest_corec, sumLCo, dest_tau, PFunctor.map, Function.comp_def]
+  change destAt (interp body (op (.inl e) input blocks k)) =
+    destAt (op e input (fun bx => nomatch empty bx.1) (fun o => interp body (k o)))
+  rw [interp, dest_corecAt]
+  have hn : interpCoNormal body (op (.inl e) input blocks k) =
+      Step.op e input (fun bx => nomatch empty bx.1) k := by
+    unfold interpCoNormal
+    rw [dest_op]
+    refine Sigma.ext rfl ?_
+    apply heq_of_eq
+    funext ar
+    cases ar with
+    | block bx => exact nomatch empty bx.1
+    | cont o => rfl
+  rw [show interpCo body .normal (op (.inl e) input blocks k) =
+    Step.op e input (fun bx => nomatch empty bx.1) k from hn]
+  have hd : destAt (op e input (fun bx => nomatch empty bx.1)
+      (fun o => interp body (k o))) =
+      Step.op e input
+        (fun b => asBlock ((fun bx => nomatch empty bx.1) b))
+        (fun o => interp body (k o)) := dest_op _ _ _ _
+  rw [hd]
+  refine Sigma.ext rfl ?_
+  apply heq_of_eq
+  funext ar
+  cases ar with
+  | block bx => exact nomatch empty bx.1
+  | cont o => rfl
 
-@[simp] theorem sumL_fail {γ : Type} :
-    (sumL (fail : CompE ε br γ) : CompE (ε ⊕ σ) (callBr br ρ) γ) = fail := by
-  apply eq_of_dest_eq
-  simp only [sumL, PFunctor.M.dest_corec, sumLCo, dest_fail, PFunctor.map, Function.comp_def]
-  congr 1; funext e; exact e.elim
+def mrec {σ ρ : Type u}
+    (body : σ → CompE (Sum H (Call σ ρ)) ρ) : σ → CompE H ρ :=
+  fun s => interp body (body s)
 
-@[simp] theorem sumL_vis {γ : Type} (e : ε) (c : br e → CompE ε br γ) :
-    (sumL (vis e c) : CompE (ε ⊕ σ) (callBr br ρ) γ) = vis (Sum.inl e) (fun i => sumL (c i)) := by
-  apply eq_of_dest_eq
-  simp only [sumL, PFunctor.M.dest_corec, sumLCo, dest_vis, PFunctor.map, Function.comp_def]
-
-/-- Interpreting an embedded (call-free) tree gives it back unchanged. -/
-@[simp] theorem interp_sumL (body : σ → CompE (ε ⊕ σ) (callBr br ρ) ρ) {γ}
-    (t : CompE ε br γ) : interp body (sumL t) = t := by
-  suffices H : ∀ x y : CompE ε br γ, (x = interp body (sumL y) ∨ x = y) → x = y from
-    H _ _ (Or.inl rfl)
-  refine PFunctor.M.bisim _ ?_
-  rintro x y (rfl | rfl)
-  · rcases cases_view y with ⟨a, rfl⟩ | rfl | ⟨t', rfl⟩ | ⟨e, c, rfl⟩
-    · rw [sumL_ret, interp_ret]
-      exact ⟨Pos.ret a, PEmpty.elim, PEmpty.elim, dest_ret a, dest_ret a, fun i => i.elim⟩
-    · rw [sumL_fail, interp_fail]
-      exact ⟨Pos.fail, PEmpty.elim, PEmpty.elim, dest_fail, dest_fail, fun i => i.elim⟩
-    · rw [sumL_tau, interp_tau]
-      exact ⟨Pos.tau, _, _, dest_tau _, dest_tau _, fun _ => Or.inl rfl⟩
-    · rw [sumL_vis, interp_vis_base]
-      exact ⟨Pos.vis e, _, _, dest_vis _ _, dest_vis _ _, fun i => Or.inl rfl⟩
-  · obtain ⟨p, c, hd⟩ : ∃ p c, x.dest = ⟨p, c⟩ := ⟨_, _, rfl⟩
-    exact ⟨p, c, c, hd, hd, fun _ => Or.inr rfl⟩
-
-/-- `sumL` is a monad morphism: it commutes with `bind` (by bisimulation). -/
-theorem sumL_bind {β γ : Type} (m : CompE ε br β) (k : β → CompE ε br γ) :
-    (sumL (bind m k) : CompE (ε ⊕ σ) (callBr br ρ) γ)
-      = bind (sumL m) (fun x => sumL (k x)) := by
-  suffices H : ∀ x y : CompE (ε ⊕ σ) (callBr br ρ) γ,
-      ((∃ m : CompE ε br β, x = sumL (bind m k) ∧ y = bind (sumL m) (fun x => sumL (k x))) ∨
-        x = y) → x = y from H _ _ (Or.inl ⟨m, rfl, rfl⟩)
-  refine PFunctor.M.bisim _ ?_
-  rintro x y (⟨m, rfl, rfl⟩ | rfl)
-  · rcases cases_view m with ⟨a, rfl⟩ | rfl | ⟨t, rfl⟩ | ⟨e, c, rfl⟩
-    · rw [bind_ret, sumL_ret, bind_ret]
-      obtain ⟨p, c', hd'⟩ : ∃ p c', (sumL (k a) : CompE (ε ⊕ σ) (callBr br ρ) γ).dest = ⟨p, c'⟩ :=
-        ⟨_, _, rfl⟩
-      exact ⟨p, c', c', hd', hd', fun _ => Or.inr rfl⟩
-    · rw [bind_fail, sumL_fail, sumL_fail, bind_fail]
-      exact ⟨Pos.fail, PEmpty.elim, PEmpty.elim, dest_fail, dest_fail, fun i => i.elim⟩
-    · rw [bind_tau, sumL_tau, sumL_tau, bind_tau]
-      exact ⟨Pos.tau, _, _, dest_tau _, dest_tau _, fun _ => Or.inl ⟨t, rfl, rfl⟩⟩
-    · rw [bind_vis, sumL_vis, sumL_vis, bind_vis]
-      exact ⟨Pos.vis (Sum.inl e), _, _, dest_vis _ _, dest_vis _ _,
-             fun i => Or.inl ⟨c i, rfl, rfl⟩⟩
-  · obtain ⟨p, c, hd⟩ : ∃ p c, x.dest = ⟨p, c⟩ := ⟨_, _, rfl⟩
-    exact ⟨p, c, c, hd, hd, fun _ => Or.inr rfl⟩
+end CompE
 
 end ITree
 end Freigen

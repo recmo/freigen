@@ -1,5 +1,5 @@
 namespace Freigen
-namespace ITree2
+namespace ITree
 
 universe u v w x y z
 
@@ -375,5 +375,5 @@ inductive Ar {H : HSig.{u, v}} {α : Type u} :
   Ar := Ar
   next := next
 
-end ITree2
+end ITree
 end Freigen
