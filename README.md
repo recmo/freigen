@@ -22,10 +22,13 @@ Reflection registration is explicit data selected by the macro, not typeclass se
 `@[ast_repr]`, `@[ast_compat]`, `@[ast_op]`, `@[ast_inline]`, and `@[ast_render]`.
 
 See [`Freigen/Examples/Circuit/Basic.lean`](Freigen/Examples/Circuit/Basic.lean) for dynamic binders,
-effects, recursion, specialization, partial representations such as `Fin n` to `Nat`, source
-locations, serialization, and soundness statements. The other example modules retain storage,
+effects, recursion, specialization, source locations, serialization, and soundness statements.
+[`Freigen/Examples/FiniteTypes.lean`](Freigen/Examples/FiniteTypes.lean) exercises precise literal
+`Fin`/`ZMod` tags, checked carrier casts, arithmetic, dependent specialization, and the symbolic
+bound fallback, while [`Freigen/Examples/ZModCompatibility.lean`](Freigen/Examples/ZModCompatibility.lean)
+checks reflection against Mathlib's actual `ZMod`. The other example modules retain storage,
 first-class function, array/vector, and recursion targets, including documented cases not yet
 supported by reflection.
 
-The reflector design and current limitations are documented in
+The reflector’s reviewer guide, design map, trust story, and current limitations are documented in
 [`Freigen/Reflect/README.md`](Freigen/Reflect/README.md).

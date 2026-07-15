@@ -981,6 +981,278 @@ def sumCo : (i : Ix (Sum H F)) → SumState H F α i →
 def sumL {α : Type u} (t : CompE H α) : CompE (Sum H F) α :=
   corecAt sumCo (.tree t)
 
+set_option backward.isDefEq.respectTransparency true in
+@[simp] theorem sumL_ret {α : Type u} (a : α) :
+    sumL (F := F) (ret (H := H) a) = ret a := by
+  change corecAt sumCo (SumState.tree (retAt (H := H) (i := .normal) a)) =
+    retAt (H := Sum H F) (i := .normal) a
+  apply eq_of_dest_eq
+  change destAt (corecAt sumCo (SumState.tree (retAt (H := H) (i := .normal) a))) =
+    destAt (retAt (H := Sum H F) (i := .normal) a)
+  rw [dest_corecAt]
+  simp only [sumIx]
+  rw [dest_retAt]
+  change (P (Sum H F) α).map _
+      (sumCo (H := H) (F := F) .normal
+        (SumState.tree (retAt (H := H) (i := .normal) a))) = Step.ret a
+  change (P (Sum H F) α).map _
+      (match destAt (retAt (H := H) (i := .normal) a) with
+      | ⟨.ret a, _⟩ => Step.ret a
+      | ⟨.tau, c⟩ => Step.tau (SumState.tree (c Ar.tau))
+      | ⟨.fail, _⟩ => Step.fail
+      | ⟨.op e input, c⟩ => Step.op (.inl e) input
+          (fun bx => SumState.tree (c (Ar.block bx)))
+          (fun o => SumState.tree (c (Ar.cont o)))) = Step.ret a
+  rw [dest_retAt]
+  simp only [IxPFunctor.map, Step.ret]
+  refine Sigma.ext rfl ?_
+  apply heq_of_eq
+  funext h
+  nomatch h
+
+set_option backward.isDefEq.respectTransparency true in
+@[simp] theorem sumL_tau {α : Type u} (t : CompE H α) :
+    sumL (F := F) (tau t) = tau (sumL (F := F) t) := by
+  apply eq_of_dest_eq
+  change destAt (corecAt sumCo (SumState.tree (tauAt t))) =
+    destAt (tauAt (corecAt sumCo (SumState.tree t)))
+  rw [dest_corecAt]
+  simp only [sumIx]
+  rw [dest_tauAt]
+  change (P (Sum H F) α).map _
+      (match destAt (tauAt t) with
+      | ⟨.ret a, _⟩ => Step.ret a
+      | ⟨.tau, c⟩ => Step.tau (SumState.tree (c Ar.tau))
+      | ⟨.fail, _⟩ => Step.fail
+      | ⟨.op e input, c⟩ => Step.op (.inl e) input
+          (fun bx => SumState.tree (c (Ar.block bx)))
+          (fun o => SumState.tree (c (Ar.cont o)))) =
+        Step.tau (corecAt sumCo (SumState.tree t))
+  rw [dest_tauAt]
+  simp only [IxPFunctor.map, Step.tau]
+  refine Sigma.ext rfl ?_
+  apply heq_of_eq
+  funext ar
+  cases ar
+  rfl
+
+set_option backward.isDefEq.respectTransparency true in
+@[simp] theorem sumL_fail {α : Type u} :
+    sumL (F := F) (fail : CompE H α) = fail := by
+  apply eq_of_dest_eq
+  change destAt (corecAt sumCo (SumState.tree (failAt (H := H)))) =
+    destAt (failAt (H := Sum H F))
+  rw [dest_corecAt]
+  simp only [sumIx]
+  rw [dest_failAt]
+  change (P (Sum H F) α).map _
+      (match destAt (failAt (H := H) (α := α) (i := .normal)) with
+      | ⟨.ret a, _⟩ => Step.ret a
+      | ⟨.tau, c⟩ => Step.tau (SumState.tree (c Ar.tau))
+      | ⟨.fail, _⟩ => Step.fail
+      | ⟨.op e input, c⟩ => Step.op (.inl e) input
+          (fun bx => SumState.tree (c (Ar.block bx)))
+          (fun o => SumState.tree (c (Ar.cont o)))) = Step.fail
+  rw [dest_failAt]
+  simp only [IxPFunctor.map, Step.fail]
+  refine Sigma.ext rfl ?_
+  apply heq_of_eq
+  funext h
+  nomatch h
+
+set_option backward.isDefEq.respectTransparency true in
+@[simp] theorem sumL_opAt {α : Type u} (e : H.op) (input : H.input e)
+    (blocks : (b : H.Block e) → BlockE H α e b)
+    (c : H.output e → CompE H α) :
+    sumL (F := F) (opAt e input blocks c) =
+      opAt (Sum.inl e) input
+        (fun (bx : (Sum H F).Block (Sum.inl e)) =>
+          corecAt (sumCo (H := H) (F := F)) (SumState.tree (blocks bx)))
+        (fun o => sumL (F := F) (c o)) := by
+  apply eq_of_dest_eq
+  change destAt (corecAt sumCo (SumState.tree (opAt e input blocks c))) = _
+  rw [dest_corecAt]
+  simp only [sumIx]
+  change (P (Sum H F) α).map _
+      (sumCo (H := H) (F := F) .normal (SumState.tree (opAt e input blocks c))) =
+    destAt (opAt (Sum.inl e) input
+      (fun (bx : (Sum H F).Block (Sum.inl e)) =>
+        corecAt sumCo (SumState.tree (blocks bx)))
+      (fun o => corecAt sumCo (SumState.tree (c o))))
+  rw [dest_opAt]
+  change (P (Sum H F) α).map _
+      (match destAt (opAt e input blocks c) with
+      | ⟨.ret a, _⟩ => Step.ret a
+      | ⟨.tau, d⟩ => Step.tau (SumState.tree (d Ar.tau))
+      | ⟨.fail, _⟩ => Step.fail
+      | ⟨.op e input, d⟩ => Step.op (Sum.inl e) input
+          (fun bx => SumState.tree (d (Ar.block bx)))
+          (fun o => SumState.tree (d (Ar.cont o)))) =
+        Step.op (Sum.inl e) input
+          (fun (bx : (Sum H F).Block (Sum.inl e)) =>
+            corecAt sumCo (SumState.tree (blocks bx)))
+          (fun o => corecAt sumCo (SumState.tree (c o)))
+  rw [dest_opAt]
+  simp only [IxPFunctor.map, Step.op]
+  refine Sigma.ext rfl ?_
+  apply heq_of_eq
+  funext ar
+  cases ar <;> rfl
+
+private theorem dest_sumAt {α : Type u} {i : Ix H} (t : Tree H α i) :
+    destAt (corecAt (sumCo (H := H) (F := F)) (SumState.tree t)) =
+      match destAt t with
+      | ⟨.ret a, _⟩ => Step.ret (cast (by cases i <;> rfl) a)
+      | ⟨.tau, c⟩ => Step.tau
+          (corecAt (sumCo (H := H) (F := F)) (SumState.tree (c Ar.tau)))
+      | ⟨.fail, _⟩ => Step.fail
+      | ⟨.op e input, c⟩ => Step.op (Sum.inl e) input
+          (fun bx => corecAt (sumCo (H := H) (F := F))
+            (SumState.tree (c (Ar.block bx))))
+          (fun o => corecAt (sumCo (H := H) (F := F))
+            (SumState.tree (c (Ar.cont o)))) := by
+  rw [dest_corecAt]
+  obtain ⟨p, c, ht⟩ : ∃ p c, destAt t = ⟨p, c⟩ := ⟨_, _, rfl⟩
+  cases i <;> cases p <;>
+    simp only [sumCo, IxPFunctor.map] <;>
+    rw [ht] <;>
+    simp [Step.ret, Step.tau, Step.fail, Step.op]
+  all_goals
+    funext a
+    cases a <;> rfl
+
+private inductive SumRelabelRel {H F : HSig.{u, v}} {α β : Type u} :
+    (i : Ix (Sum H F)) → Tree (Sum H F) β i → Tree (Sum H F) β i → Prop where
+  | block {e : H.op} {bx : H.Block e} (t : BlockE H α e bx) :
+      SumRelabelRel (.block (Sum.inl e) bx)
+        (relabelBlock (H := Sum H F) (α := α) (β := β)
+          (corecAt (sumCo (H := H) (F := F)) (SumState.tree t)))
+        (corecAt (sumCo (H := H) (F := F))
+          (SumState.tree (relabelBlock (H := H) (α := α) (β := β) t)))
+  | eq {i : Ix (Sum H F)} {x y : Tree (Sum H F) β i} (h : x = y) :
+      SumRelabelRel i x y
+
+set_option backward.isDefEq.respectTransparency true in
+private theorem sumAt_relabelBlock {α β : Type u} {e : H.op} {bx : H.Block e}
+    (t : BlockE H α e bx) :
+    relabelBlock (H := Sum H F) (α := α) (β := β)
+        (corecAt (sumCo (H := H) (F := F)) (SumState.tree t)) =
+      corecAt (sumCo (H := H) (F := F))
+        (SumState.tree (relabelBlock (H := H) (α := α) (β := β) t)) := by
+  refine IxPFunctor.M.bisim (P := P (Sum H F) β) SumRelabelRel ?_ _ _ (.block t)
+  intro i x y hxy
+  cases hxy with
+  | eq hxy =>
+      subst y
+      obtain ⟨p, c, hd⟩ : ∃ p c, destAt x = ⟨p, c⟩ := ⟨_, _, rfl⟩
+      exact ⟨p, c, c, hd, hd, fun _ => .eq rfl⟩
+  | @block root rootBx t =>
+      rcases cases_viewAt t with
+        ⟨a, rfl⟩ | rfl | ⟨t, rfl⟩ | ⟨e, input, blocks, c, rfl⟩
+      · refine ⟨.ret a, (fun h => nomatch h), (fun h => nomatch h), ?_, ?_, ?_⟩
+        · change destAt (relabelBlock (corecAt sumCo (SumState.tree (retAt a)))) = _
+          rw [dest_relabelBlock, dest_sumAt, dest_retAt]
+          simp [Step.ret]
+          funext h
+          nomatch h
+        · change destAt (corecAt sumCo
+            (SumState.tree (relabelBlock (retAt a)))) = _
+          rw [dest_sumAt, dest_relabelBlock, dest_retAt]
+          simp [Step.ret]
+          funext h
+          nomatch h
+        · intro h
+          nomatch h
+      · refine ⟨.fail, (fun h => nomatch h), (fun h => nomatch h), ?_, ?_, ?_⟩
+        · have hd := dest_relabelBlock (H := Sum H F) (β := β)
+              (corecAt (sumCo (H := H) (F := F))
+                (@SumState.tree H F α (Ix.block root rootBx)
+                  (failAt (H := H) (α := α) (i := Ix.block root rootBx))))
+          unfold destAt at hd
+          rw [hd]
+          have hs := dest_sumAt (H := H) (F := F)
+            (failAt (H := H) (α := α) (i := Ix.block root rootBx))
+          unfold destAt at hs
+          rw [hs]
+          have hf : IxPFunctor.M.dest
+              (failAt (H := H) (α := α) (i := Ix.block root rootBx)) = Step.fail :=
+            raw_dest_mkAt Step.fail
+          rw [hf]
+          simp [Step.fail]
+          funext h
+          nomatch h
+        · have hd := dest_sumAt (H := H) (F := F)
+              (relabelBlock (α := α) (β := β)
+                (failAt (H := H) (α := α) (i := Ix.block root rootBx)))
+          unfold destAt at hd
+          rw [hd]
+          have hr := dest_relabelBlock (H := H) (β := β)
+            (failAt (H := H) (α := α) (i := Ix.block root rootBx))
+          unfold destAt at hr
+          rw [hr]
+          have hf : IxPFunctor.M.dest
+              (failAt (H := H) (α := α) (i := Ix.block root rootBx)) = Step.fail :=
+            raw_dest_mkAt Step.fail
+          rw [hf]
+          simp [Step.fail]
+          funext h
+          nomatch h
+        · intro h
+          nomatch h
+      · refine ⟨.tau,
+          (fun a => match a with
+            | Ar.tau => relabelBlock (H := Sum H F) (α := α) (β := β)
+                (corecAt (sumCo (H := H) (F := F)) (SumState.tree t))),
+          (fun a => match a with
+            | Ar.tau => corecAt (sumCo (H := H) (F := F))
+                (SumState.tree (relabelBlock (α := α) (β := β) t))), ?_, ?_, ?_⟩
+        · change destAt (relabelBlock (corecAt sumCo
+            (SumState.tree (tauAt t)))) = _
+          rw [dest_relabelBlock, dest_sumAt, dest_tauAt]
+          simp [Step.tau]
+          funext a
+          cases a
+          rfl
+        · change destAt (corecAt sumCo
+            (SumState.tree (relabelBlock (tauAt t)))) = _
+          rw [dest_sumAt, dest_relabelBlock, dest_tauAt]
+          simp [Step.tau]
+          funext a
+          cases a
+          rfl
+        · intro a
+          cases a
+          exact .block t
+      · refine ⟨.op (Sum.inl e) input,
+          (fun (a : (P (Sum H F) β).Ar (Pos.op (Sum.inl e) input)) => by
+            cases a with
+            | block bx => exact (relabelBlock (H := Sum H F) (α := α) (β := β)
+                (corecAt (sumCo (H := H) (F := F)) (SumState.tree (blocks bx))))
+            | cont o => exact (relabelBlock (H := Sum H F) (α := α) (β := β)
+                (corecAt (sumCo (H := H) (F := F)) (SumState.tree (c o))))),
+          (fun (a : (P (Sum H F) β).Ar (Pos.op (Sum.inl e) input)) => by
+            cases a with
+            | block bx => exact (corecAt (sumCo (H := H) (F := F))
+                (SumState.tree (relabelBlock (α := α) (β := β) (blocks bx))))
+            | cont o => exact (corecAt (sumCo (H := H) (F := F))
+                (SumState.tree (relabelBlock (α := α) (β := β) (c o))))), ?_, ?_, ?_⟩
+        · change destAt (relabelBlock (corecAt sumCo
+            (SumState.tree (opAt e input blocks c)))) = _
+          rw [dest_relabelBlock, dest_sumAt, dest_opAt]
+          simp [Step.op]
+          funext a
+          cases a <;> rfl
+        · change destAt (corecAt sumCo
+            (SumState.tree (relabelBlock (opAt e input blocks c)))) = _
+          rw [dest_sumAt, dest_relabelBlock, dest_opAt]
+          simp [Step.op]
+          funext a
+          cases a <;> rfl
+        · intro a
+          cases a with
+          | block bx => exact .block (blocks bx)
+          | cont o => exact .block (c o)
+
 @[reducible] def sourceIx : Ix H → Ix (Sum H (Call σ ρ))
   | .normal => .normal
   | .block e bx => .block (.inl e) bx
@@ -1022,6 +1294,277 @@ def interp {σ ρ α : Type u}
     (body : σ → CompE (Sum H (Call σ ρ)) ρ)
     (t : CompE (Sum H (Call σ ρ)) α) : CompE H α :=
   corecAt (interpCo body) t
+
+private theorem interpCo_sumAt {H : HSig.{u, v}} {σ ρ α : Type u}
+    (body : σ → CompE (Sum H (Call σ ρ)) ρ) {i : Ix H} (t : Tree H α i) :
+    interpCo body i
+        (corecAt (sumCo (H := H) (F := Call σ ρ)) (SumState.tree t)) =
+      (P H α).map
+        (fun _ child =>
+          corecAt (sumCo (H := H) (F := Call σ ρ)) (SumState.tree child))
+        (destAt t) := by
+  obtain ⟨p, c, ht⟩ : ∃ p c, destAt t = ⟨p, c⟩ := ⟨_, _, rfl⟩
+  cases i <;> cases p <;>
+    simp only [interpCo, interpCoNormal, dest, dest_corecAt, sumCo,
+      IxPFunctor.map] <;>
+    rw [ht] <;>
+    simp [Step.ret, Step.tau, Step.fail, Step.op]
+  all_goals
+    funext a
+    cases a <;> rfl
+
+private def interpSumAt {H : HSig.{u, v}} {σ ρ α : Type u}
+    (body : σ → CompE (Sum H (Call σ ρ)) ρ) {i : Ix H} (t : Tree H α i) :
+    Tree H α i :=
+  corecAt (interpCo body)
+    (corecAt (sumCo (H := H) (F := Call σ ρ)) (SumState.tree t))
+
+private theorem interpSumAt_eq {H : HSig.{u, v}} {σ ρ α : Type u}
+    (body : σ → CompE (Sum H (Call σ ρ)) ρ) {i : Ix H} (t : Tree H α i) :
+    interpSumAt body t = t := by
+  refine IxPFunctor.M.bisim (P := P H α)
+    (fun _ x y => x = interpSumAt body y) ?_ _ _ rfl
+  intro i x y hxy
+  subst x
+  obtain ⟨p, c, ht⟩ : ∃ p c, destAt y = ⟨p, c⟩ := ⟨_, _, rfl⟩
+  cases p with
+  | ret a =>
+      refine ⟨.ret a, (fun h => nomatch h), c, ?_, ht, ?_⟩
+      · rw [interpSumAt, raw_dest_corecAt, interpCo_sumAt, ht]
+        refine Sigma.ext rfl ?_
+        apply heq_of_eq
+        funext h
+        cases h
+      · intro h
+        nomatch h
+  | tau =>
+      refine ⟨.tau,
+        (fun a => match a with
+          | Ar.tau => interpSumAt body (c Ar.tau)),
+        c, ?_, ht, ?_⟩
+      · rw [interpSumAt, raw_dest_corecAt, interpCo_sumAt, ht]
+        refine Sigma.ext rfl ?_
+        apply heq_of_eq
+        funext a
+        cases a
+        rfl
+      · intro a
+        cases a
+        rfl
+  | fail =>
+      refine ⟨.fail, (fun h => nomatch h), c, ?_, ht, ?_⟩
+      · rw [interpSumAt, raw_dest_corecAt, interpCo_sumAt, ht]
+        refine Sigma.ext rfl ?_
+        apply heq_of_eq
+        funext h
+        cases h
+      · intro h
+        nomatch h
+  | op e input =>
+      refine ⟨.op e input,
+        (fun a => match a with
+          | Ar.block bx => interpSumAt body (c (Ar.block bx))
+          | Ar.cont o => interpSumAt body (c (Ar.cont o))),
+        c, ?_, ht, ?_⟩
+      · rw [interpSumAt, raw_dest_corecAt, interpCo_sumAt, ht]
+        refine Sigma.ext rfl ?_
+        apply heq_of_eq
+        funext a
+        cases a <;> rfl
+      · intro a
+        cases a <;> rfl
+
+/-- Interpreting a computation injected into the left side of the recursive signature recovers
+    the original computation. -/
+@[simp] theorem interp_sumL {σ ρ α : Type u}
+    (body : σ → CompE (Sum H (Call σ ρ)) ρ) (t : CompE H α) :
+    interp body (sumL (F := Call σ ρ) t) = t :=
+  interpSumAt_eq body t
+
+private inductive InterpBindSumLRel {H : HSig.{u, v}} {σ ρ α β : Type u}
+    (body : σ → CompE (Sum H (Call σ ρ)) ρ)
+    (k : α → CompE (Sum H (Call σ ρ)) β) :
+    (i : Ix H) → Tree H β i → Tree H β i → Prop where
+  | root (t : CompE H α) : InterpBindSumLRel body k .normal
+      (interp body (bind (sumL (F := Call σ ρ) t) k))
+      (bind t (fun x => interp body (k x)))
+  | eq {i : Ix H} {x y : Tree H β i} (h : x = y) :
+      InterpBindSumLRel body k i x y
+
+private theorem interp_tau_early {σ ρ : Type u}
+    (body : σ → CompE (Sum H (Call σ ρ)) ρ) {α : Type u}
+    (t : CompE (Sum H (Call σ ρ)) α) :
+    interp body (tau t) = tau (interp body t) := by
+  apply eq_of_dest_eq
+  change destAt (interp body (tau t)) = destAt (tau (interp body t))
+  rw [interp, dest_corecAt]
+  have hn : interpCoNormal body (tau t) =
+      @Step.tau H α (InterpState H σ ρ α) .normal t := by
+    unfold interpCoNormal
+    rw [dest_tau]
+    rfl
+  rw [show interpCo body .normal (tau t) =
+    @Step.tau H α (InterpState H σ ρ α) .normal t from hn]
+  dsimp [IxPFunctor.map]
+  rw [show destAt (tau (interp body t)) = Step.tau (interp body t) from
+    dest_tauAt (interp body t)]
+  refine Sigma.ext rfl ?_
+  apply heq_of_eq
+  funext ar
+  cases ar
+  rfl
+
+private theorem interp_fail_early {σ ρ : Type u}
+    (body : σ → CompE (Sum H (Call σ ρ)) ρ) {α : Type u} :
+    interp body (fail : CompE (Sum H (Call σ ρ)) α) = fail := by
+  apply eq_of_dest_eq
+  change destAt (interp body (fail : CompE (Sum H (Call σ ρ)) α)) =
+    destAt (fail : CompE H α)
+  rw [interp, dest_corecAt]
+  have hn : interpCoNormal body
+      (fail : CompE (Sum H (Call σ ρ)) α) = Step.fail := by
+    unfold interpCoNormal
+    rw [dest_fail]
+    rfl
+  rw [show interpCo body .normal
+    (fail : CompE (Sum H (Call σ ρ)) α) = Step.fail from hn]
+  refine Sigma.ext rfl ?_
+  apply heq_of_eq
+  funext h
+  nomatch h
+
+set_option backward.isDefEq.respectTransparency true in
+theorem interp_bind_sumL {σ ρ α β : Type u}
+    (body : σ → CompE (Sum H (Call σ ρ)) ρ) (t : CompE H α)
+    (k : α → CompE (Sum H (Call σ ρ)) β) :
+    interp body (bind (sumL (F := Call σ ρ) t) k) =
+      bind t (fun x => interp body (k x)) := by
+  refine IxPFunctor.M.bisim (P := P H β) (InterpBindSumLRel body k) ?_ _ _ (.root t)
+  intro i x y hxy
+  cases hxy with
+  | eq hxy =>
+      subst y
+      obtain ⟨p, c, hd⟩ : ∃ p c, destAt x = ⟨p, c⟩ := ⟨_, _, rfl⟩
+      exact ⟨p, c, c, hd, hd, fun _ => .eq rfl⟩
+  | root t =>
+      rcases cases_view t with
+        ⟨a, rfl⟩ | rfl | ⟨t, rfl⟩ | ⟨e, input, blocks, c, rfl⟩
+      · simp only [sumL_ret, bind_ret]
+        obtain ⟨p, d, hd⟩ : ∃ p d, destAt (interp body (k a)) = ⟨p, d⟩ :=
+          ⟨_, _, rfl⟩
+        exact ⟨p, d, d, hd, hd, fun _ => .eq rfl⟩
+      · simp only [sumL_fail, bind_fail, interp_fail_early]
+        refine ⟨.fail, (fun h => nomatch h), (fun h => nomatch h), ?_, ?_, ?_⟩
+        · rw [show IxPFunctor.M.dest (fail : CompE H β) = Step.fail from
+            raw_dest_mkAt Step.fail]
+          refine Sigma.ext rfl ?_
+          apply heq_of_eq
+          funext h
+          nomatch h
+        · rw [show IxPFunctor.M.dest (fail : CompE H β) = Step.fail from
+            raw_dest_mkAt Step.fail]
+          refine Sigma.ext rfl ?_
+          apply heq_of_eq
+          funext h
+          nomatch h
+        · intro h
+          nomatch h
+      · simp only [sumL_tau, bind_tau, interp_tau_early]
+        refine ⟨.tau,
+          (fun a => match a with
+            | Ar.tau => interp body (bind (sumL (F := Call σ ρ) t) k)),
+          (fun a => match a with
+            | Ar.tau => bind t (fun x => interp body (k x))),
+          ?_, ?_, ?_⟩
+        · rw [show IxPFunctor.M.dest
+              (tau (interp body (bind (sumL (F := Call σ ρ) t) k))) =
+              Step.tau (interp body (bind (sumL (F := Call σ ρ) t) k)) from
+            raw_dest_mkAt _]
+          refine Sigma.ext rfl ?_
+          apply heq_of_eq
+          funext a
+          cases a
+          rfl
+        · rw [show IxPFunctor.M.dest
+              (tau (bind t (fun x => interp body (k x)))) =
+              Step.tau (bind t (fun x => interp body (k x))) from raw_dest_mkAt _]
+          refine Sigma.ext rfl ?_
+          apply heq_of_eq
+          funext a
+          cases a
+          rfl
+        · intro a
+          cases a
+          exact .root t
+      · rw [sumL_opAt (F := Call σ ρ),
+          bind_opAt (H := Sum H (Call σ ρ)), bind_opAt (H := H)]
+        let leftBlocks : (bx : H.Block e) → BlockE H β e bx := fun bx =>
+          corecAt (H := H) (α := β) (interpCo body)
+            (relabelBlock (H := Sum H (Call σ ρ)) (α := α) (β := β)
+              (corecAt (sumCo (H := H) (F := Call σ ρ))
+                (SumState.tree (blocks bx))))
+        let rightBlocks := fun (bx : H.Block e) =>
+          relabelBlock (α := α) (β := β) (blocks bx)
+        let leftK := fun o => interp body
+          (bind (sumL (F := Call σ ρ) (c o)) k)
+        let rightK := fun o => bind (c o) (fun x => interp body (k x))
+        refine ⟨.op e input,
+          (fun a => match a with
+            | Ar.block bx => leftBlocks bx
+            | Ar.cont o => leftK o),
+          (fun a => match a with
+            | Ar.block bx => rightBlocks bx
+            | Ar.cont o => rightK o), ?_, ?_, ?_⟩
+        · change destAt (interp body (opAt (Sum.inl e) input
+              (fun bx => relabelBlock (H := Sum H (Call σ ρ))
+                (corecAt (sumCo (H := H) (F := Call σ ρ))
+                  (SumState.tree (blocks bx))))
+              (fun o => bind (H := Sum H (Call σ ρ))
+                (sumL (F := Call σ ρ) (c o)) k))) = _
+          rw [interp, dest_corecAt]
+          have hn : interpCo body .normal
+              (opAt (Sum.inl e) input
+                (fun bx => relabelBlock (H := Sum H (Call σ ρ))
+                  (corecAt (sumCo (H := H) (F := Call σ ρ))
+                    (SumState.tree (blocks bx))))
+                (fun o => bind (H := Sum H (Call σ ρ))
+                  (sumL (F := Call σ ρ) (c o)) k)) =
+              Step.op e input
+                (fun bx => relabelBlock (H := Sum H (Call σ ρ))
+                  (corecAt (sumCo (H := H) (F := Call σ ρ))
+                    (SumState.tree (blocks bx))))
+                (fun o => bind (H := Sum H (Call σ ρ))
+                  (sumL (F := Call σ ρ) (c o)) k) := by
+            unfold interpCo
+            unfold interpCoNormal
+            simp only [dest, dest_opAt]
+            rfl
+          rw [hn]
+          simp only [IxPFunctor.map, Step.op]
+          refine Sigma.ext rfl ?_
+          apply heq_of_eq
+          funext a
+          cases a <;> rfl
+        · change destAt (opAt e input rightBlocks rightK) = _
+          rw [dest_opAt]
+          simp only [Step.op]
+          refine Sigma.ext rfl ?_
+          apply heq_of_eq
+          funext a
+          cases a <;> rfl
+        · intro a
+          cases a with
+          | block bx =>
+              apply InterpBindSumLRel.eq
+              change corecAt (interpCo body)
+                  (relabelBlock (H := Sum H (Call σ ρ)) (α := α) (β := β)
+                    (corecAt (sumCo (H := H) (F := Call σ ρ))
+                      (SumState.tree (blocks bx)))) =
+                relabelBlock (α := α) (β := β) (blocks bx)
+              rw [sumAt_relabelBlock]
+              change interpSumAt body (relabelBlock (α := α) (β := β) (blocks bx)) = _
+              rw [interpSumAt_eq]
+          | cont o => exact .root (c o)
 
 @[simp] theorem interp_ret {σ ρ : Type u}
     (body : σ → CompE (Sum H (Call σ ρ)) ρ) {α : Type u} (a : α) :

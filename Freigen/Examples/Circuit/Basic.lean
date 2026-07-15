@@ -282,10 +282,8 @@ def finHintSource : Circuit (Fin 5) :=
 
 def finHintMacroReflected := reflect% finHintSource
 
-/-- This theorem demonstrates the intended partial representation: the generated target returns a
-    `Nat`; soundness relates it to the source `Fin 5` by value equality, without claiming an
-    equivalence between the two types. -/
-example : ITree.CompE.Eutt CircCompat fin5NatRel
+/-- A literal bound is retained through operation registration as well as at the program result. -/
+example : ITree.CompE.Eutt CircCompat Eq
     (Free.toITree finHintSource)
     (Expr.denote (finHintMacroReflected.1 (Tp.denote M))) :=
   finHintMacroReflected.2

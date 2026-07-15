@@ -1,4 +1,4 @@
-import Freigen.Reflect.Sound
+import Freigen.Ast.Basic
 import Freigen.Reflect.Attributes
 
 namespace Freigen
@@ -26,6 +26,12 @@ structure OpSpec {S : ITree.HSig.{u, v}} {H : Signature}
   encode := id
   encode_related := fun _ => rfl
 
+@[ast_repr] def intRepr : ReprSpec Int where
+  code := .int
+  relates := Eq
+  encode := id
+  encode_related := fun _ => rfl
+
 @[ast_repr] def boolRepr : ReprSpec Bool where
   code := .bool
   relates := Eq
@@ -48,6 +54,26 @@ structure OpSpec {S : ITree.HSig.{u, v}} {H : Signature}
   code := .nat
   relates source target := source.val = target
   encode source := source.val
+  encode_related := fun _ => rfl
+
+/-- Precise representation selected by the reflector when the bound is a closed numeral. -/
+def finTaggedRepr (n : Nat) : ReprSpec (Fin n) where
+  code := .fin n
+  relates := Eq
+  encode := id
+  encode_related := fun _ => rfl
+
+@[ast_repr] def zmodRepr (n : Nat) : ReprSpec (ZModCarrier n) where
+  code := .int
+  relates source target := ZModCarrier.toInt n source = target
+  encode source := ZModCarrier.toInt n source
+  encode_related := fun _ => rfl
+
+/-- Precise representation selected by the reflector when the modulus is a closed numeral. -/
+def zmodTaggedRepr (n : Nat) : ReprSpec (ZModCarrier n) where
+  code := .zmod n
+  relates := Eq
+  encode := id
   encode_related := fun _ => rfl
 
 end Ast
