@@ -103,7 +103,7 @@ symbolicRecursiveReflected_sound :
 
 The complete serialized tree, including source ranges, is guarded in
 [`Serialized.lean`](../Examples/Serialized.lean). Any change to helper spilling, recursion shape,
-finite tags, operation branches, or source annotations must update an exact expected AST.
+operation branches, or source annotations must update an exact expected AST.
 
 ## Claims and executable evidence
 
@@ -111,10 +111,9 @@ finite tags, operation branches, or source annotations must update an exact expe
 | --- | --- | --- |
 | Successful reflection carries an `Eutt` certificate | [`Sound.lean`](Sound.lean), [`Emit.lean`](Emit.lean) | [`AxCheck.lean`](../AxCheck.lean) |
 | Semantic and generic ASTs stay synchronized | `Emission` and `emitComp` in [`Comp.lean`](Comp.lean) | Full-AST guards in [`Serialized.lean`](../Examples/Serialized.lean) |
-| Helpers are monomorphized by declaration and static arguments | `SpecializationKey` and `discover` in [`Plan.lean`](Plan.lean) | `twoFinSpecializationsSource` in [`FiniteTypes.lean`](../Examples/FiniteTypes.lean) |
+| Helpers are monomorphized by declaration and static arguments | `SpecializationKey` and `discover` in [`Plan.lean`](Plan.lean) | `staticSpecializationMain` in [`Circuit/Basic.lean`](../Examples/Circuit/Basic.lean) |
 | Symbolic recursion is represented by `letrec`/`self`, not unfolded | [`NatRec.lean`](NatRec.lean), `buildRecursiveHelper` in [`Emit.lean`](Emit.lean) | `symbolicRecursiveMain` and `sumMain` in [`Circuit/Basic.lean`](../Examples/Circuit/Basic.lean) and [`Recursion.lean`](../Examples/Recursion.lean) |
 | Dynamic operation blocks preserve bound values and proofs | `emitOrdinaryDynamicBlocks` in [`Comp.lean`](Comp.lean) | Circuit `hint` guards in [`Serialized.lean`](../Examples/Serialized.lean) |
-| Literal `Fin n`/`ZMod n` indices remain precise and casts are checked | [`Finite.lean`](Finite.lean), [`Value.lean`](Value.lean) | [`FiniteTypes.lean`](../Examples/FiniteTypes.lean), [`ZModCompatibility.lean`](../Examples/ZModCompatibility.lean) |
 | Reflection does not depend on aggressive reduction | `exposeComp` in [`Comp.lean`](Comp.lean), recursion recognition in [`Plan.lean`](Plan.lean) | Cached builds plus symbolic helper/recursion AST guards |
 
 ## Reproduce the checks
@@ -130,9 +129,6 @@ lake build Freigen.Examples.Serialized
 
 # Print the axiom footprint of representative generated certificates
 lake env lean Freigen/AxCheck.lean
-
-# Exercise precise and symbolic Fin/ZMod reflection directly
-lake env lean Freigen/Examples/FiniteTypes.lean
 
 # Materialize artifacts recorded by #compile
 lake build Freigen:prog
@@ -172,8 +168,6 @@ The main deliberate tradeoffs are:
   smaller value-node applications remain next to value matching in `Value.lean`.
 - **One recursion backend.** The generic soundness contracts support recursive bodies; only the
   `Nat.brecOn` recognition and adequacy backend is implemented.
-- **Best-effort finite precision.** Literal bounds become `Tp0.fin n`/`Tp0.zmod n`; symbolic bounds
-  use carrier representations until an explicit checked tag crosses back into a precise type.
 
 ---
 
@@ -199,7 +193,6 @@ Registrations are explicit elaborator data rather than typeclass search: `ast_co
 | --- | --- |
 | [`Attributes.lean`](Attributes.lean) | Declares the `ast_*` registry attributes. |
 | [`Registry.lean`](Registry.lean) | Defines `ReprSpec`, `OpSpec`, and built-in representations. |
-| [`Finite.lean`](Finite.lean) | Owns `Fin`/`ZMod` recognition and precise-tagging policy. |
 | [`Resolve.lean`](Resolve.lean) | Selects explicit registry entries and invokes representation policy. |
 | [`Source.lean`](Source.lean) | Quotes syntax and declaration source ranges. |
 | [`Sound.lean`](Sound.lean) | Defines reflection contracts and proof constructors; no metaprogramming. |
@@ -272,21 +265,6 @@ zero and successor ASTs. `natBrecCode` gives semantic and generic bodies the sam
 `mrec_natBrecBody_eq_code` transports structural-induction adequacy locally. Recursive calls become
 `Expr.selfCall`, including beneath effects and continuations. There is no whole-program recursive
 normalization or special case in final packaging.
-
-## Partial finite representations
-
-`ReprSpec` contains an encoding and source/target relation but does not assert target coverage.
-When a bound reduces to a numeral, `Fin n` and `ZMod n` retain precise object types
-`Tp0.fin n`/`Tp0.zmod n`, whose denotations are the actual finite host types. Literal construction
-uses checked `finTag`/`zmodTag`; failure in the target semantics prevents an invalid carrier from
-becoming a precise finite value. `finErase`/`zmodErase` expose carriers explicitly.
-
-When a bound is symbolic, it cannot be stored in the first-order type tag. `Fin n` therefore uses a
-`Nat` carrier related by `source.val = target`, and `ZMod n` uses its canonical `Int` carrier. Any
-later boundary into a precise finite object is an explicit checked tag rather than definitional
-equality. `ZModCarrier` is definitionally equal to Mathlib’s `ZMod` family;
-[`ZModCompatibility.lean`](../Examples/ZModCompatibility.lean) checks that boundary against the
-actual Mathlib type.
 
 ## Serialization and provenance
 

@@ -4,49 +4,6 @@ namespace Freigen
 
 universe u v
 
-/-- Lightweight carrier definitionally equal to Mathlib's `ZMod` family after that library is
-    imported: `Int` at modulus zero and `Fin n` otherwise. -/
-def ZModCarrier : Nat → Type
-  | 0 => Int
-  | n + 1 => Fin (n + 1)
-
-instance (n : Nat) : DecidableEq (ZModCarrier n) := by
-  cases n with
-  | zero => exact inferInstanceAs (DecidableEq Int)
-  | succ n => exact inferInstanceAs (DecidableEq (Fin (n + 1)))
-
-instance (n : Nat) : Add (ZModCarrier n) := by
-  cases n with
-  | zero => exact inferInstanceAs (Add Int)
-  | succ n => exact inferInstanceAs (Add (Fin (n + 1)))
-
-instance (n : Nat) : Sub (ZModCarrier n) := by
-  cases n with
-  | zero => exact inferInstanceAs (Sub Int)
-  | succ n => exact inferInstanceAs (Sub (Fin (n + 1)))
-
-instance (n : Nat) : Mul (ZModCarrier n) := by
-  cases n with
-  | zero => exact inferInstanceAs (Mul Int)
-  | succ n => exact inferInstanceAs (Mul (Fin (n + 1)))
-
-instance (n : Nat) : Neg (ZModCarrier n) := by
-  cases n with
-  | zero => exact inferInstanceAs (Neg Int)
-  | succ n => exact inferInstanceAs (Neg (Fin (n + 1)))
-
-instance (n k : Nat) : OfNat (ZModCarrier n) k where
-  ofNat := match n with
-    | 0 => (k : Int)
-    | n + 1 => ⟨k % (n + 1), Nat.mod_lt _ (Nat.zero_lt_succ n)⟩
-
-instance (n : Nat) : BEq (ZModCarrier n) where
-  beq x y := decide (x = y)
-
-def ZModCarrier.toInt : (n : Nat) → ZModCarrier n → Int
-  | 0, x => x
-  | _ + 1, x => x.val
-
 /-!
 ## The object-type universe and the AST
 
@@ -90,8 +47,6 @@ inductive Tp0 : Type
   | int  : Tp0
   | bool : Tp0
   | unit : Tp0
-  | fin  : Nat → Tp0
-  | zmod : Nat → Tp0
   | prod : Tp0 → Tp0 → Tp0
 
 namespace Tp0
@@ -102,8 +57,6 @@ namespace Tp0
   | .int      => Int
   | .bool     => Bool
   | .unit     => Unit
-  | .fin n    => Fin n
-  | .zmod n   => ZModCarrier n
   | .prod a b => a.denote × b.denote
 
 end Tp0
@@ -145,25 +98,6 @@ def Un.denote {a b : Tp0} : Un a b → a.denote → b.denote
   | .fst, p => p.1
   | .snd, p => p.2
 
-/-- Checked conversions between precise finite object types and their erased carriers.  Tagging is
-    partial: it accepts only canonical representatives, so an invalid untyped value becomes a
-    computation failure rather than an inhabitant of the tagged type. -/
-inductive CheckedCast : Tp0 → Tp0 → Type
-  | finErase (n : Nat) : CheckedCast (.fin n) .nat
-  | finTag (n : Nat) : CheckedCast .nat (.fin n)
-  | zmodErase (n : Nat) : CheckedCast (.zmod n) .int
-  | zmodTag (n : Nat) : CheckedCast .int (.zmod n)
-
-def CheckedCast.denote {a b : Tp0} : CheckedCast a b → a.denote → Option b.denote
-  | .finErase _, x => some x.val
-  | .finTag n, x => if h : x < n then some ⟨x, h⟩ else none
-  | .zmodErase n, x => some (ZModCarrier.toInt n x)
-  | .zmodTag 0, x => some x
-  | .zmodTag (n + 1), x =>
-      if 0 ≤ x then
-        if h : x.toNat < n + 1 then some ⟨x.toNat, h⟩ else none
-      else none
-
 /-- Binary primitives, indexed by (left, right, result) first-order object type. -/
 inductive Bin : Tp0 → Tp0 → Tp0 → Type
   | add : Bin .nat .nat .nat
@@ -172,16 +106,8 @@ inductive Bin : Tp0 → Tp0 → Tp0 → Type
   | intAdd : Bin .int .int .int
   | intSub : Bin .int .int .int
   | intMul : Bin .int .int .int
-  | finAdd (n : Nat) : Bin (.fin n) (.fin n) (.fin n)
-  | finSub (n : Nat) : Bin (.fin n) (.fin n) (.fin n)
-  | finMul (n : Nat) : Bin (.fin n) (.fin n) (.fin n)
-  | zmodAdd (n : Nat) : Bin (.zmod n) (.zmod n) (.zmod n)
-  | zmodSub (n : Nat) : Bin (.zmod n) (.zmod n) (.zmod n)
-  | zmodMul (n : Nat) : Bin (.zmod n) (.zmod n) (.zmod n)
   | eq  : Bin .nat .nat .bool
   | intEq : Bin .int .int .bool
-  | finEq (n : Nat) : Bin (.fin n) (.fin n) .bool
-  | zmodEq (n : Nat) : Bin (.zmod n) (.zmod n) .bool
   | lt  : Bin .nat .nat .bool
   | le  : Bin .nat .nat .bool
   | and : Bin .bool .bool .bool
@@ -197,16 +123,8 @@ def Bin.denote {a b c : Tp0} :
   | .intAdd, x, y => x + y
   | .intSub, x, y => x - y
   | .intMul, x, y => x * y
-  | .finAdd _, x, y => x + y
-  | .finSub _, x, y => x - y
-  | .finMul _, x, y => x * y
-  | .zmodAdd _, x, y => x + y
-  | .zmodSub _, x, y => x - y
-  | .zmodMul _, x, y => x * y
   | .eq,   x, y => x == y
   | .intEq, x, y => x == y
-  | .finEq _, x, y => x == y
-  | .zmodEq _, x, y => x == y
   | .lt,   x, y => decide (x < y)
   | .le,   x, y => decide (x ≤ y)
   | .and,  x, y => x && y
@@ -288,8 +206,6 @@ inductive Expr (H : Signature) (V : Tp → Type) : Option (Tp × Tp) → Tp → 
   | unitLit {r α} : (V .unit → Expr H V r α) → Expr H V r α
   | un {r α a b} : Un a b → V (.base a) →
       (V (.base b) → Expr H V r α) → Expr H V r α
-  | checkedCast {r α a b} : CheckedCast a b → V (.base a) →
-      (V (.base b) → Expr H V r α) → Expr H V r α
   | bin {r α a b c} : Bin a b c → V (.base a) → V (.base b) →
       (V (.base c) → Expr H V r α) → Expr H V r α
   | ite {r α β} : V .bool → Expr H V r β → Expr H V r β →
@@ -317,10 +233,6 @@ def Expr.denote {H : Signature} : {r : Option (Tp × Tp)} → {α : Tp} →
   | _, _, .boolLit b k => Expr.denote (k b)
   | _, _, .unitLit k => Expr.denote (k ())
   | _, _, .un o x k => Expr.denote (k (o.denote x))
-  | _, _, .checkedCast c x k =>
-      match c.denote x with
-      | some y => Expr.denote (k y)
-      | none => DomR.fail
   | _, _, .bin o x y k => Expr.denote (k (o.denote x y))
   | _, _, .ite c t e k => DomR.bind (cond c (Expr.denote t) (Expr.denote e)) fun v =>
       Expr.denote (k v)

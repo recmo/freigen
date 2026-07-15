@@ -1745,6 +1745,18 @@ def mrec {σ ρ : Type u}
     (body : σ → CompE (Sum H (Call σ ρ)) ρ) : σ → CompE H ρ :=
   fun s => interp body (body s)
 
+/-- Tie a recursive Kleisli arrow in the existing call-extended computation monad.
+
+The body and its recursive argument have exactly the same type.  Recursive applications are
+ordinary function applications; the private arrow supplied here emits a `Call`, and `mrec`
+closes those calls while inserting the guarding `tau`. -/
+def mfix {σ ρ : Type u}
+    (body : (σ → CompE (Sum H (Call σ ρ)) ρ) →
+      σ → CompE (Sum H (Call σ ρ)) ρ) :
+    σ → CompE H ρ :=
+  mrec (body fun s =>
+    op (Sum.inr CallOp.call) s (fun bx => nomatch bx.1) ret)
+
 end CompE
 
 end ITree

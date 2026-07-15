@@ -1,7 +1,5 @@
 //! Typed client-side image of the Lean `Ast.Expr` grammar.
 
-use num_bigint::BigUint;
-
 use crate::value::Value;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -11,10 +9,6 @@ pub enum Tp {
     Unit,
     Prod(Box<Tp>, Box<Tp>),
     Fn(Box<Tp>, Box<Tp>),
-    // Reserved for future Lean representations; the promoted emitter does not produce these yet.
-    ZMod(BigUint),
-    Fin(u64),
-    Vec(Box<Tp>, u64),
     Array(Box<Tp>),
     Sum(Box<Tp>, Box<Tp>),
 }
@@ -26,8 +20,6 @@ pub enum UnOp {
     Snd,
     Inl,
     Inr,
-    ToArray,
-    FinVal,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -43,21 +35,13 @@ pub enum BinOp {
     Or,
     Pair,
     Push,
-    AddF,
-    SubF,
-    MulF,
-    PowF,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum POp {
-    VGet,
-    VSet,
     AGet,
     ASet,
     Select,
-    ArrToVec(u64),
-    NatToFin(u64),
 }
 
 pub type Var = String;
@@ -83,7 +67,6 @@ pub enum Expr {
     Un(UnOp, Var),
     Bin(BinOp, Var, Var),
     Pop(POp, Vec<Var>),
-    MkVec(Vec<Var>),
     MkArr(Vec<Var>),
     If {
         cond: Var,

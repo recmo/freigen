@@ -94,15 +94,6 @@ inductive CircRel : SourceOp → CircOp → Type 1 where
   target := .hint repr.code
   witness := .hint α repr.code repr.relates
 
-def fin5NatRel : Fin 5 → Nat → Prop := fun source target => source.val = target
-
-def fin5Hint : CircRel (.hint (Fin 5)) (.hint .nat) :=
-  .hint (Fin 5) .nat fin5NatRel
-
-theorem fin5NatRel_target (target : Nat) (h : target < 5) :
-    ∃ source : Fin 5, fin5NatRel source target :=
-  ⟨⟨target, h⟩, rfl⟩
-
 abbrev Circuit (α : Type) := Free Source α
 
 abbrev M := ITree.CompE Circ.spec
@@ -276,17 +267,6 @@ example : ITree.CompE.Eutt CircCompat Eq
     (Free.toITree (Circuit.assert true))
     (Expr.denote (assertMacroReflected.1 (Tp.denote M))) :=
   assertMacroReflected.2
-
-def finHintSource : Circuit (Fin 5) :=
-  Circuit.hint (pure ⟨3, by decide⟩)
-
-def finHintMacroReflected := reflect% finHintSource
-
-/-- A literal bound is retained through operation registration as well as at the program result. -/
-example : ITree.CompE.Eutt CircCompat Eq
-    (Free.toITree finHintSource)
-    (Expr.denote (finHintMacroReflected.1 (Tp.denote M))) :=
-  finHintMacroReflected.2
 
 section Ast
 

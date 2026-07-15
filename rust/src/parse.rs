@@ -1,8 +1,7 @@
 //! Parse the uniform `.prog` S-expression format into the typed AST.
 //!
 //! The grammar is pinned in `Freigen/Ast/Sexp.lean` (the emitter); this module is its inverse.
-//! Numeric literals are parsed *type-directed* from the binder annotation (`nat`, `(zmod p)`,
-//! `(fin n)`), so a parsed [`Value`] is always fully typed — a field element knows its modulus.
+//! Numeric literals are parsed *type-directed* from their binder annotations.
 
 use std::fmt;
 
@@ -95,12 +94,6 @@ fn parse_tp(s: &Sexp) -> Result<Tp> {
                 "a type head",
             )?;
             match (head, &items[1..]) {
-                ("zmod", [p]) => Ok(Tp::ZMod(as_biguint(p, "a modulus")?)),
-                ("fin", [n]) => Ok(Tp::Fin(as_u64(n, "a Fin bound")?)),
-                ("vec", [a, n]) => Ok(Tp::Vec(
-                    Box::new(parse_tp(a)?),
-                    as_u64(n, "a vector length")?,
-                )),
                 ("array", [a]) => Ok(Tp::Array(Box::new(parse_tp(a)?))),
                 ("prod", [a, b]) => Ok(Tp::Prod(Box::new(parse_tp(a)?), Box::new(parse_tp(b)?))),
                 ("sum", [a, b]) => Ok(Tp::Sum(Box::new(parse_tp(a)?), Box::new(parse_tp(b)?))),
@@ -125,36 +118,6 @@ fn parse_value(tp: &Tp, s: &Sexp) -> Result<Value> {
             "unit" => Ok(Value::Unit),
             other => err(format!("expected `unit`, got `{other}`")),
         },
-        Tp::ZMod(p) => {
-            let v = as_biguint(s, "a field literal")?;
-            Ok(Value::Field {
-                val: v % p,
-                modulus: p.clone(),
-            })
-        }
-        Tp::Fin(n) => {
-            let v = as_u64(s, "a fin literal")?;
-            if v < *n {
-                Ok(Value::Fin { val: v, bound: *n })
-            } else {
-                err(format!("fin literal {v} out of bound {n}"))
-            }
-        }
-        Tp::Vec(a, n) => {
-            let elems = as_list(s, "a vec literal")?;
-            if elems.len() as u64 != *n {
-                return err(format!(
-                    "vec literal has {} elements, type says {n}",
-                    elems.len()
-                ));
-            }
-            Ok(Value::Vec(
-                elems
-                    .iter()
-                    .map(|e| parse_value(a, e))
-                    .collect::<Result<Vec<_>>>()?,
-            ))
-        }
         Tp::Array(a) => {
             let elems = as_list(s, "an array literal")?;
             Ok(Value::Array(
@@ -202,8 +165,6 @@ fn un_op(head: &str) -> Option<UnOp> {
         "snd" => UnOp::Snd,
         "inl" => UnOp::Inl,
         "inr" => UnOp::Inr,
-        "to-array" => UnOp::ToArray,
-        "fin-val" => UnOp::FinVal,
         _ => return None,
     })
 }
@@ -219,10 +180,6 @@ fn bin_op(head: &str) -> Option<BinOp> {
         "le" => BinOp::Le,
         "and" => BinOp::And,
         "or" => BinOp::Or,
-        "addf" => BinOp::AddF,
-        "subf" => BinOp::SubF,
-        "mulf" => BinOp::MulF,
-        "powf" => BinOp::PowF,
         "pair" => BinOp::Pair,
         "push" => BinOp::Push,
         _ => return None,
@@ -231,8 +188,6 @@ fn bin_op(head: &str) -> Option<BinOp> {
 
 fn pop_op(head: &str) -> Option<POp> {
     Some(match head {
-        "vget" => POp::VGet,
-        "vset" => POp::VSet,
         "aget" => POp::AGet,
         "aset" => POp::ASet,
         "select" => POp::Select,
@@ -262,17 +217,6 @@ fn parse_expr(tp: &Tp, s: &Sexp) -> Result<Expr> {
     )?;
     match (head, &items[1..]) {
         ("lit", [v]) => Ok(Expr::Lit(parse_value(tp, v)?)),
-        ("arr-to-vec", [n, a]) => Ok(Expr::Pop(
-            POp::ArrToVec(as_u64(n, "a vector length")?),
-            vec![as_var(a)?],
-        )),
-        ("nat-to-fin", [n, a]) => Ok(Expr::Pop(
-            POp::NatToFin(as_u64(n, "a Fin bound")?),
-            vec![as_var(a)?],
-        )),
-        ("vec", args) => Ok(Expr::MkVec(
-            args.iter().map(as_var).collect::<Result<Vec<_>>>()?,
-        )),
         ("arr", args) => Ok(Expr::MkArr(
             args.iter().map(as_var).collect::<Result<Vec<_>>>()?,
         )),

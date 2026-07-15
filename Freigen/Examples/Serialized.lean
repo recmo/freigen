@@ -1,5 +1,4 @@
 import Freigen
-import Freigen.Examples.FiniteTypes
 
 /-! Golden serialized ASTs for every reflector-backed example in `Freigen.Examples`.
 Each guard deliberately records the complete serialized tree. -/
@@ -8,13 +7,13 @@ namespace Freigen.Ast.SerializedExamples
 
 /--
 info: (program nat
-  (source Freigen.Examples.Circuit.Basic 141 35 141 42
+  (source Freigen.Examples.Circuit.Basic 132 35 132 42
     (block
-      (source Freigen.Examples.Circuit.Basic 133 0 137 8
+      (source Freigen.Examples.Circuit.Basic 124 0 128 8
         (block
           (let f5 (fn nat nat) (lam (x0 nat)
             (block
-              (source Freigen.Examples.Circuit.Basic 121 0 124 8
+              (source Freigen.Examples.Circuit.Basic 112 0 115 8
                 (block
                   (let v1 nat (mul x0 x0))
                   (let v2 bool (le x0 v1))
@@ -29,7 +28,7 @@ info: (program nat
           ))
           (letrec rec18 (x6 nat) nat
             (block
-              (source Freigen.Examples.Circuit.Basic 126 0 131 18
+              (source Freigen.Examples.Circuit.Basic 117 0 122 18
                 (block
                   (let v7 nat (lit 0))
                   (let v8 bool (eq x6 v7))
@@ -82,13 +81,13 @@ info: (program nat
 
 /--
 info: (program nat
-  (source Freigen.Examples.Circuit.Basic 159 40 159 58
+  (source Freigen.Examples.Circuit.Basic 150 40 150 58
     (block
-      (source Freigen.Examples.Circuit.Basic 153 0 155 15
+      (source Freigen.Examples.Circuit.Basic 144 0 146 15
         (block
           (let f5 (fn nat nat) (lam (x0 nat)
             (block
-              (source Freigen.Examples.Circuit.Basic 121 0 124 8
+              (source Freigen.Examples.Circuit.Basic 112 0 115 8
                 (block
                   (let v1 nat (mul x0 x0))
                   (let v2 bool (le x0 v1))
@@ -125,13 +124,13 @@ info: (program nat
 
 /--
 info: (program nat
-  (source Freigen.Examples.Circuit.Basic 161 35 161 53
+  (source Freigen.Examples.Circuit.Basic 152 35 152 53
     (block
-      (source Freigen.Examples.Circuit.Basic 153 0 155 15
+      (source Freigen.Examples.Circuit.Basic 144 0 146 15
         (block
           (let f5 (fn nat nat) (lam (x0 nat)
             (block
-              (source Freigen.Examples.Circuit.Basic 121 0 124 8
+              (source Freigen.Examples.Circuit.Basic 112 0 115 8
                 (block
                   (let v1 nat (mul x0 x0))
                   (let v2 bool (le x0 v1))
@@ -168,13 +167,13 @@ info: (program nat
 
 /--
 info: (program nat
-  (source Freigen.Examples.Circuit.Basic 175 42 175 63
+  (source Freigen.Examples.Circuit.Basic 166 42 166 63
     (block
-      (source Freigen.Examples.Circuit.Basic 169 0 171 17
+      (source Freigen.Examples.Circuit.Basic 160 0 162 17
         (block
           (letrec rec11 (x0 nat) nat
             (block
-              (source Freigen.Examples.Circuit.Basic 163 0 167 29
+              (source Freigen.Examples.Circuit.Basic 154 0 158 29
                 (block
                   (let v1 nat (lit 0))
                   (let v2 bool (eq x0 v1))
@@ -222,13 +221,13 @@ info: (program nat
 
 /--
 info: (program nat
-  (source Freigen.Examples.Circuit.Basic 212 37 212 53
+  (source Freigen.Examples.Circuit.Basic 203 37 203 53
     (block
-      (source Freigen.Examples.Circuit.Basic 206 0 208 20
+      (source Freigen.Examples.Circuit.Basic 197 0 199 20
         (block
           (let f5 (fn nat nat) (lam (x0 nat)
             (block
-              (source Freigen.Examples.Circuit.Basic 121 0 124 8
+              (source Freigen.Examples.Circuit.Basic 112 0 115 8
                 (block
                   (let v1 nat (mul x0 x0))
                   (let v2 bool (le x0 v1))
@@ -243,7 +242,7 @@ info: (program nat
           ))
           (let f9 (fn nat nat) (lam (x6 nat)
             (block
-              (source Freigen.Examples.Circuit.Basic 202 0 204 15
+              (source Freigen.Examples.Circuit.Basic 193 0 195 15
                 (block
                   (let v7 nat (app f5 x6))
                   (let v8 nat (app f5 v7))
@@ -276,13 +275,13 @@ info: (program nat
 
 /--
 info: (program nat
-  (source Freigen.Examples.Circuit.Basic 224 37 224 53
+  (source Freigen.Examples.Circuit.Basic 215 37 215 53
     (block
-      (source Freigen.Examples.Circuit.Basic 217 0 220 15
+      (source Freigen.Examples.Circuit.Basic 208 0 211 15
         (block
           (let f4 (fn (prod nat nat) nat) (lam (x0 (prod nat nat))
             (block
-              (source Freigen.Examples.Circuit.Basic 214 0 215 14
+              (source Freigen.Examples.Circuit.Basic 205 0 206 14
                 (block
                   (let v1 nat (fst x0))
                   (let v2 nat (snd x0))
@@ -328,13 +327,13 @@ info: (program nat
 
 /--
 info: (program unit
-  (source Freigen.Examples.Circuit.Basic 247 45 247 69
+  (source Freigen.Examples.Circuit.Basic 238 45 238 69
     (block
-      (source Freigen.Examples.Circuit.Basic 241 0 243 18
+      (source Freigen.Examples.Circuit.Basic 232 0 234 18
         (block
           (let f5 (fn nat unit) (lam (x0 nat)
             (block
-              (source Freigen.Examples.Circuit.Basic 237 0 239 9
+              (source Freigen.Examples.Circuit.Basic 228 0 230 9
                 (block
                   (let v1 unit (lit unit))
                   (let v3 nat
@@ -354,7 +353,7 @@ info: (program unit
           ))
           (let f11 (fn bool unit) (lam (x6 bool)
             (block
-              (source Freigen.Examples.Circuit.Basic 237 0 239 9
+              (source Freigen.Examples.Circuit.Basic 228 0 230 9
                 (block
                   (let v7 unit (lit unit))
                   (let v9 bool
@@ -388,7 +387,7 @@ info: (program unit
 
 /--
 info: (program nat
-  (source Freigen.Examples.Circuit.Basic 254 30 254 52
+  (source Freigen.Examples.Circuit.Basic 245 30 245 52
     (block
       (source Init.Prelude 3722 2 3722 6
         (block
@@ -405,9 +404,9 @@ info: (program nat
 
 /--
 info: (program nat
-  (source Freigen.Examples.Circuit.Basic 266 35 266 72
+  (source Freigen.Examples.Circuit.Basic 257 35 257 72
     (block
-      (source Freigen.Examples.Circuit.Basic 113 0 114 43
+      (source Freigen.Examples.Circuit.Basic 104 0 105 43
         (block
           (let v0 unit (lit unit))
           (let v3 nat
@@ -432,9 +431,9 @@ info: (program nat
 
 /--
 info: (program unit
-  (source Freigen.Examples.Circuit.Basic 268 37 268 58
+  (source Freigen.Examples.Circuit.Basic 259 37 259 58
     (block
-      (source Freigen.Examples.Circuit.Basic 110 0 111 58
+      (source Freigen.Examples.Circuit.Basic 101 0 102 58
         (block
           (let v0 bool (lit true))
           (let v1 unit
@@ -449,34 +448,6 @@ info: (program unit
 -/
 #guard_msgs in
 #eval IO.println <| serialize Example.circRender Example.assertMacroReflected.1
-
-/--
-info: (program (fin 5)
-  (source Freigen.Examples.Circuit.Basic 283 38 283 51
-    (block
-      (source Freigen.Examples.Circuit.Basic 280 0 281 36
-        (block
-          (let v0 unit (lit unit))
-          (let v4 (fin 5)
-            (op hint v0
-              (branch b1
-                (block
-                  (let v2 nat (lit 3))
-                  (let v3 (fin 5) (fin-tag-5 v2))
-                  (ret v3)
-                )
-              )
-            )
-          )
-          (ret v4)
-        )
-      )
-    )
-  )
-)
--/
-#guard_msgs in
-#eval IO.println <| serialize Example.circRender Example.finHintMacroReflected.1
 
 /--
 info: (program nat
@@ -551,345 +522,5 @@ info: (program nat
 -/
 #guard_msgs in
 #eval IO.println <| serialize Example.circRender RecursionExample.sumReflected
-
-/--
-info: (program (fin 5)
-  (source Freigen.Examples.FiniteTypes 45 36 45 52
-    (block
-      (source Freigen.Examples.FiniteTypes 42 0 43 21
-        (block
-          (let v0 nat (lit 3))
-          (let v1 (fin 5) (fin-tag-5 v0))
-          (ret v1)
-        )
-      )
-    )
-  )
-)
--/
-#guard_msgs in
-#eval IO.println <| serialize Freigen.Examples.FiniteTypes.noOpRender
-  Freigen.Examples.FiniteTypes.finLiteralReflected.1
-
-/--
-info: (program (zmod 7)
-  (source Freigen.Examples.FiniteTypes 52 37 52 54
-    (block
-      (source Freigen.Examples.FiniteTypes 49 0 50 8
-        (block
-          (let v0 int (lit 3))
-          (let v1 (zmod 7) (zmod-tag-7 v0))
-          (ret v1)
-        )
-      )
-    )
-  )
-)
--/
-#guard_msgs in
-#eval IO.println <| serialize Freigen.Examples.FiniteTypes.noOpRender
-  Freigen.Examples.FiniteTypes.zmodLiteralReflected.1
-
-/--
-info: (program (fin 5)
-  (source Freigen.Examples.FiniteTypes 62 32 62 44
-    (block
-      (source Freigen.Examples.FiniteTypes 59 0 60 23
-        (block
-          (let f4 (fn (fin 5) (fin 5)) (lam (x0 (fin 5))
-            (block
-              (source Freigen.Examples.FiniteTypes 56 0 57 14
-                (block
-                  (let v1 nat (lit 1))
-                  (let v2 (fin 5) (fin-tag-5 v1))
-                  (let v3 (fin 5) (add x0 v2))
-                  (ret v3)
-                )
-              )
-            )
-          ))
-          (let v5 nat (lit 2))
-          (let v6 (fin 5) (fin-tag-5 v5))
-          (let v7 (fin 5) (app f4 v6))
-          (ret v7)
-        )
-      )
-    )
-  )
-)
--/
-#guard_msgs in
-#eval IO.println <| serialize Freigen.Examples.FiniteTypes.noOpRender
-  Freigen.Examples.FiniteTypes.addFinReflected.1
-
-/--
-info: (program nat
-  (source Freigen.Examples.FiniteTypes 72 34 72 48
-    (block
-      (source Freigen.Examples.FiniteTypes 69 0 70 25
-        (block
-          (let f2 (fn (fin 5) nat) (lam (x0 (fin 5))
-            (block
-              (source Freigen.Examples.FiniteTypes 66 0 67 12
-                (block
-                  (let v1 nat (fin-erase-5 x0))
-                  (ret v1)
-                )
-              )
-            )
-          ))
-          (let v3 nat (lit 2))
-          (let v4 (fin 5) (fin-tag-5 v3))
-          (let v5 nat (app f2 v4))
-          (ret v5)
-        )
-      )
-    )
-  )
-)
--/
-#guard_msgs in
-#eval IO.println <| serialize Freigen.Examples.FiniteTypes.noOpRender
-  Freigen.Examples.FiniteTypes.finValueReflected.1
-
-/--
-info: (program nat
-  (source Freigen.Examples.FiniteTypes 88 37 88 54
-    (block
-      (source Freigen.Examples.FiniteTypes 85 0 86 21
-        (block
-          (let f2 (fn (fin 5) nat) (lam (x0 (fin 5))
-            (block
-              (source Freigen.Examples.FiniteTypes 76 0 80 12
-                (block
-                  (let v1 nat (fin-erase-5 x0))
-                  (ret v1)
-                )
-              )
-            )
-          ))
-          (let f5 (fn nat nat) (lam (x3 nat)
-            (block
-              (source Freigen.Examples.FiniteTypes 82 0 83 44
-                (block
-                  (let v4 nat (lit 0))
-                  (ret v4)
-                )
-              )
-            )
-          ))
-          (let v6 nat (lit 4))
-          (let v7 nat (app f5 v6))
-          (ret v7)
-        )
-      )
-    )
-  )
-)
--/
-#guard_msgs in
-#eval IO.println <| serialize Freigen.Examples.FiniteTypes.noOpRender
-  Freigen.Examples.FiniteTypes.symbolicFinReflected.1
-
-/--
-info: (program (zmod 7)
-  (source Freigen.Examples.FiniteTypes 98 33 98 46
-    (block
-      (source Freigen.Examples.FiniteTypes 95 0 96 11
-        (block
-          (let f4 (fn (zmod 7) (zmod 7)) (lam (x0 (zmod 7))
-            (block
-              (source Freigen.Examples.FiniteTypes 92 0 93 14
-                (block
-                  (let v1 int (lit 1))
-                  (let v2 (zmod 7) (zmod-tag-7 v1))
-                  (let v3 (zmod 7) (add x0 v2))
-                  (ret v3)
-                )
-              )
-            )
-          ))
-          (let v5 int (lit 2))
-          (let v6 (zmod 7) (zmod-tag-7 v5))
-          (let v7 (zmod 7) (app f4 v6))
-          (ret v7)
-        )
-      )
-    )
-  )
-)
--/
-#guard_msgs in
-#eval IO.println <| serialize Freigen.Examples.FiniteTypes.noOpRender
-  Freigen.Examples.FiniteTypes.addZModReflected.1
-
-/--
-info: (program int
-  (source Freigen.Examples.FiniteTypes 108 35 108 50
-    (block
-      (source Freigen.Examples.FiniteTypes 105 0 106 13
-        (block
-          (let f2 (fn (zmod 7) int) (lam (x0 (zmod 7))
-            (block
-              (source Freigen.Examples.FiniteTypes 102 0 103 30
-                (block
-                  (let v1 int (zmod-erase-7 x0))
-                  (ret v1)
-                )
-              )
-            )
-          ))
-          (let v3 int (lit 3))
-          (let v4 (zmod 7) (zmod-tag-7 v3))
-          (let v5 int (app f2 v4))
-          (ret v5)
-        )
-      )
-    )
-  )
-)
--/
-#guard_msgs in
-#eval IO.println <| serialize Freigen.Examples.FiniteTypes.noOpRender
-  Freigen.Examples.FiniteTypes.zmodValueReflected.1
-
-/--
-info: (program int
-  (source Freigen.Examples.FiniteTypes 114 39 114 58
-    (block
-      (source Freigen.Examples.FiniteTypes 111 0 112 27
-        (block
-          (let v0 int (lit -10))
-          (ret v0)
-        )
-      )
-    )
-  )
-)
--/
-#guard_msgs in
-#eval IO.println <| serialize Freigen.Examples.FiniteTypes.noOpRender
-  Freigen.Examples.FiniteTypes.intArithmeticReflected.1
-
-/--
-info: (program (zmod 0)
-  (source Freigen.Examples.FiniteTypes 121 44 121 68
-    (block
-      (source Freigen.Examples.FiniteTypes 118 0 119 33
-        (block
-          (let v0 int (lit -2))
-          (let v1 (zmod 0) (zmod-tag-0 v0))
-          (ret v1)
-        )
-      )
-    )
-  )
-)
--/
-#guard_msgs in
-#eval IO.println <| serialize Freigen.Examples.FiniteTypes.noOpRender
-  Freigen.Examples.FiniteTypes.zmodZeroArithmeticReflected.1
-
-/--
-info: (program (fin 5)
-  (source Freigen.Examples.FiniteTypes 133 38 133 56
-    (block
-      (source Freigen.Examples.FiniteTypes 130 0 131 38
-        (block
-          (let f1 (fn (fin 5) (fin 5)) (lam (x0 (fin 5))
-            (block
-              (source Freigen.Examples.FiniteTypes 125 0 128 8
-                (block
-                  (ret x0)
-                )
-              )
-            )
-          ))
-          (let v2 nat (lit 4))
-          (let v3 (fin 5) (fin-tag-5 v2))
-          (let v4 (fin 5) (app f1 v3))
-          (ret v4)
-        )
-      )
-    )
-  )
-)
--/
-#guard_msgs in
-#eval IO.println <| serialize Freigen.Examples.FiniteTypes.noOpRender
-  Freigen.Examples.FiniteTypes.dependentFinReflected.1
-
-/--
-info: (program (zmod 7)
-  (source Freigen.Examples.FiniteTypes 143 39 143 58
-    (block
-      (source Freigen.Examples.FiniteTypes 140 0 141 26
-        (block
-          (let f1 (fn (zmod 7) (zmod 7)) (lam (x0 (zmod 7))
-            (block
-              (source Freigen.Examples.FiniteTypes 137 0 138 8
-                (block
-                  (ret x0)
-                )
-              )
-            )
-          ))
-          (let v2 int (lit 6))
-          (let v3 (zmod 7) (zmod-tag-7 v2))
-          (let v4 (zmod 7) (app f1 v3))
-          (ret v4)
-        )
-      )
-    )
-  )
-)
--/
-#guard_msgs in
-#eval IO.println <| serialize Freigen.Examples.FiniteTypes.noOpRender
-  Freigen.Examples.FiniteTypes.dependentZModReflected.1
-
-/--
-info: (program nat
-  (source Freigen.Examples.FiniteTypes 165 47 165 74
-    (block
-      (source Freigen.Examples.FiniteTypes 153 0 156 21
-        (block
-          (let f2 (fn (fin 5) nat) (lam (x0 (fin 5))
-            (block
-              (source Freigen.Examples.FiniteTypes 147 0 151 12
-                (block
-                  (let v1 nat (fin-erase-5 x0))
-                  (ret v1)
-                )
-              )
-            )
-          ))
-          (let f5 (fn (fin 7) nat) (lam (x3 (fin 7))
-            (block
-              (source Freigen.Examples.FiniteTypes 147 0 151 12
-                (block
-                  (let v4 nat (fin-erase-7 x3))
-                  (ret v4)
-                )
-              )
-            )
-          ))
-          (let v6 nat (lit 3))
-          (let v7 (fin 5) (fin-tag-5 v6))
-          (let v8 nat (app f2 v7))
-          (let v9 nat (lit 4))
-          (let v10 (fin 7) (fin-tag-7 v9))
-          (let v11 nat (app f5 v10))
-          (let v12 nat (add v8 v11))
-          (ret v12)
-        )
-      )
-    )
-  )
-)
--/
-#guard_msgs in
-#eval IO.println <| serialize Freigen.Examples.FiniteTypes.noOpRender
-  Freigen.Examples.FiniteTypes.twoFinSpecializationsReflected.1
 
 end Freigen.Ast.SerializedExamples

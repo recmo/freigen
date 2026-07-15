@@ -209,12 +209,6 @@ impl<'p> Interpreter<'p> {
                     .collect::<Result<Vec<_>>>()?;
                 eval_pop(op, args)
             }
-            Expr::MkVec(values) => Ok(Value::Vec(
-                values
-                    .iter()
-                    .map(|value| lookup(env, value))
-                    .collect::<Result<Vec<_>>>()?,
-            )),
             Expr::MkArr(values) => Ok(Value::Array(
                 values
                     .iter()
@@ -292,8 +286,6 @@ fn eval_un(op: UnOp, value: Value) -> Result<Value> {
         (UnOp::Snd, Value::Pair(_, right)) => Ok(*right),
         (UnOp::Inl, value) => Ok(Value::Inl(Box::new(value))),
         (UnOp::Inr, value) => Ok(Value::Inr(Box::new(value))),
-        (UnOp::ToArray, Value::Vec(values)) => Ok(Value::Array(values)),
-        (UnOp::FinVal, Value::Fin { val, .. }) => Ok(Value::nat(val)),
         (op, value) => malformed(format!("unary op {op:?} applied to `{value}`")),
     }
 }
@@ -338,12 +330,10 @@ fn eval_pop(op: &POp, mut args: Vec<Value>) -> Result<Value> {
                 else_
             })
         }
-        POp::VGet | POp::AGet if args.len() == 2 => {
+        POp::AGet if args.len() == 2 => {
             let index = as_nat(args.pop().unwrap())?.to_usize().ok_or(Error::Fail)?;
             match args.pop().unwrap() {
-                Value::Vec(values) | Value::Array(values) => {
-                    values.get(index).cloned().ok_or(Error::Fail)
-                }
+                Value::Array(values) => values.get(index).cloned().ok_or(Error::Fail),
                 other => malformed(format!("indexing `{other}`")),
             }
         }

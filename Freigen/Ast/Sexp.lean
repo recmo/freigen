@@ -13,8 +13,6 @@ def Tp0.sexp : Tp0 → String
   | .int => "int"
   | .bool => "bool"
   | .unit => "unit"
-  | .fin n => s!"(fin {n})"
-  | .zmod n => s!"(zmod {n})"
   | .prod a b => s!"(prod {a.sexp} {b.sexp})"
 
 def Tp.sexp : Tp → String
@@ -26,12 +24,6 @@ def Un.sexp : Un a b → String
   | .fst => "fst"
   | .snd => "snd"
 
-def CheckedCast.sexp : CheckedCast a b → String
-  | .finErase n => s!"fin-erase-{n}"
-  | .finTag n => s!"fin-tag-{n}"
-  | .zmodErase n => s!"zmod-erase-{n}"
-  | .zmodTag n => s!"zmod-tag-{n}"
-
 def Bin.sexp : Bin a b c → String
   | .add => "add"
   | .sub => "sub"
@@ -39,16 +31,8 @@ def Bin.sexp : Bin a b c → String
   | .intAdd => "add"
   | .intSub => "sub"
   | .intMul => "mul"
-  | .finAdd _ => "add"
-  | .finSub _ => "sub"
-  | .finMul _ => "mul"
-  | .zmodAdd _ => "add"
-  | .zmodSub _ => "sub"
-  | .zmodMul _ => "mul"
   | .eq => "eq"
   | .intEq => "eq"
-  | .finEq _ => "eq"
-  | .zmodEq _ => "eq"
   | .lt => "lt"
   | .le => "le"
   | .and => "and"
@@ -92,10 +76,6 @@ private partial def renderExpr {H : Signature} (render : RenderSpec H) :
       let (rest, next) := renderExpr render (k name) (n + 1)
       (s!"(let {name} unit (lit unit))\n{rest}", next)
   | r, α, .un (b := b) op value k, n =>
-      let name := fresh "v" n
-      let (rest, next) := renderExpr render (k name) (n + 1)
-      (s!"(let {name} {b.sexp} ({op.sexp} {value}))\n{rest}", next)
-  | r, α, .checkedCast (b := b) op value k, n =>
       let name := fresh "v" n
       let (rest, next) := renderExpr render (k name) (n + 1)
       (s!"(let {name} {b.sexp} ({op.sexp} {value}))\n{rest}", next)

@@ -22,4 +22,3 @@ cargo test
 
 The suite covers source annotations, expression conditionals, functions, inline recursion, dynamic
 operation branches, and parsing/executing the artifact emitted by the downstream Lean client.
-Poseidon remains a Lean known-answer target until the reflected AST has a `ZMod` representation.

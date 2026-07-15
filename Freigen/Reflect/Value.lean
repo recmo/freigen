@@ -31,25 +31,7 @@ private def intValue? (e : Lean.Expr) : MetaM (Option Int) := do
   | .app (.const ``Int.negSucc _) (.lit (.natVal n)) => return some (Int.negSucc n)
   | _ => return none
 
-private def finProjection? (e : Lean.Expr) : MetaM (Option (Lean.Expr × Lean.Expr)) := do
-  let .app (.app (.const name _) bound) value := e | return none
-  if name == ``Fin.val then return some (bound, value)
-  return none
-
-private def zmodProjection? (e : Lean.Expr) : MetaM (Option (Lean.Expr × Lean.Expr)) := do
-  let some cast := e.find? fun subterm =>
-      subterm.getAppFn.isConstOf zmodCastName ||
-        subterm.getAppFn.isConstOf ``ZModCarrier.toInt
-    | return none
-  let args := cast.getAppArgs
-  unless args.size >= 2 do return none
-  return some (args[args.size - 2]!, args[args.size - 1]!)
-
 /-! ## Match semantic values -/
-
-private inductive CheckedInput where
-  | semantic (tp value : Lean.Expr)
-  | intLiteral (value : Int)
 
 private inductive ValueNode where
   | atom (code : Lean.Expr)
@@ -57,7 +39,6 @@ private inductive ValueNode where
   | intLit (value : Int)
   | boolLit (value : Bool)
   | unitLit
-  | checkedCast (input : CheckedInput) (cast resultTp : Lean.Expr)
   | unary (inputTp input op resultTp : Lean.Expr)
   | binary (leftTp left rightTp right op resultTp : Lean.Expr)
 
@@ -84,14 +65,6 @@ private def matchBinary? (tp value : Lean.Expr) : MetaM (Option ValueNode) := do
       pure <| some (Lean.mkConst (if isAdd then ``Bin.intAdd else if isSub then ``Bin.intSub
         else if isMul then ``Bin.intMul else ``Bin.intEq))
     else match operandTp with
-      | .app (.const ``Tp0.fin _) n =>
-          pure <| some (← mkAppM
-            (if isAdd then ``Bin.finAdd else if isSub then ``Bin.finSub
-              else if isMul then ``Bin.finMul else ``Bin.finEq) #[n])
-      | .app (.const ``Tp0.zmod _) n =>
-          pure <| some (← mkAppM
-            (if isAdd then ``Bin.zmodAdd else if isSub then ``Bin.zmodSub
-              else if isMul then ``Bin.zmodMul else ``Bin.zmodEq) #[n])
       | _ => pure none
   let some op := op? | return none
   return some (.binary operandTp left operandTp right op (← mkAppM ``Tp.base #[tp]))
@@ -106,33 +79,9 @@ private def matchValue (tp value : Lean.Expr) (atoms : Array ReifiedAtom) :
     if let some n ← getNatValue? reduced then return .natLit n
   if ← isDefEq tp (mkConst ``Tp0.int) then
     if let some n ← intValue? reduced then return .intLit n
-  if let some (modulus, carrier) ← zmodProjection? value then
-    if ← isDefEq tp (mkConst ``Tp0.int) then
-      return .checkedCast (.semantic (← mkAppM ``Tp0.zmod #[modulus]) carrier)
-        (← mkAppM ``CheckedCast.zmodErase #[modulus]) (mkConst ``Tp.int)
-  if let some (bound, carrier) ← finProjection? value then
-    if ← isDefEq tp (mkConst ``Tp0.nat) then
-      return .checkedCast (.semantic (← mkAppM ``Tp0.fin #[bound]) carrier)
-        (← mkAppM ``CheckedCast.finErase #[bound]) (mkConst ``Tp.nat)
   if ← isDefEq tp (mkConst ``Tp0.bool) then
     if let some b ← boolValue? reduced then return .boolLit b
   if ← isDefEq tp (mkConst ``Tp0.unit) then return .unitLit
-  if let .app (.const ``Tp0.fin _) bound := tp then
-    let erased ← whnf (← mkAppM ``Fin.val #[reduced])
-    if let some n ← getNatValue? erased then
-      return .checkedCast (.semantic (mkConst ``Tp0.nat) (mkNatLit n))
-        (← mkAppM ``CheckedCast.finTag #[bound]) (← mkAppM ``Tp.base #[tp])
-  if let .app (.const ``Tp0.zmod _) modulus := tp then
-    let modulusValue? ← getNatValue? (← whnf modulus)
-    let erased? : Option Int ← match modulusValue? with
-      | some 0 => intValue? reduced
-      | some (_ + 1) => do
-          let erased ← whnf (← mkAppM ``Fin.val #[reduced])
-          pure ((← getNatValue? erased).map Int.ofNat)
-      | none => pure none
-    if let some n := erased? then
-      return .checkedCast (.intLiteral n) (← mkAppM ``CheckedCast.zmodTag #[modulus])
-        (← mkAppM ``Tp.base #[tp])
   let fn := value.getAppFn.constName?
   let args := value.getAppArgs
   if fn == some ``Prod.fst || fn == some ``Prod.snd then
@@ -186,18 +135,6 @@ partial def emitGenericValue (H V r tp value : Lean.Expr)
         some (mkConst (if b then ``true else ``false)), some cont]
   | .unitLit => withResult `unit (mkConst ``Tp.unit) fun cont => do
       mkAppOptM ``Expr.unitLit #[some H, some V, some r, none, some cont]
-  | .checkedCast input cast resultTp =>
-      let emitCast (inputCode : Lean.Expr) : MetaM Lean.Expr := do
-        withResult `result resultTp fun cont => do
-          mkAppOptM ``Expr.checkedCast
-            #[some H, some V, some r, none, none, none, some cast, some inputCode, some cont]
-      match input with
-      | .semantic inputTp input => emitGenericValue H V r inputTp input atoms emitCast
-      | .intLiteral input =>
-          withLocalDeclD `input (mkApp V (mkConst ``Tp.int)) fun inputCode => do
-            let cont ← mkLambdaFVars #[inputCode] (← emitCast inputCode)
-            mkAppOptM ``Expr.intLit
-              #[some H, some V, some r, none, some (Lean.mkIntLit input), some cont]
   | .unary inputTp input op resultTp =>
       emitGenericValue H V r inputTp input atoms fun inputCode => do
         withResult `result resultTp fun cont => do

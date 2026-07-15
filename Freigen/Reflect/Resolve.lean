@@ -1,4 +1,4 @@
-import Freigen.Reflect.Finite
+import Freigen.Reflect.Registry
 import Lean.Elab.SyntheticMVars
 
 namespace Freigen
@@ -28,14 +28,12 @@ private partial def instantiateRegistered (decl : Name)
     unless (← m.isAssigned) do
       let ty ← instantiateMVars (← m.getType)
       if ty.isAppOfArity ``ReprSpec 1 then
-        let α := ty.getArg! 0
-        m.assign (← resolve astReprAttr ty α)
+        m.assign (← resolve astReprAttr ty)
       else
         throwError "unresolved registry parameter{indentExpr ty}"
   pure (← instantiateMVars (mkAppN c xs))
 where
-  resolve (attr : TagAttribute) (expected : Lean.Expr) (index : Lean.Expr) : MetaM Lean.Expr := do
-    if let some repr ← preciseFiniteRepr? index then return repr
+  resolve (attr : TagAttribute) (expected : Lean.Expr) : MetaM Lean.Expr := do
     let saved ← get
     for candidate in ← registryEntries attr do
       try
@@ -53,7 +51,6 @@ private def resolveRegistered (attr : TagAttribute) (expected : Lean.Expr) : Met
 
 /-- Resolve an explicit representation declaration for a host type. -/
 def resolveRepr (α : Lean.Expr) : MetaM Lean.Expr := do
-  if let some repr ← preciseFiniteRepr? α then return repr
   let expected ← mkAppM ``ReprSpec #[α]
   let candidates ← registryEntries astReprAttr
   try resolveRegistered astReprAttr expected
@@ -78,9 +75,6 @@ def resolveReprFor (α targetTp relates : Lean.Expr) : MetaM Lean.Expr := do
     if ← agrees preferred then return preferred
   catch _ => pure ()
   set saved
-  if let some precise ← preciseFiniteReprForTp? targetTp then
-    if ← agrees precise then return precise
-    set saved
   for candidate in ← registryEntries astReprAttr do
     let candidateState ← get
     try
