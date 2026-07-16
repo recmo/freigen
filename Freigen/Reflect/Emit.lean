@@ -8,359 +8,413 @@ namespace Reflector
 
 open Lean Meta Elab Term
 
-/-! ## Helper construction and plan execution -/
+/-! ## Definition-table construction
+
+Pass one has already fixed every specialization.  Execution can therefore compute the complete
+`DefCtx` before emitting a body, use typed de Bruijn references while emitting, and build the
+`Defs` telescope once in dependency order.  There is no nested program continuation and no
+second denotation traversal.
+-/
 
 structure BuiltHelper extends HelperSemantics where
-  argTp : Lean.Expr
-  resultTp : Lean.Expr
-  body : Lean.Expr
+  semanticBody : Lean.Expr
   genericBody : Lean.Expr
+  dispatch : MVarId
 
-/-! ### Recursive helper construction -/
+structure TableState where
+  scope : Lean.Expr
+  extension : Lean.Expr
+  semanticDefs : Lean.Expr
+  genericDefs : Lean.Expr
+  helpers : Array Helper := #[]
+  dispatches : Array MVarId := #[]
 
-private def buildRecursiveHelper (plan : Plan) (target : TargetEnv) (V : Lean.Expr)
-    (helpers : Array Helper) (spec : Specialization) (arg : ValueParam)
-    (shape : NatBRecShape) :
-    MetaM BuiltHelper := do
-  let argRepr := arg.repr
-  let argTp := Lean.mkConst ``Tp.nat
-  let resultTp ← reprTp spec.resultRepr
-  let resultRel ← mkAppM ``ReprSpec.relates #[spec.resultRepr]
-  let targetArgType ← mkAppM ``Tp.denote #[target.monad, argTp]
-  let slot ← recursionSlot argTp resultTp
-  let bodyResultType ← mkAppM ``Expr
-    #[plan.targetSig, target.values, slot, resultTp]
-  let baseMVar ← mkFreshExprMVar bodyResultType
-  let stepMVar ← mkFreshExprMVar (← mkArrow (mkConst ``Nat) bodyResultType)
-  let range? ← match spec.sourceRange? with
-    | some range => mkAppM ``Option.some #[range]
-    | none => pure (mkApp (mkConst ``Option.none [Level.zero]) (mkConst ``SourceRange))
-  let body ← mkAppM ``Expr.natBrecBody #[range?, baseMVar, stepMVar]
-  let baseFn := mkApp shape.functional (mkNatLit 0)
-  let .forallE _ belowZero _ _ ← whnf (← inferType baseFn)
-    | throwError "reflect%: malformed zero argument of `Nat.brecOn` functional"
-  let .const ``PUnit [belowLevel] ← whnf belowZero
-    | throwError "reflect%: zero argument of `Nat.brecOn` functional is not `PUnit`"
-  let baseSource := mkApp baseFn (mkConst ``PUnit.unit [belowLevel])
-  let base ← emitComp {
-    plan, target
-    goal := { sourceType := spec.resultType, targetTp := resultTp, relates := resultRel }
-    mode := .recursive { spec, body }
-    V, Φ := mkConst ``True
-    helpers
-  } baseSource
-  baseMVar.mvarId!.assign base.code
-  let baseWitness := base.sound
-  let ⟨stepCode, stepGeneric, stepSound⟩ ←
-    withLocalDeclD `genericPred (mkApp V argTp) fun genericPred =>
-    withLocalDeclD `pred (mkConst ``Nat) fun pred => do
-    let sourceCall ← mkAppM ``Nat.brecOn #[pred, shape.functional]
-    let go ← mkAppM ``Nat.brecOn.go #[pred, shape.functional]
-    let tail ← mkAppM ``PProd.snd #[go]
-    let below ← mkAppM ``PProd.mk #[sourceCall, tail]
-    let succ ← mkAppM ``Nat.succ #[pred]
-    let stepSource ← mkAppM' shape.functional #[succ, below]
-    let callType ← Construct.recCallType {
-      sourceSig := plan.sourceSig, targetSig := plan.targetSig, argumentTp := argTp
-      resultTp, compat := plan.compat, body, assumption := mkConst ``True
-      sourceType := spec.resultType, relates := resultRel, sourceCall, sourceArgument := pred
-    }
-    withLocalDeclD `ih callType fun ih => do
-      let predRel ← mkAppM ``ReprSpec.relates #[argRepr, pred, pred]
-      let predRelated ← mkExpectedTypeHint (← mkAppM ``Eq.refl #[pred]) predRel
-      let atoms : Array RelatedAtom := #[{
-        source := pred, target := pred,
-        related := mkLambda `h .default (mkConst ``True) predRelated }]
-      let emitted ← emitComp {
-        plan, target
-        goal := { sourceType := spec.resultType, targetTp := resultTp, relates := resultRel }
-        mode := .recursive { spec, body, call? := some {
-          sourceCall, sourceArg := pred, targetArg := pred, adequate := ih } }
-        V, Φ := mkConst ``True
-        atoms
-        genericAtoms := #[{ semantic := pred, code := genericPred }]
-        helpers
-      } stepSource
-      let witness := emitted.sound
-      pure (← mkLambdaFVars #[pred] emitted.code,
-        ← mkLambdaFVars #[genericPred] emitted.generic,
-        ← mkLambdaFVars #[pred, ih] witness)
-  stepMVar.mvarId!.assign stepCode
-  let body ← instantiateMVars body
-  let sourceFn ← mkConstWithFreshMVarLevels spec.name
-  let brecFn ← withLocalDeclD `n (mkConst ``Nat) fun n => do
-    mkLambdaFVars #[n] (← mkAppM ``Nat.brecOn #[n, shape.functional])
-  let sourceEqType ← mkAppM ``Eq #[sourceFn, brecFn]
-  let sourceEq ← mkExpectedTypeHint (← mkAppM ``Eq.refl #[sourceFn]) sourceEqType
-  let semanticAdequate ← Construct.natBrecAdequate {
-    sourceSig := plan.sourceSig, targetSig := plan.targetSig, compat := plan.compat
-    sourceType := spec.resultType, resultTp, relates := resultRel, sourceFunction := sourceFn
-    functional := shape.functional, sourceEquality := sourceEq, range := range?
-    base := base.code, step := stepCode, baseSound := baseWitness, stepSound
-  }
-  let semanticTarget ← mkAppM ``ITree.CompE.mrec
-    #[← withLocalDeclD `x targetArgType fun x => do
-      mkLambdaFVars #[x] (← mkAppM ``Expr.denote #[mkApp body x])]
-  let genericBody ← withLocalDeclD `genericN (mkApp V argTp) fun genericN => do
-    mkLambdaFVars #[genericN]
-      (← mkAppM ``Expr.natBrecCode #[range?, base.generic, stepGeneric, genericN])
-  let semanticBody ← withLocalDeclD `n targetArgType fun n => do
-    mkLambdaFVars #[n]
-      (← mkAppM ``Expr.natBrecCode #[range?, base.code, stepCode, n])
-  let targetFn ← mkAppM ``ITree.CompE.mrec
-    #[← withLocalDeclD `x targetArgType fun x => do
-      mkLambdaFVars #[x] (← mkAppM ``Expr.denote #[mkApp semanticBody x])]
-  let targetEq ← mkExpectedTypeHint
-    (← mkAppM ``Expr.mrec_natBrecBody_eq_code #[range?, base.code, stepCode])
-    (← mkAppM ``Eq #[semanticTarget, targetFn])
-  let adequate ← mkAppM ``Adequate.congrTarget #[targetEq, semanticAdequate]
-  pure ({
-    spec := spec
-    target := targetFn
-    adequate := adequate
-    argTp := argTp
-    resultTp := resultTp
-    body := semanticBody
-    genericBody := genericBody
-  } : BuiltHelper)
+private def mkDefSig (input output : Lean.Expr) : MetaM Lean.Expr :=
+  mkAppM ``DefSig.mk #[Lean.mkConst ``Tp.unit, input, output]
 
-/-! ### Ordinary helper construction -/
+private def specializationTypes (spec : Specialization) : MetaM (Lean.Expr × Lean.Expr) := do
+  let params := spec.valueParams
+  let codes ← params.mapM fun param => mkAppM ``ReprSpec.code #[param.repr]
+  let input ← match codes with
+    | #[input] => pure input
+    | #[left, right] => mkAppM ``Tp.prod #[left, right]
+    | _ => throwError "reflect%: internal: helper boundary has unsupported value arity"
+  pure (input, ← reprTp spec.resultRepr)
 
-private def buildOrdinaryHelper (plan : Plan) (target : TargetEnv) (V : Lean.Expr)
-    (helpers : Array Helper) (spec : Specialization) (first : ValueParam)
-    (second? : Option ValueParam) :
-    MetaM BuiltHelper := do
-  let valueParams := match second? with
-    | none => #[first]
-    | some second => #[first, second]
-  let arity := valueParams.size
-  let argCodes ← valueParams.mapM fun param => mkAppM ``ReprSpec.code #[param.repr]
-  let argCode ← if arity == 1 then pure argCodes[0]! else
-    mkAppM ``Tp0.prod #[argCodes[0]!, argCodes[1]!]
-  let argTp ← mkAppM ``Tp.base #[argCode]
-  let targetArgType ← mkAppM ``Tp.denote #[target.monad, argTp]
-  let sourceArgType ← if arity == 1 then pure valueParams[0]!.type else
-    mkAppM ``Prod #[valueParams[0]!.type, valueParams[1]!.type]
-  let resultTp ← reprTp spec.resultRepr
-  let resultRel ← mkAppM ``ReprSpec.relates #[spec.resultRepr]
-  let argRels ← valueParams.mapM fun param => mkAppM ``ReprSpec.relates #[param.repr]
-  let sourceDecls := valueParams.map fun param => (`sourceArg, fun _ => pure param.type)
-  let ⟨bodyCode, genericBody, targetFn, adequateCurried⟩ ←
+private def fullContext (specs : Array Specialization) : MetaM Lean.Expr := do
+  let mut ctx ← mkAppOptM ``List.nil #[some (Lean.mkConst ``DefSig)]
+  for spec in specs do
+    let (input, output) ← specializationTypes spec
+    ctx ← mkAppM ``List.cons #[← mkDefSig input output, ctx]
+  pure ctx
+
+private def extensionFor (small : Lean.Expr) (future : Array Specialization) : MetaM Lean.Expr := do
+  let mut extension ← mkAppOptM ``Extension.refl #[some small]
+  for spec in future do
+    let (input, output) ← specializationTypes spec
+    let decl ← mkDefSig input output
+    extension ← mkAppOptM ``Extension.step #[none, none, some decl, some extension]
+  pure extension
+
+private def semanticClosure (fullCtx extension ref : Lean.Expr) : MetaM Lean.Expr := do
+  let lifted ← mkAppM ``DefRef.lift #[extension, ref]
+  let packed ← mkAppOptM ``Packed.pack
+    #[some fullCtx, some (Lean.mkConst ``Tp.unit), some (Lean.mkConst ``Unit.unit)]
+  mkAppM ``Closure.mk #[lifted, packed]
+
+private def weakenHelper (decl : Lean.Expr) (helper : Helper) : MetaM Helper := do
+  pure { helper with ref := ← mkAppM ``DefRef.weaken #[decl, helper.ref] }
+
+private def sourceArgumentType (params : Array ValueParam) : MetaM Lean.Expr :=
+  match params with
+  | #[param] => pure param.type
+  | #[left, right] => mkAppM ``Prod #[left.type, right.type]
+  | _ => throwError "reflect%: internal: helper boundary has unsupported value arity"
+
+private def splitTargetArgument (params : Array ValueParam) (argument : Lean.Expr) :
+    MetaM (Array Lean.Expr) :=
+  match params with
+  | #[_] => pure #[argument]
+  | #[_, _] => do
+      pure #[← mkAppM ``Prod.fst #[argument], ← mkAppM ``Prod.snd #[argument]]
+  | _ => throwError "reflect%: internal: helper boundary has unsupported value arity"
+
+private def splitSourceArgument (params : Array ValueParam) (argument : Lean.Expr) :
+    MetaM (Array Lean.Expr) :=
+  splitTargetArgument params argument
+
+private def argumentRelation (ctx : Lean.Expr) (params : Array ValueParam)
+    (sourceType targetType : Lean.Expr) :
+    MetaM Lean.Expr := do
+  let relations ← params.mapM fun param =>
+    mkAppOptM ``ReprSpec.relates #[none, some param.repr, some ctx]
+  match params with
+  | #[_] => pure relations[0]!
+  | #[_, _] =>
+      withLocalDeclD `source sourceType fun source => do
+      withLocalDeclD `target targetType fun target => do
+        let relation ← mkAppM ``And #[
+          ← mkAppM' relations[0]! #[← mkAppM ``Prod.fst #[source], ← mkAppM ``Prod.fst #[target]],
+          ← mkAppM' relations[1]! #[← mkAppM ``Prod.snd #[source], ← mkAppM ``Prod.snd #[target]]]
+        mkLambdaFVars #[source, target] relation
+  | _ => throwError "reflect%: internal: helper boundary has unsupported value arity"
+
+private def buildOrdinaryHelper (plan : Plan) (target : TargetEnv)
+    (V scope extension selfRef : Lean.Expr) (helpers : Array Helper)
+    (spec : Specialization) : MetaM BuiltHelper := do
+  let params := spec.valueParams
+  let (argTp, resultTp) ← specializationTypes spec
+  let targetArgType := mkApp target.values argTp
+  let sourceArgType ← sourceArgumentType params
+  let resultRel ← mkAppOptM ``ReprSpec.relates
+    #[none, some spec.resultRepr, some target.ctx]
+  let argRel ← argumentRelation target.ctx params sourceArgType targetArgType
+  let self ← semanticClosure target.ctx extension selfRef
+  let sourceDecls := params.map fun param => (`sourceArg, fun _ => pure param.type)
+  let ⟨semanticBody, genericBody, curriedSound⟩ ←
     withLocalDeclsD sourceDecls fun sourceArgs =>
+    withLocalDeclD `genericCaptured (mkApp V (Lean.mkConst ``Tp.unit)) fun genericCaptured =>
     withLocalDeclD `genericArg (mkApp V argTp) fun genericArg =>
+    withLocalDeclD `captured (mkApp target.values (Lean.mkConst ``Tp.unit)) fun captured =>
     withLocalDeclD `targetArg targetArgType fun targetArg => do
-      let targetArgs ← if arity == 1 then pure #[targetArg] else
-        pure #[← mkAppM ``Prod.fst #[targetArg], ← mkAppM ``Prod.snd #[targetArg]]
-      let relations ← sourceArgs.mapIdxM fun i sourceArg =>
-        mkAppM' argRels[i]! #[sourceArg, targetArgs[i]!]
-      let Φ ← if arity == 1 then pure relations[0]! else
-        mkAppM ``And #[relations[0]!, relations[1]!]
+      let targetArgs ← splitTargetArgument params targetArg
+      let relations ← params.mapIdxM fun index param => do
+        mkAppM' (← mkAppOptM ``ReprSpec.relates
+          #[none, some param.repr, some target.ctx])
+          #[sourceArgs[index]!, targetArgs[index]!]
+      let Φ ← match relations with
+        | #[relation] => pure relation
+        | #[left, right] => mkAppM ``And #[left, right]
+        | _ => throwError "reflect%: internal: malformed helper relation"
       let fullArgs ← spec.reconstructArgs sourceArgs
       let sourceCall := mkAppN (← mkConstWithFreshMVarLevels spec.name) fullArgs
-      let some bodySource ← unfoldDefinition? sourceCall
+      let some sourceBody ← unfoldDefinition? sourceCall
         | throwError "reflect%: cannot unfold helper `{spec.name}`"
-      let atoms : Array RelatedAtom ← sourceArgs.mapIdxM fun i sourceArg => do
+      let atoms : Array RelatedAtom ← sourceArgs.mapIdxM fun index sourceArg => do
         let related ← withLocalDeclD `hΦ Φ fun hΦ => do
-          let proof ← if arity == 1 then pure hΦ else
-            mkAppM (if i == 0 then ``And.left else ``And.right) #[hΦ]
+          let proof ← match sourceArgs.size with
+            | 1 => pure hΦ
+            | _ => mkAppM (if index == 0 then ``And.left else ``And.right) #[hΦ]
           mkLambdaFVars #[hΦ] proof
-        let target := targetArgs[i]!
-        pure {
-          source := sourceArg
-          target := target
-          related := related
-        }
-      let body ← emitComp {
-        plan, target
+        pure { source := sourceArg, target := targetArgs[index]!, related }
+      let emitted ← emitComp {
+        plan, target, scope, extension
         goal := { sourceType := spec.resultType, targetTp := resultTp, relates := resultRel }
-        mode := .ordinary
+        mode := .recursive { spec, argumentTp := argTp, self, selfRef }
         V, Φ, atoms
         genericAtoms := #[{ semantic := targetArg, code := genericArg }]
         helpers
-      } bodySource
-      let body ← match spec.sourceRange? with
-        | some range => annotateEmission range body
-        | none => pure body
-      let bodyCode ← mkLambdaFVars #[targetArg] body.code
-      let genericBody ← mkLambdaFVars #[genericArg] body.generic
-      let targetFn ← mkLambdaFVars #[targetArg] (← mkAppM ``Expr.denote #[body.code])
-      let witness := body.sound
-      let adequateCurried ← withLocalDeclD `hrel Φ fun hrel => do
-        let sound ← mkAppM ``ReflectionWitnessAt.sound #[witness, hrel]
-        mkLambdaFVars (sourceArgs ++ #[targetArg, hrel]) sound
-      pure (bodyCode, genericBody, targetFn, adequateCurried)
-  let adequate ← if arity == 1 then pure adequateCurried else
-    withLocalDeclD `sourceArg sourceArgType fun sourceArg =>
+      } sourceBody
+      let emitted ← match spec.sourceRange? with
+        | some range => annotateEmission range emitted
+        | none => pure emitted
+      let semanticBody ← mkLambdaFVars #[captured, targetArg] emitted.code
+      let genericBody ← mkLambdaFVars #[genericCaptured, genericArg] emitted.generic
+      let curriedSound ← withLocalDeclD `hrel Φ fun hrel => do
+        mkLambdaFVars (sourceArgs ++ #[targetArg, hrel])
+          (← Construct.discharge hrel emitted.sound)
+      pure (semanticBody, genericBody, curriedSound)
+  let bodySound ← withLocalDeclD `sourceArg sourceArgType fun sourceArg =>
     withLocalDeclD `targetArg targetArgType fun targetArg => do
-      let sources := #[← mkAppM ``Prod.fst #[sourceArg], ← mkAppM ``Prod.snd #[sourceArg]]
-      let Φ ← mkAppM ``And #[← mkAppM' argRels[0]! #[sources[0]!, ← mkAppM ``Prod.fst #[targetArg]],
-        ← mkAppM' argRels[1]! #[sources[1]!, ← mkAppM ``Prod.snd #[targetArg]]]
-      withLocalDeclD `hrel Φ fun hrel =>
-        mkLambdaFVars #[sourceArg, targetArg, hrel]
-          (mkAppN adequateCurried (sources ++ #[targetArg, hrel]))
-  pure ({
-    spec := spec
-    target := targetFn
-    adequate := adequate
-    argTp := argTp
-    resultTp := resultTp
-    body := bodyCode
-    genericBody := genericBody
-  } : BuiltHelper)
+      let sources ← splitSourceArgument params sourceArg
+      let relation ← mkAppM' argRel #[sourceArg, targetArg]
+      withLocalDeclD `hrel relation fun hrel => do
+        let witness := mkAppN curriedSound (sources ++ #[targetArg, hrel])
+        mkLambdaFVars #[sourceArg, targetArg, hrel] witness
+  let sourceFn ← withLocalDeclD `sourceArg sourceArgType fun sourceArg => do
+    let sources ← splitSourceArgument params sourceArg
+    let fullArgs ← spec.reconstructArgs sources
+    mkLambdaFVars #[sourceArg] (mkAppN (← mkConstWithFreshMVarLevels spec.name) fullArgs)
+  let dispatchType ← withLocalDeclD `argument targetArgType fun argument => do
+    let lhs ← mkAppM ``Defs.denote #[target.defs, mkApp (Lean.mkConst ``Extension.refl) target.ctx,
+      ← mkAppM ``DefRef.lift #[extension, selfRef], Lean.mkConst ``Unit.unit, argument]
+    let rhsExpr := mkAppN semanticBody #[Lean.mkConst ``Unit.unit, argument]
+    let rhs ← mkAppM ``Expr.denote #[extension, rhsExpr]
+    mkForallFVars #[argument] (← mkAppM ``Eq #[lhs, rhs])
+  let dispatch ← mkFreshExprMVar dispatchType
+  let adequate ← mkAppM ``RecReflection.nonrecursiveAdequate
+    #[target.defs, extension, selfRef, Lean.mkConst ``Unit.unit, argRel, resultRel,
+      sourceFn, semanticBody, dispatch, bodySound]
+  pure {
+    spec, argTp, resultTp, target := self, adequate,
+    semanticBody, genericBody, dispatch := dispatch.mvarId!
+  }
 
-private def buildHelper (plan : Plan) (target : TargetEnv) (V : Lean.Expr)
-    (helpers : Array Helper) (spec : Specialization) : MetaM BuiltHelper :=
+/-! ## `Nat.brecOn` backend -/
+
+private def buildRecursiveHelper (plan : Plan) (target : TargetEnv)
+    (V scope extension selfRef : Lean.Expr) (helpers : Array Helper)
+    (spec : Specialization) (arg : ValueParam) (shape : NatBRecShape) :
+    MetaM BuiltHelper := do
+  let argTp := Lean.mkConst ``Tp.nat
+  let resultTp ← reprTp spec.resultRepr
+  let resultRel ← mkAppOptM ``ReprSpec.relates
+    #[none, some spec.resultRepr, some target.ctx]
+  let targetArgType := mkApp target.values argTp
+  let self ← semanticClosure target.ctx extension selfRef
+  let range? ← match spec.sourceRange? with
+    | some range => mkAppM ``Option.some #[range]
+    | none => pure (mkApp (Lean.mkConst ``Option.none [Level.zero]) (Lean.mkConst ``SourceRange))
+  let semanticResult ← mkAppM ``Expr #[plan.targetSig, scope, target.values, resultTp]
+  let baseMVar ← mkFreshExprMVar semanticResult
+  let stepMVar ← mkFreshExprMVar (← mkArrow (Lean.mkConst ``Nat) semanticResult)
+  let semanticCore ← mkAppM ``Expr.natBrecSemantic #[range?, baseMVar, stepMVar]
+  let baseSourceFn := mkApp shape.functional (mkNatLit 0)
+  let .forallE _ belowZero _ _ ← whnf (← inferType baseSourceFn)
+    | throwError "reflect%: malformed zero argument of `Nat.brecOn` functional"
+  let .const ``PUnit [belowLevel] ← whnf belowZero
+    | throwError "reflect%: zero argument of `Nat.brecOn` functional is not `PUnit`"
+  let baseSource := mkApp baseSourceFn (Lean.mkConst ``PUnit.unit [belowLevel])
+  let base ← emitComp {
+    plan, target, scope, extension
+    goal := { sourceType := spec.resultType, targetTp := resultTp, relates := resultRel }
+    mode := .recursive { spec, argumentTp := argTp, self, selfRef }
+    V, Φ := Lean.mkConst ``True, helpers
+  } baseSource
+  baseMVar.mvarId!.assign base.code
+  let ⟨stepCode, stepGenericFn, stepSound⟩ ←
+    withLocalDeclD `genericPred (mkApp V argTp) fun genericPred =>
+    withLocalDeclD `pred (Lean.mkConst ``Nat) fun pred => do
+      let sourceCall ← mkAppM ``Nat.brecOn #[pred, shape.functional]
+      let go ← mkAppM ``Nat.brecOn.go #[pred, shape.functional]
+      let below ← mkAppM ``PProd.mk #[sourceCall, ← mkAppM ``PProd.snd #[go]]
+      let stepSource ← mkAppM' shape.functional #[← mkAppM ``Nat.succ #[pred], below]
+      let callType ← Construct.recCallType {
+        compat := target.compat, defs := target.defs, relates := resultRel,
+        sourceCall, targetClosure := self, targetArgument := pred
+      }
+      withLocalDeclD `ih callType fun ih => do
+        let predRel ← mkAppOptM ``ReprSpec.relates
+          #[none, some arg.repr, some target.ctx, some pred, some pred]
+        let predRelated ← mkExpectedTypeHint (← mkAppM ``Eq.refl #[pred]) predRel
+        let recursive : RecEnv := {
+          spec := spec
+          argumentTp := argTp
+          self := self
+          selfRef := selfRef
+          call? := some {
+            sourceCall := sourceCall
+            sourceArg := pred
+            targetArg := pred
+            adequate := ih
+          }
+        }
+        let predAtom : RelatedAtom := {
+          source := pred
+          target := pred
+          related := mkLambda `h .default (Lean.mkConst ``True) predRelated
+        }
+        let genericPredAtom : ReifiedAtom := { semantic := pred, code := genericPred }
+        let emitted ← emitComp {
+          plan := plan, target := target, scope := scope, extension := extension,
+          goal := { sourceType := spec.resultType, targetTp := resultTp, relates := resultRel },
+          mode := .recursive recursive,
+          V := V, Φ := Lean.mkConst ``True,
+          atoms := #[predAtom],
+          genericAtoms := #[genericPredAtom],
+          helpers := helpers
+        } stepSource
+        pure (← mkLambdaFVars #[pred] emitted.code,
+          ← mkLambdaFVars #[genericPred] emitted.generic,
+          ← mkLambdaFVars #[pred, ih] emitted.sound)
+  stepMVar.mvarId!.assign stepCode
+  let semanticCore ← instantiateMVars semanticCore
+  let semanticBody ← withLocalDeclD `captured (mkApp target.values (Lean.mkConst ``Tp.unit)) fun captured =>
+    withLocalDeclD `n targetArgType fun n =>
+      mkLambdaFVars #[captured, n] (mkApp semanticCore n)
+  let genericBody ← withLocalDeclD `captured (mkApp V (Lean.mkConst ``Tp.unit)) fun captured =>
+    withLocalDeclD `n (mkApp V argTp) fun n => do
+      let body ← mkAppM ``Expr.natBrecBody #[range?, base.generic, stepGenericFn, n]
+      mkLambdaFVars #[captured, n] body
+  let sourceFn ← mkConstWithFreshMVarLevels spec.name
+  let brecFn ← withLocalDeclD `n (Lean.mkConst ``Nat) fun n => do
+    mkLambdaFVars #[n] (← mkAppM ``Nat.brecOn #[n, shape.functional])
+  let sourceEq ← mkExpectedTypeHint (← mkAppM ``Eq.refl #[sourceFn])
+    (← mkAppM ``Eq #[sourceFn, brecFn])
+  let dispatchType ← withLocalDeclD `argument targetArgType fun argument => do
+    let lhs ← mkAppM ``Defs.denote #[target.defs, mkApp (Lean.mkConst ``Extension.refl) target.ctx,
+      ← mkAppM ``DefRef.lift #[extension, selfRef], Lean.mkConst ``Unit.unit, argument]
+    let rhs ← mkAppM ``Expr.denote #[extension, mkApp semanticCore argument]
+    mkForallFVars #[argument] (← mkAppM ``Eq #[lhs, rhs])
+  let dispatch ← mkFreshExprMVar dispatchType
+  let adequate ← Construct.natBrecAdequate {
+    compat := target.compat, defs := target.defs, extension, self := selfRef,
+    captured := Lean.mkConst ``Unit.unit, relates := resultRel, sourceFunction := sourceFn,
+    functional := shape.functional, sourceEquality := sourceEq, range := range?,
+    base := base.code, step := stepCode, dispatch,
+    baseSound := base.sound, stepSound
+  }
+  pure {
+    spec, argTp, resultTp, target := self, adequate,
+    semanticBody, genericBody, dispatch := dispatch.mvarId!
+  }
+
+private def buildHelper (plan : Plan) (target : TargetEnv)
+    (V scope extension selfRef : Lean.Expr) (helpers : Array Helper)
+    (spec : Specialization) : MetaM BuiltHelper :=
   match spec.boundary with
-  | .unary _ arg _ => buildOrdinaryHelper plan target V helpers spec arg none
-  | .pair _ left _ right _ => buildOrdinaryHelper plan target V helpers spec left (some right)
-  | .natBRec arg shape => buildRecursiveHelper plan target V helpers spec arg shape
+  | .natBRec arg shape => buildRecursiveHelper plan target V scope extension selfRef helpers spec arg shape
+  | _ => buildOrdinaryHelper plan target V scope extension selfRef helpers spec
 
-/-! ### Plan-ordered helper installation -/
-
-private partial def emitProgram (plan : Plan) (target : TargetEnv) (goal : EmitGoal)
-    (V source : Lean.Expr) (specs : List Specialization := plan.specializations.toList)
-    (helpers : Array Helper := #[]) : MetaM Emission := do
-  match specs with
-  | [] => emitComp ({
-      plan, target, goal, mode := .ordinary, V, Φ := mkConst ``True, helpers
-    } : EmitContext) source
-  | spec :: rest =>
-      let built ← buildHelper plan target V helpers spec
-      /- Installing a helper is identical after its body and adequacy theorem have been built. -/
-      let genericFnTp ← mkAppM ``Tp.fn #[built.argTp, built.resultTp]
-      withLocalDeclD `genericHelper (mkApp V genericFnTp) fun genericHelper => do
-        let installed : Helper := {
-          spec := built.spec
-          target := built.target
-          generic := genericHelper
-          adequate := built.adequate
-        }
-        let inner ← emitProgram plan target goal V source rest (helpers.push installed)
-        let targetFn := built.target
-        let kCode ← withLocalDeclD `helper (← inferType targetFn) fun bound =>
-          mkLambdaFVars #[bound] (inner.code.replace fun e =>
-            if e == targetFn then some bound else none)
-        let kGeneric ← mkLambdaFVars #[genericHelper] inner.generic
-        let innerWitness := inner.sound
-        let proofArgs : Construct.HelperScopeProof := {
-          sourceSig := plan.sourceSig, targetSig := plan.targetSig, compat := plan.compat
-          assumption := mkConst ``True, argumentTp := built.argTp
-          helperResultTp := built.resultTp, targetTp := goal.targetTp
-          sourceType := goal.sourceType, relates := goal.relates, source, body := built.body
-          continuation := kCode, innerSound := innerWitness
-        }
-        let codeArgs : Construct.HelperScope := {
-          targetSig := plan.targetSig, carrier := target.values, targetTp := goal.targetTp
-          argumentTp := built.argTp, helperResultTp := built.resultTp, body := built.body
-          continuation := kCode
-        }
-        let genericArgs : Construct.HelperScope := {
-          targetSig := plan.targetSig, carrier := V, targetTp := goal.targetTp
-          argumentTp := built.argTp, helperResultTp := built.resultTp
-          body := built.genericBody, continuation := kGeneric
-        }
-        let ⟨reflection, code, generic⟩ ← if built.spec.boundary.isRecursive then do
-          pure (← Construct.letrecProof proofArgs, ← Construct.letrec codeArgs,
-            ← Construct.letrec genericArgs)
-        else do
-          pure (← Construct.lambdaProof proofArgs, ← Construct.lambda codeArgs,
-            ← Construct.lambda genericArgs)
-        pure { code, generic, sound := reflection }
-
-/-! ## Public plan execution -/
+/-! ## Plan execution -/
 
 structure Execution where
   plan : Plan
   goal : EmitGoal
-  emission : Emission
   program : Lean.Expr
+  semanticProgram : Lean.Expr
+  sound : Lean.Expr
+
+private def installDefinitions (plan : Plan) (target : TargetEnv) (V : Lean.Expr) :
+    MetaM TableState := do
+  let emptyScope ← mkAppOptM ``List.nil #[some (Lean.mkConst ``DefSig)]
+  let semanticNil ← mkAppOptM ``Defs.nil #[some plan.targetSig, some target.values]
+  let genericNil ← mkAppOptM ``Defs.nil #[some plan.targetSig, some V]
+  let mut state : TableState := {
+    scope := emptyScope,
+    extension := ← extensionFor emptyScope plan.specializations,
+    semanticDefs := semanticNil,
+    genericDefs := genericNil
+  }
+  for index in [0:plan.specializations.size] do
+    let spec := plan.specializations[index]!
+    let (input, output) ← specializationTypes spec
+    let decl ← mkDefSig input output
+    let scope ← mkAppM ``List.cons #[decl, state.scope]
+    let extension ← extensionFor scope
+      (plan.specializations.extract (index + 1) plan.specializations.size)
+    let selfRef ← mkAppOptM ``DefRef.here #[some decl, some state.scope]
+    let helpers ← state.helpers.mapM (weakenHelper decl)
+    let built ← buildHelper plan target V scope extension selfRef helpers spec
+    let semanticDefs ← mkAppOptM ``Defs.add
+      #[some plan.targetSig, some target.values, some state.scope, some decl,
+        some state.semanticDefs, some built.semanticBody]
+    let genericDefs ← mkAppOptM ``Defs.add
+      #[some plan.targetSig, some V, some state.scope, some decl,
+        some state.genericDefs, some built.genericBody]
+    let installed : Helper := {
+      built.toHelperSemantics with ref := selfRef
+    }
+    state := {
+      scope, extension, semanticDefs, genericDefs,
+      helpers := helpers.push installed,
+      dispatches := state.dispatches.push built.dispatch
+    }
+  pure state
 
 def execute (plan : Plan) (source : Lean.Expr) (range? : Option Lean.Expr) :
     TermElabM Execution := do
-  let targetTp ← mkAppM ``Tp.base #[← mkAppM ``ReprSpec.code #[plan.resultRepr]]
-  let relates ← mkAppM ``ReprSpec.relates #[plan.resultRepr]
-  let goal : EmitGoal := {
-    sourceType := plan.resultType
-    targetTp := targetTp
-    relates := relates
-  }
-  let target ← mkTargetEnv plan.targetSig
-  let VType := .forallE `t (mkConst ``Tp) (mkSort 1) .default
-  let ⟨emission, program⟩ ← withLocalDeclD `V VType fun V => do
-    let emission ← emitProgram plan target goal V source
-    let emission ← match source.getAppFn.constName? with
-      | some decl => match ← declarationSourceRange? decl with
-        | some range => annotateEmission range emission
-        | none => pure emission
-      | none => pure emission
-    let emission ← match range? with
-      | some range => annotateEmission range emission
-      | none => pure emission
-    if emission.code.containsFVar V.fvarId! || emission.sound.containsFVar V.fvarId! then
-      throwError "reflect%: semantic emission retained the generic PHOAS carrier"
-    pure (emission, ← mkLambdaFVars #[V] emission.generic)
-  pure { plan, goal, emission, program }
+  let ctx ← fullContext plan.specializations
+  let values ← withLocalDeclD `tp (Lean.mkConst ``Tp) fun tp => do
+    mkLambdaFVars #[tp] (← mkAppM ``Tp.denote #[ctx, tp])
+  let defsType ← mkAppM ``Defs #[plan.targetSig, values, ctx]
+  let defsMVar ← mkFreshExprMVar defsType
+  let target ← mkTargetEnv plan.targetSig plan.compat ctx defsMVar
+  let targetTp ← reprTp plan.resultRepr
+  let relates ← mkAppOptM ``ReprSpec.relates
+    #[none, some plan.resultRepr, some ctx]
+  let goal : EmitGoal := { sourceType := plan.resultType, targetTp, relates }
+  let VType := .forallE `tp (Lean.mkConst ``Tp) (mkSort 1) .default
+  withLocalDeclD `V VType fun V => do
+    let table ← installDefinitions plan target V
+    defsMVar.mvarId!.assign table.semanticDefs
+    for dispatch in table.dispatches do
+      let type ← instantiateMVars (← dispatch.getType)
+      let proof ← forallTelescope type fun binders body => do
+        unless body.isAppOfArity ``Eq 3 do
+          throwError "reflect%: internal: definition dispatch is not an equality"
+        let lhs := body.getArg! 1
+        let refl ← mkExpectedTypeHint (← mkAppM ``Eq.refl #[lhs]) body
+        mkLambdaFVars binders refl
+      dispatch.assign proof
+    let root ← emitComp {
+      plan, target := { target with defs := table.semanticDefs },
+      scope := ctx, extension := mkApp (Lean.mkConst ``Extension.refl) ctx,
+      goal, mode := .ordinary, V, Φ := Lean.mkConst ``True, helpers := table.helpers
+    } source
+    let mut root := root
+    if let some decl := source.getAppFn.constName? then
+      if let some range ← declarationSourceRange? decl then
+        root ← annotateEmission range root
+    if let some range := range? then root ← annotateEmission range root
+    let noArgs ← mkAppOptM ``List.nil #[some (Lean.mkConst ``Tp)]
+    let semanticArgsType ← mkAppM ``MainArgs #[values, noArgs]
+    let genericArgsType ← mkAppM ``MainArgs #[V, noArgs]
+    let semanticMain ← withLocalDeclD `args semanticArgsType fun args =>
+      mkLambdaFVars #[args] root.code
+    let genericMain ← withLocalDeclD `args genericArgsType fun args =>
+      mkLambdaFVars #[args] root.generic
+    let semanticProgram ← mkAppM ``Program.mk #[table.semanticDefs, semanticMain]
+    let genericProgram ← mkAppM ``Program.mk #[table.genericDefs, genericMain]
+    let program ← mkAppM ``Code.mk #[ctx, ← mkLambdaFVars #[V] genericProgram]
+    let sound ← mkAppM ``ReflectionWitness.close #[root.sound]
+    pure { plan, goal, program, semanticProgram, sound }
 
-/-! ## Final result packaging -/
+/-! ## Public packaging -/
 
-/-- Package emitted PHOAS and its soundness theorem without reducing the `Reflected` subtype. -/
-private def packReflection (plan : Plan) (goal : EmitGoal) (source semanticV
-    program sound : Lean.Expr) : MetaM Lean.Expr := do
-  let codeType ← inferType program
+private def packReflection (execution : Execution) (source : Lean.Expr) : MetaM Lean.Expr := do
+  let codeType ← inferType execution.program
   let predicate ← withLocalDeclD `code codeType fun code => do
-    let denoted ← mkAppM ``Expr.denote #[mkApp code semanticV]
-    let property ← mkAppM ``ITree.CompE.Eutt #[plan.compat, goal.relates,
+    let denoted ← mkAppM ``Closed.denote #[code]
+    let codeCtx ← mkAppM ``Code.ctx #[code]
+    let property ← mkAppM ``ITree.CompE.Eutt #[mkApp execution.plan.compat codeCtx,
+      execution.goal.relates,
       ← mkAppM ``Free.toITree #[source], denoted]
     mkLambdaFVars #[code] property
-  mkAppOptM ``Subtype.mk
-    #[some codeType, some predicate, some program, some sound]
+  let property := mkApp predicate execution.program
+  let sound ← mkExpectedTypeHint execution.sound property
+  mkAppOptM ``Subtype.mk #[some codeType, some predicate, some execution.program, some sound]
 
-/-- Give the large generated proof a name so reflected definitions and the compiler retain sharing. -/
-private def shareSoundProof (sound : Lean.Expr) : TermElabM Lean.Expr := do
-  synthesizeSyntheticMVarsNoPostponing
-  let sound ← instantiateMVars sound
-  let soundType ← inferType sound
-  let name ← mkAuxName `reflectSound
-  addDecl (.defnDecl {
-    name
-    levelParams := []
-    type := soundType
-    value := sound
-    hints := .regular (getMaxHeight (← getEnv) sound + 1)
-    safety := .safe
-  })
-  pure (mkConst name)
-
-/-- Emit the program and package the soundness proof attached to that same emission. -/
 def reflectProgram (source : Lean.Expr) (range? : Option Lean.Expr := none) :
     TermElabM Lean.Expr := do
   let plan ← discover source
   let execution ← execute plan source range?
-  let targetSpec ← mkAppM ``Signature.spec #[execution.plan.targetSig]
-  let semanticM := mkApp (Lean.mkConst ``ITree.CompE [Level.zero, Level.zero]) targetSpec
-  let semanticV ← mkAppM ``Tp.denote #[semanticM]
-  let genericSemantic := mkApp execution.program semanticV
-  let witness := execution.emission.sound
-  let noRecursion ← mkAppOptM ``Option.none
-    #[some (← mkAppM ``Prod #[mkConst ``Tp, mkConst ``Tp])]
-  let semanticSound ← Construct.witnessSound {
-    sourceSig := execution.plan.sourceSig, targetSig := execution.plan.targetSig
-    slot := noRecursion, compat := execution.plan.compat, assumption := mkConst ``True
-    targetTp := execution.goal.targetTp, sourceType := execution.goal.sourceType
-    relates := execution.goal.relates, source, code := execution.emission.code, witness
-    assumptionProof := mkConst ``True.intro
-  }
-  let wanted ← mkAppM ``ITree.CompE.Eutt
-    #[execution.plan.compat, execution.goal.relates, ← mkAppM ``Free.toITree #[source],
-      ← mkAppM ``Expr.denote #[genericSemantic]]
-  let sound ← mkExpectedTypeHint semanticSound wanted
-  let sound ← shareSoundProof sound
-  packReflection execution.plan execution.goal source semanticV execution.program sound
+  packReflection execution source
 
 def reflectTerm (source : Lean.Expr) (range? : Option Lean.Expr := none) : TermElabM Lean.Expr := do
   let plan ← discover source
   let execution ← execute plan source range?
-  mkAppM ``Sigma.mk #[execution.emission.code, execution.emission.sound]
+  mkAppM ``Sigma.mk #[execution.semanticProgram, execution.sound]
 
 end Reflector
 end Ast

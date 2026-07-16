@@ -1,7 +1,7 @@
 //! Rust consumer for Freigen's typed higher-order AST artifacts.
 //!
-//! [`parse_program`] preserves inline recursion, dynamically bound operation branches, function
-//! values, and source annotations. [`interp::Interpreter`] executes closed artifacts using a
+//! [`parse_program`] preserves level-one definitions, dynamically bound operation branches,
+//! function values, and source annotations. [`interp::Interpreter`] executes artifacts using a
 //! client-supplied higher-order operation handler.
 
 pub mod ast;
@@ -27,53 +27,60 @@ mod tests {
     fn arithmetic_and_expression_if() {
         let src = r#"
           (program nat
-            (block
+            (main () (block
               (let v0 nat (lit 7))
               (let v1 nat (lit 5))
               (let v2 bool (lt v1 v0))
               (let v5 nat (if v2
                 (block (let v3 nat (add v0 v1)) (ret v3))
                 (block (let v4 nat (lit 0)) (ret v4))))
-              (ret v5)))"#;
+              (ret v5))))"#;
         assert_eq!(run(src).unwrap(), Value::nat(12u32));
     }
 
     #[test]
-    fn lambda_and_application() {
+    fn explicit_closure_and_application() {
         let src = r#"
           (program nat
-            (block
-              (let f2 (fn nat nat) (lam (x0 nat)
-                (block
-                  (let v1 nat (add x0 x0))
-                  (ret v1))))
+            (def twice (captured unit) (x0 nat) nat
+              (block
+                (let v1 nat (add x0 x0))
+                (ret v1)))
+            (main () (block
+              (let v0 unit (lit unit))
+              (let f2 (fn nat nat) (closure twice v0))
               (let v3 nat (lit 9))
               (let v4 nat (app f2 v3))
-              (ret v4)))"#;
+              (ret v4))))"#;
         assert_eq!(run(src).unwrap(), Value::nat(18u32));
     }
 
     #[test]
-    fn inline_letrec_and_source_ranges() {
+    fn level_one_recursion_and_source_ranges() {
         let src = r#"
           (program nat
-            (source Demo 1 0 9 1
+            (def def0 (captured unit) (x0 nat) nat
+              (source Demo 1 0 9 1
               (block
-                (letrec rec7 (x0 nat) nat
+                (let v1 nat (lit 0))
+                (let v2 bool (eq x0 v1))
+                (let v6 nat (if v2
+                  (block (let v3 nat (lit 0)) (ret v3))
                   (block
-                    (let v1 nat (lit 0))
-                    (let v2 bool (eq x0 v1))
-                    (let v6 nat (if v2
-                      (block (let v3 nat (lit 0)) (ret v3))
-                      (block
-                        (let v4 nat (lit 1))
-                        (let v5 nat (sub x0 v4))
-                        (let v7 nat (self v5))
-                        (let v8 nat (add v7 v4))
-                        (ret v8))))
-                    (ret v6)))
+                    (let v4 nat (lit 1))
+                    (let v5 nat (sub x0 v4))
+                    (let v6u unit (lit unit))
+                    (let f7 (fn nat nat) (closure def0 v6u))
+                    (let v7 nat (app f7 v5))
+                    (let v8 nat (add v7 v4))
+                    (ret v8))))
+                (ret v6))))
+            (main ()
+              (block
                 (let v9 nat (lit 7))
-                (let v10 nat (app rec7 v9))
+                (let v9u unit (lit unit))
+                (let f10 (fn nat nat) (closure def0 v9u))
+                (let v10 nat (app f10 v9))
                 (ret v10))))"#;
         assert_eq!(run(src).unwrap(), Value::nat(7u32));
     }
@@ -109,17 +116,29 @@ mod tests {
     fn dynamically_bound_operation_branch() {
         let src = r#"
           (program nat
-            (block
+            (main () (block
               (let v0 unit (lit unit))
               (let v3 nat (op withNat v0
                 (branch b1
                   (block
                     (ret b1)))))
-              (ret v3)))"#;
+              (ret v3))))"#;
         let program = parse_program(src).unwrap();
         assert_eq!(
             Interpreter::new(&program).run(&mut Circuit).unwrap(),
             Value::nat(42u32)
+        );
+    }
+
+    #[test]
+    fn main_arguments() {
+        let src = "(program nat (main ((x nat)) (block (ret x))))";
+        let program = parse_program(src).unwrap();
+        assert_eq!(
+            Interpreter::new(&program)
+                .run_main(&mut NoCustomOps, vec![Value::nat(23u32)])
+                .unwrap(),
+            Value::nat(23u32)
         );
     }
 }

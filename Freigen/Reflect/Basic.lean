@@ -39,7 +39,7 @@ elab doc:(Lean.Parser.Command.docComment)? "reflect_def " nm:ident " := " t:term
       levelParams := []
       type := ← inferType code
       value := code
-      hints := .abbrev
+      hints := .regular (getMaxHeight (← getEnv) code + 1)
       safety := .safe
     })
     let soundType := (← inferType sound).replace fun e =>

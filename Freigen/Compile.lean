@@ -1,19 +1,11 @@
 import Freigen.Reflect.Basic
-import Freigen.Ast.Sexp
+import Freigen.Compile.Registry
 import Lean.Elab.Command
 import Lean.Elab.SyntheticMVars
 
 namespace Freigen.Ast
 
 open Lean Meta Elab Term Command
-
-abbrev CompileArtifact := String × Name × Name
-
-initialize compileExt : SimplePersistentEnvExtension CompileArtifact (Array CompileArtifact) ←
-  registerSimplePersistentEnvExtension {
-    addEntryFn := Array.push
-    addImportedFn := fun arrays => arrays.foldl (· ++ ·) #[]
-  }
 
 private def registryEntries : CoreM (Array Name) := do
   let env ← getEnv

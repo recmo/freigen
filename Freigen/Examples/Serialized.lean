@@ -7,69 +7,79 @@ namespace Freigen.Ast.SerializedExamples
 
 /--
 info: (program nat
-  (source Freigen.Examples.Circuit.Basic 132 35 132 42
+  (def def0 (env1 unit) (x2 nat) nat
     (block
-      (source Freigen.Examples.Circuit.Basic 124 0 128 8
+      (source Freigen.Examples.Circuit.Basic 112 0 115 8
         (block
-          (let f5 (fn nat nat) (lam (x0 nat)
+          (let v3 nat (mul x2 x2))
+          (let v4 bool (le x2 v3))
+          (let v5 unit
+            (op assert v4)
+          )
+          (let v6 nat (mul x2 x2))
+          (ret v6)
+        )
+      )
+    )
+  )
+  (def def7 (env8 unit) (x9 nat) nat
+    (block
+      (source Freigen.Examples.Circuit.Basic 117 0 122 18
+        (block
+          (let v10 nat (lit 0))
+          (let v11 bool (eq x9 v10))
+          (let v12 nat (if v11
             (block
-              (source Freigen.Examples.Circuit.Basic 112 0 115 8
-                (block
-                  (let v1 nat (mul x0 x0))
-                  (let v2 bool (le x0 v1))
-                  (let v3 unit
-                    (op assert v2)
-                  )
-                  (let v4 nat (mul x0 x0))
-                  (ret v4)
-                )
-              )
+              (let v13 nat (lit 0))
+              (ret v13)
+            )
+            (block
+              (let v14 nat (lit 1))
+              (let v15 nat (sub x9 v14))
+              (let v16 unit (lit unit))
+              (let f17 (fn nat nat) (closure def7 v16))
+              (let v18 nat (app f17 v15))
+              (let v19 nat (lit 1))
+              (let v20 nat (add v15 v19))
+              (let v21 unit (lit unit))
+              (let f22 (fn nat nat) (closure def0 v21))
+              (let v23 nat (app f22 v20))
+              (let v24 nat (add v18 v23))
+              (ret v24)
             )
           ))
-          (letrec rec18 (x6 nat) nat
+          (ret v12)
+        )
+      )
+    )
+  )
+  (main ()
+    (block
+      (source Freigen.Examples.Circuit.Basic 132 35 132 42
+        (block
+          (source Freigen.Examples.Circuit.Basic 124 0 128 8
             (block
-              (source Freigen.Examples.Circuit.Basic 117 0 122 18
-                (block
-                  (let v7 nat (lit 0))
-                  (let v8 bool (eq x6 v7))
-                  (let v9 nat (if v8
+              (let v25 nat (lit 3))
+              (let v26 unit (lit unit))
+              (let f27 (fn nat nat) (closure def7 v26))
+              (let v28 nat (app f27 v25))
+              (let v29 unit (lit unit))
+              (let v31 nat
+                (op hint v29
+                  (branch b30
                     (block
-                      (let v10 nat (lit 0))
-                      (ret v10)
+                      (ret v28)
                     )
-                    (block
-                      (let v11 nat (lit 1))
-                      (let v12 nat (sub x6 v11))
-                      (let v13 nat (self v12))
-                      (let v14 nat (lit 1))
-                      (let v15 nat (add v12 v14))
-                      (let v16 nat (app f5 v15))
-                      (let v17 nat (add v13 v16))
-                      (ret v17)
-                    )
-                  ))
-                  (ret v9)
+                  )
                 )
               )
-            )
-          )
-          (let v19 nat (lit 3))
-          (let v20 nat (app rec18 v19))
-          (let v21 unit (lit unit))
-          (let v23 nat
-            (op hint v21
-              (branch b22
-                (block
-                  (ret v20)
-                )
+              (let v32 bool (eq v31 v28))
+              (let v33 unit
+                (op assert v32)
               )
+              (ret v31)
             )
           )
-          (let v24 bool (eq v23 v20))
-          (let v25 unit
-            (op assert v24)
-          )
-          (ret v23)
         )
       )
     )
@@ -81,38 +91,44 @@ info: (program nat
 
 /--
 info: (program nat
-  (source Freigen.Examples.Circuit.Basic 150 40 150 58
+  (def def0 (env1 unit) (x2 nat) nat
     (block
-      (source Freigen.Examples.Circuit.Basic 144 0 146 15
+      (source Freigen.Examples.Circuit.Basic 112 0 115 8
         (block
-          (let f5 (fn nat nat) (lam (x0 nat)
+          (let v3 nat (mul x2 x2))
+          (let v4 bool (le x2 v3))
+          (let v5 unit
+            (op assert v4)
+          )
+          (let v6 nat (mul x2 x2))
+          (ret v6)
+        )
+      )
+    )
+  )
+  (main ()
+    (block
+      (source Freigen.Examples.Circuit.Basic 144 40 144 58
+        (block
+          (source Freigen.Examples.Circuit.Basic 138 0 140 15
             (block
-              (source Freigen.Examples.Circuit.Basic 112 0 115 8
-                (block
-                  (let v1 nat (mul x0 x0))
-                  (let v2 bool (le x0 v1))
-                  (let v3 unit
-                    (op assert v2)
+              (let v7 unit (lit unit))
+              (let v10 nat
+                (op hint v7
+                  (branch b8
+                    (block
+                      (let v9 nat (lit 4))
+                      (ret v9)
+                    )
                   )
-                  (let v4 nat (mul x0 x0))
-                  (ret v4)
                 )
               )
-            )
-          ))
-          (let v6 unit (lit unit))
-          (let v9 nat
-            (op hint v6
-              (branch b7
-                (block
-                  (let v8 nat (lit 4))
-                  (ret v8)
-                )
-              )
+              (let v11 unit (lit unit))
+              (let f12 (fn nat nat) (closure def0 v11))
+              (let v13 nat (app f12 v10))
+              (ret v13)
             )
           )
-          (let v10 nat (app f5 v9))
-          (ret v10)
         )
       )
     )
@@ -124,38 +140,44 @@ info: (program nat
 
 /--
 info: (program nat
-  (source Freigen.Examples.Circuit.Basic 152 35 152 53
+  (def def0 (env1 unit) (x2 nat) nat
     (block
-      (source Freigen.Examples.Circuit.Basic 144 0 146 15
+      (source Freigen.Examples.Circuit.Basic 112 0 115 8
         (block
-          (let f5 (fn nat nat) (lam (x0 nat)
+          (let v3 nat (mul x2 x2))
+          (let v4 bool (le x2 v3))
+          (let v5 unit
+            (op assert v4)
+          )
+          (let v6 nat (mul x2 x2))
+          (ret v6)
+        )
+      )
+    )
+  )
+  (main ()
+    (block
+      (source Freigen.Examples.Circuit.Basic 146 35 146 53
+        (block
+          (source Freigen.Examples.Circuit.Basic 138 0 140 15
             (block
-              (source Freigen.Examples.Circuit.Basic 112 0 115 8
-                (block
-                  (let v1 nat (mul x0 x0))
-                  (let v2 bool (le x0 v1))
-                  (let v3 unit
-                    (op assert v2)
+              (let v7 unit (lit unit))
+              (let v10 nat
+                (op hint v7
+                  (branch b8
+                    (block
+                      (let v9 nat (lit 4))
+                      (ret v9)
+                    )
                   )
-                  (let v4 nat (mul x0 x0))
-                  (ret v4)
                 )
               )
-            )
-          ))
-          (let v6 unit (lit unit))
-          (let v9 nat
-            (op hint v6
-              (branch b7
-                (block
-                  (let v8 nat (lit 4))
-                  (ret v8)
-                )
-              )
+              (let v11 unit (lit unit))
+              (let f12 (fn nat nat) (closure def0 v11))
+              (let v13 nat (app f12 v10))
+              (ret v13)
             )
           )
-          (let v10 nat (app f5 v9))
-          (ret v10)
         )
       )
     )
@@ -167,49 +189,57 @@ info: (program nat
 
 /--
 info: (program nat
-  (source Freigen.Examples.Circuit.Basic 166 42 166 63
+  (def def0 (env1 unit) (x2 nat) nat
     (block
-      (source Freigen.Examples.Circuit.Basic 160 0 162 17
+      (source Freigen.Examples.Circuit.Basic 148 0 152 29
         (block
-          (letrec rec11 (x0 nat) nat
+          (let v3 nat (lit 0))
+          (let v4 bool (eq x2 v3))
+          (let v5 nat (if v4
             (block
-              (source Freigen.Examples.Circuit.Basic 154 0 158 29
-                (block
-                  (let v1 nat (lit 0))
-                  (let v2 bool (eq x0 v1))
-                  (let v3 nat (if v2
+              (let v6 nat (lit 0))
+              (ret v6)
+            )
+            (block
+              (let v7 nat (lit 1))
+              (let v8 nat (sub x2 v7))
+              (let v9 unit (lit unit))
+              (let f10 (fn nat nat) (closure def0 v9))
+              (let v11 nat (app f10 v8))
+              (let v12 nat (add v11 v8))
+              (let v13 nat (lit 1))
+              (let v14 nat (add v12 v13))
+              (ret v14)
+            )
+          ))
+          (ret v5)
+        )
+      )
+    )
+  )
+  (main ()
+    (block
+      (source Freigen.Examples.Circuit.Basic 160 42 160 63
+        (block
+          (source Freigen.Examples.Circuit.Basic 154 0 156 17
+            (block
+              (let v15 unit (lit unit))
+              (let v18 nat
+                (op hint v15
+                  (branch b16
                     (block
-                      (let v4 nat (lit 0))
-                      (ret v4)
+                      (let v17 nat (lit 5))
+                      (ret v17)
                     )
-                    (block
-                      (let v5 nat (lit 1))
-                      (let v6 nat (sub x0 v5))
-                      (let v7 nat (self v6))
-                      (let v8 nat (add v7 v6))
-                      (let v9 nat (lit 1))
-                      (let v10 nat (add v8 v9))
-                      (ret v10)
-                    )
-                  ))
-                  (ret v3)
+                  )
                 )
               )
+              (let v19 unit (lit unit))
+              (let f20 (fn nat nat) (closure def0 v19))
+              (let v21 nat (app f20 v18))
+              (ret v21)
             )
           )
-          (let v12 unit (lit unit))
-          (let v15 nat
-            (op hint v12
-              (branch b13
-                (block
-                  (let v14 nat (lit 5))
-                  (ret v14)
-                )
-              )
-            )
-          )
-          (let v16 nat (app rec11 v15))
-          (ret v16)
         )
       )
     )
@@ -221,49 +251,59 @@ info: (program nat
 
 /--
 info: (program nat
-  (source Freigen.Examples.Circuit.Basic 203 37 203 53
+  (def def0 (env1 unit) (x2 nat) nat
     (block
-      (source Freigen.Examples.Circuit.Basic 197 0 199 20
+      (source Freigen.Examples.Circuit.Basic 112 0 115 8
         (block
-          (let f5 (fn nat nat) (lam (x0 nat)
-            (block
-              (source Freigen.Examples.Circuit.Basic 112 0 115 8
-                (block
-                  (let v1 nat (mul x0 x0))
-                  (let v2 bool (le x0 v1))
-                  (let v3 unit
-                    (op assert v2)
-                  )
-                  (let v4 nat (mul x0 x0))
-                  (ret v4)
-                )
-              )
-            )
-          ))
-          (let f9 (fn nat nat) (lam (x6 nat)
-            (block
-              (source Freigen.Examples.Circuit.Basic 193 0 195 15
-                (block
-                  (let v7 nat (app f5 x6))
-                  (let v8 nat (app f5 v7))
-                  (ret v8)
-                )
-              )
-            )
-          ))
+          (let v3 nat (mul x2 x2))
+          (let v4 bool (le x2 v3))
+          (let v5 unit
+            (op assert v4)
+          )
+          (let v6 nat (mul x2 x2))
+          (ret v6)
+        )
+      )
+    )
+  )
+  (def def7 (env8 unit) (x9 nat) nat
+    (block
+      (source Freigen.Examples.Circuit.Basic 178 0 180 15
+        (block
           (let v10 unit (lit unit))
-          (let v13 nat
-            (op hint v10
-              (branch b11
-                (block
-                  (let v12 nat (lit 2))
-                  (ret v12)
+          (let f11 (fn nat nat) (closure def0 v10))
+          (let v12 nat (app f11 x9))
+          (let v13 unit (lit unit))
+          (let f14 (fn nat nat) (closure def0 v13))
+          (let v15 nat (app f14 v12))
+          (ret v15)
+        )
+      )
+    )
+  )
+  (main ()
+    (block
+      (source Freigen.Examples.Circuit.Basic 188 37 188 53
+        (block
+          (source Freigen.Examples.Circuit.Basic 182 0 184 20
+            (block
+              (let v16 unit (lit unit))
+              (let v19 nat
+                (op hint v16
+                  (branch b17
+                    (block
+                      (let v18 nat (lit 2))
+                      (ret v18)
+                    )
+                  )
                 )
               )
+              (let v20 unit (lit unit))
+              (let f21 (fn nat nat) (closure def7 v20))
+              (let v22 nat (app f21 v19))
+              (ret v22)
             )
           )
-          (let v14 nat (app f9 v13))
-          (ret v14)
         )
       )
     )
@@ -275,47 +315,53 @@ info: (program nat
 
 /--
 info: (program nat
-  (source Freigen.Examples.Circuit.Basic 215 37 215 53
+  (def def0 (env1 unit) (x2 (prod nat nat)) nat
     (block
-      (source Freigen.Examples.Circuit.Basic 208 0 211 15
+      (source Freigen.Examples.Circuit.Basic 190 0 191 14
         (block
-          (let f4 (fn (prod nat nat) nat) (lam (x0 (prod nat nat))
+          (let v3 nat (fst x2))
+          (let v4 nat (snd x2))
+          (let v5 nat (add v3 v4))
+          (ret v5)
+        )
+      )
+    )
+  )
+  (main ()
+    (block
+      (source Freigen.Examples.Circuit.Basic 200 37 200 53
+        (block
+          (source Freigen.Examples.Circuit.Basic 193 0 196 15
             (block
-              (source Freigen.Examples.Circuit.Basic 205 0 206 14
-                (block
-                  (let v1 nat (fst x0))
-                  (let v2 nat (snd x0))
-                  (let v3 nat (add v1 v2))
-                  (ret v3)
+              (let v6 unit (lit unit))
+              (let v9 nat
+                (op hint v6
+                  (branch b7
+                    (block
+                      (let v8 nat (lit 8))
+                      (ret v8)
+                    )
+                  )
                 )
               )
-            )
-          ))
-          (let v5 unit (lit unit))
-          (let v8 nat
-            (op hint v5
-              (branch b6
-                (block
-                  (let v7 nat (lit 8))
-                  (ret v7)
+              (let v10 unit (lit unit))
+              (let v13 nat
+                (op hint v10
+                  (branch b11
+                    (block
+                      (let v12 nat (lit 13))
+                      (ret v12)
+                    )
+                  )
                 )
               )
-            )
-          )
-          (let v9 unit (lit unit))
-          (let v12 nat
-            (op hint v9
-              (branch b10
-                (block
-                  (let v11 nat (lit 13))
-                  (ret v11)
-                )
-              )
+              (let v14 (prod nat nat) (pair v9 v13))
+              (let v15 unit (lit unit))
+              (let f16 (fn (prod nat nat) nat) (closure def0 v15))
+              (let v17 nat (app f16 v14))
+              (ret v17)
             )
           )
-          (let v13 (prod nat nat) (pair v8 v12))
-          (let v14 nat (app f4 v13))
-          (ret v14)
         )
       )
     )
@@ -327,55 +373,63 @@ info: (program nat
 
 /--
 info: (program unit
-  (source Freigen.Examples.Circuit.Basic 238 45 238 69
+  (def def0 (env1 unit) (x2 nat) unit
     (block
-      (source Freigen.Examples.Circuit.Basic 232 0 234 18
+      (source Freigen.Examples.Circuit.Basic 211 0 213 9
         (block
-          (let f5 (fn nat unit) (lam (x0 nat)
-            (block
-              (source Freigen.Examples.Circuit.Basic 228 0 230 9
+          (let v3 unit (lit unit))
+          (let v5 nat
+            (op hint v3
+              (branch b4
                 (block
-                  (let v1 unit (lit unit))
-                  (let v3 nat
-                    (op hint v1
-                      (branch b2
-                        (block
-                          (ret x0)
-                        )
-                      )
-                    )
-                  )
-                  (let v4 unit (lit unit))
-                  (ret v4)
+                  (ret x2)
                 )
               )
             )
-          ))
-          (let f11 (fn bool unit) (lam (x6 bool)
-            (block
-              (source Freigen.Examples.Circuit.Basic 228 0 230 9
+          )
+          (let v6 unit (lit unit))
+          (ret v6)
+        )
+      )
+    )
+  )
+  (def def7 (env8 unit) (x9 bool) unit
+    (block
+      (source Freigen.Examples.Circuit.Basic 211 0 213 9
+        (block
+          (let v10 unit (lit unit))
+          (let v12 bool
+            (op hint v10
+              (branch b11
                 (block
-                  (let v7 unit (lit unit))
-                  (let v9 bool
-                    (op hint v7
-                      (branch b8
-                        (block
-                          (ret x6)
-                        )
-                      )
-                    )
-                  )
-                  (let v10 unit (lit unit))
-                  (ret v10)
+                  (ret x9)
                 )
               )
             )
-          ))
-          (let v12 nat (lit 5))
-          (let v13 unit (app f5 v12))
-          (let v14 bool (lit true))
-          (let v15 unit (app f11 v14))
-          (ret v15)
+          )
+          (let v13 unit (lit unit))
+          (ret v13)
+        )
+      )
+    )
+  )
+  (main ()
+    (block
+      (source Freigen.Examples.Circuit.Basic 221 45 221 69
+        (block
+          (source Freigen.Examples.Circuit.Basic 215 0 217 18
+            (block
+              (let v14 nat (lit 5))
+              (let v15 unit (lit unit))
+              (let f16 (fn nat unit) (closure def0 v15))
+              (let v17 unit (app f16 v14))
+              (let v18 bool (lit true))
+              (let v19 unit (lit unit))
+              (let f20 (fn bool unit) (closure def7 v19))
+              (let v21 unit (app f20 v18))
+              (ret v21)
+            )
+          )
         )
       )
     )
@@ -387,12 +441,16 @@ info: (program unit
 
 /--
 info: (program nat
-  (source Freigen.Examples.Circuit.Basic 245 30 245 52
+  (main ()
     (block
-      (source Init.Prelude 3722 2 3722 6
+      (source Freigen.Examples.Circuit.Basic 228 30 228 52
         (block
-          (let v0 nat (lit 7))
-          (ret v0)
+          (source Init.Prelude 3722 2 3722 6
+            (block
+              (let v0 nat (lit 7))
+              (ret v0)
+            )
+          )
         )
       )
     )
@@ -404,22 +462,26 @@ info: (program nat
 
 /--
 info: (program nat
-  (source Freigen.Examples.Circuit.Basic 257 35 257 72
+  (main ()
     (block
-      (source Freigen.Examples.Circuit.Basic 104 0 105 43
+      (source Freigen.Examples.Circuit.Basic 235 35 235 72
         (block
-          (let v0 unit (lit unit))
-          (let v3 nat
-            (op hint v0
-              (branch b1
-                (block
-                  (let v2 nat (lit 7))
-                  (ret v2)
+          (source Freigen.Examples.Circuit.Basic 104 0 105 43
+            (block
+              (let v0 unit (lit unit))
+              (let v3 nat
+                (op hint v0
+                  (branch b1
+                    (block
+                      (let v2 nat (lit 7))
+                      (ret v2)
+                    )
+                  )
                 )
               )
+              (ret v3)
             )
           )
-          (ret v3)
         )
       )
     )
@@ -431,15 +493,19 @@ info: (program nat
 
 /--
 info: (program unit
-  (source Freigen.Examples.Circuit.Basic 259 37 259 58
+  (main ()
     (block
-      (source Freigen.Examples.Circuit.Basic 101 0 102 58
+      (source Freigen.Examples.Circuit.Basic 237 37 237 58
         (block
-          (let v0 bool (lit true))
-          (let v1 unit
-            (op assert v0)
+          (source Freigen.Examples.Circuit.Basic 101 0 102 58
+            (block
+              (let v0 bool (lit true))
+              (let v1 unit
+                (op assert v0)
+              )
+              (ret v1)
+            )
           )
-          (ret v1)
         )
       )
     )
@@ -451,15 +517,19 @@ info: (program unit
 
 /--
 info: (program nat
-  (source Freigen.Examples.Storage 101 25 101 35
+  (main ()
     (block
-      (source Freigen.Examples.Storage 99 0 99 35
+      (source Freigen.Examples.Storage 102 25 102 35
         (block
-          (let v0 nat (lit 0))
-          (let v1 nat
-            (op get v0)
+          (source Freigen.Examples.Storage 100 0 100 35
+            (block
+              (let v0 nat (lit 0))
+              (let v1 nat
+                (op get v0)
+              )
+              (ret v1)
+            )
           )
-          (ret v1)
         )
       )
     )
@@ -471,49 +541,57 @@ info: (program nat
 
 /--
 info: (program nat
-  (source Freigen.Examples.Recursion 37 28 37 35
+  (def def0 (env1 unit) (x2 nat) nat
     (block
-      (source Freigen.Examples.Recursion 29 0 31 7
+      (source Freigen.Examples.Recursion 13 0 17 25
         (block
-          (letrec rec11 (x0 nat) nat
+          (let v3 nat (lit 0))
+          (let v4 bool (eq x2 v3))
+          (let v5 nat (if v4
             (block
-              (source Freigen.Examples.Recursion 13 0 17 25
-                (block
-                  (let v1 nat (lit 0))
-                  (let v2 bool (eq x0 v1))
-                  (let v3 nat (if v2
+              (let v6 nat (lit 0))
+              (ret v6)
+            )
+            (block
+              (let v7 nat (lit 1))
+              (let v8 nat (sub x2 v7))
+              (let v9 unit (lit unit))
+              (let f10 (fn nat nat) (closure def0 v9))
+              (let v11 nat (app f10 v8))
+              (let v12 nat (add v11 v8))
+              (let v13 nat (lit 1))
+              (let v14 nat (add v12 v13))
+              (ret v14)
+            )
+          ))
+          (ret v5)
+        )
+      )
+    )
+  )
+  (main ()
+    (block
+      (source Freigen.Examples.Recursion 37 28 37 35
+        (block
+          (source Freigen.Examples.Recursion 29 0 31 7
+            (block
+              (let v15 unit (lit unit))
+              (let v18 nat
+                (op hint v15
+                  (branch b16
                     (block
-                      (let v4 nat (lit 0))
-                      (ret v4)
+                      (let v17 nat (lit 5))
+                      (ret v17)
                     )
-                    (block
-                      (let v5 nat (lit 1))
-                      (let v6 nat (sub x0 v5))
-                      (let v7 nat (self v6))
-                      (let v8 nat (add v7 v6))
-                      (let v9 nat (lit 1))
-                      (let v10 nat (add v8 v9))
-                      (ret v10)
-                    )
-                  ))
-                  (ret v3)
+                  )
                 )
               )
+              (let v19 unit (lit unit))
+              (let f20 (fn nat nat) (closure def0 v19))
+              (let v21 nat (app f20 v18))
+              (ret v21)
             )
           )
-          (let v12 unit (lit unit))
-          (let v15 nat
-            (op hint v12
-              (branch b13
-                (block
-                  (let v14 nat (lit 5))
-                  (ret v14)
-                )
-              )
-            )
-          )
-          (let v16 nat (app rec11 v15))
-          (ret v16)
         )
       )
     )
@@ -522,5 +600,17 @@ info: (program nat
 -/
 #guard_msgs in
 #eval IO.println <| serialize Example.circRender RecursionExample.sumReflected
+
+/--
+info: (program nat
+  (main ((arg0 nat))
+    (block
+      (ret arg0)
+    )
+  )
+)
+-/
+#guard_msgs in
+#eval IO.println <| serialize Example.circRender Example.argumentMain
 
 end Freigen.Ast.SerializedExamples

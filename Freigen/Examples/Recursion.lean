@@ -40,8 +40,8 @@ reflect_def sumReflected := sumMain
 -- reflect_def countdownReflected := countdownMain
 -- reflect_def countAssertsReflected := countAssertsMain
 
-example : ITree.CompE.Eutt CircCompat Eq (Free.toITree sumMain)
-    (Expr.denote (sumReflected (Tp.denote M))) :=
+example : ITree.CompE.Eutt (CircCompat _) Eq (Free.toITree sumMain)
+    (Closed.denote sumReflected) :=
   sumReflected_sound
 
 end Freigen.Ast.RecursionExample

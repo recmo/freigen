@@ -1,6 +1,7 @@
 import Freigen.Reflect.Resolve
 import Freigen.Reflect.Source
 import Lean.Meta.RecursorInfo
+import Lean.Meta.Match.MatcherApp.Basic
 
 namespace Freigen
 namespace Ast
@@ -223,6 +224,16 @@ partial def discover (root : Lean.Expr) : TermElabM Plan := do
     let e ← instantiateMVars e
     let fn := e.getAppFn
     if let some n := fn.constName? then
+      -- Matchers organize source syntax; they are not user helpers.  Only their alternatives can
+      -- contain computations, so inspecting motives, discriminants, and generated plumbing is
+      -- both unnecessary and catastrophically expensive for `brecOn` functionals.
+      if let some matcher ← matchMatcherApp? e (alsoCasesOn := true) then
+        for alt in matcher.alts do visit alt
+        return
+      -- Other auxiliary recursors are likewise compiler structure.  Recognized recursive helpers
+      -- are entered through their functional below, so there is no useful call hidden here.
+      if isAuxRecursor (← getEnv) n then
+        return
       if !isReflectorCore n then
         let resultType ← inferType e
         if let some (_, result) ← freekType? resultType then
@@ -265,10 +276,22 @@ partial def discover (root : Lean.Expr) : TermElabM Plan := do
             return
           if ← completed key then return
           state.modify fun current => { current with active := current.active.push key }
-          if let some body ← unfoldDefinition? e then visit body
+          -- A generated recursive definition already exposes precisely the syntax we care about
+          -- through its `brecOn` functional.  Walking the unfolded recursor instead duplicates and
+          -- normalizes compiler-generated recursion plumbing.
+          let analyzedShape ← analyzeNatBRec n
+          match analyzedShape with
+          | some shape =>
+              -- The generated functional is normally a reducible auxiliary constant (`foo._f`).
+              -- Open that one definition so dependency calls in its zero/successor branches are
+              -- visible, while leaving the surrounding recursor itself closed.
+              if let some functionalBody ← unfoldDefinition? shape.functional then
+                visit functionalBody
+              else
+                visit shape.functional
+          | none => if let some body ← unfoldDefinition? e then visit body
           state.modify fun current => { current with active := current.active.pop }
           let discoveredRec ← keyMember key (← state.get).recursive
-          let analyzedShape ← analyzeNatBRec n
           let isRec := discoveredRec || analyzedShape.isSome
           let repr ← getRepr result
           let boundary ← if isRec then
@@ -279,7 +302,7 @@ partial def discover (root : Lean.Expr) : TermElabM Plan := do
                 let .value arg := params[0]!
                   | throwError "reflect%: recursive helper `{n}` currently requires one Nat argument"
                 let argCode ← mkAppM ``ReprSpec.code #[arg.repr]
-                unless ← isDefEq argCode (mkConst ``Tp0.nat) do
+                unless ← isDefEq argCode (mkConst ``Tp.nat) do
                   throwError "reflect%: recursive helper `{n}` must use the Nat representation"
                 pure (.natBRec arg shape)
             | none => throwError

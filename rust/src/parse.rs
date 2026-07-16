@@ -5,7 +5,7 @@
 
 use std::fmt;
 
-use num_bigint::BigUint;
+use num_bigint::{BigInt, BigUint};
 
 use crate::ast::*;
 use crate::sexp::{parse_sexp, Sexp, SexpError};
@@ -83,6 +83,7 @@ fn parse_tp(s: &Sexp) -> Result<Tp> {
         Sexp::Atom(a) => match a.as_str() {
             "bool" => Ok(Tp::Bool),
             "nat" => Ok(Tp::Nat),
+            "int" => Ok(Tp::Int),
             "unit" => Ok(Tp::Unit),
             _ => err(format!("unknown type `{a}`")),
         },
@@ -94,9 +95,7 @@ fn parse_tp(s: &Sexp) -> Result<Tp> {
                 "a type head",
             )?;
             match (head, &items[1..]) {
-                ("array", [a]) => Ok(Tp::Array(Box::new(parse_tp(a)?))),
                 ("prod", [a, b]) => Ok(Tp::Prod(Box::new(parse_tp(a)?), Box::new(parse_tp(b)?))),
-                ("sum", [a, b]) => Ok(Tp::Sum(Box::new(parse_tp(a)?), Box::new(parse_tp(b)?))),
                 ("fn", [a, b]) => Ok(Tp::Fn(Box::new(parse_tp(a)?), Box::new(parse_tp(b)?))),
                 _ => err(format!("malformed type `{s}`")),
             }
@@ -114,19 +113,15 @@ fn parse_value(tp: &Tp, s: &Sexp) -> Result<Value> {
             other => err(format!("expected a bool literal, got `{other}`")),
         },
         Tp::Nat => Ok(Value::Nat(as_biguint(s, "a nat literal")?)),
+        Tp::Int => Ok(Value::Int(
+            as_atom(s, "an int literal")?
+                .parse::<BigInt>()
+                .map_err(|_| ParseError::Grammar(format!("expected an int literal, got `{s}`")))?,
+        )),
         Tp::Unit => match as_atom(s, "a unit literal")? {
             "unit" => Ok(Value::Unit),
             other => err(format!("expected `unit`, got `{other}`")),
         },
-        Tp::Array(a) => {
-            let elems = as_list(s, "an array literal")?;
-            Ok(Value::Array(
-                elems
-                    .iter()
-                    .map(|e| parse_value(a, e))
-                    .collect::<Result<Vec<_>>>()?,
-            ))
-        }
         Tp::Prod(a, b) => {
             let items = as_list(s, "a pair literal")?;
             match items {
@@ -135,18 +130,6 @@ fn parse_value(tp: &Tp, s: &Sexp) -> Result<Value> {
                     Box::new(parse_value(b, y)?),
                 )),
                 _ => err(format!("expected a two-element pair literal, got `{s}`")),
-            }
-        }
-        Tp::Sum(a, b) => {
-            let items = as_list(s, "a sum literal")?;
-            match items {
-                [head, x] if as_atom(head, "a literal head")? == "inl" => {
-                    Ok(Value::Inl(Box::new(parse_value(a, x)?)))
-                }
-                [head, x] if as_atom(head, "a literal head")? == "inr" => {
-                    Ok(Value::Inr(Box::new(parse_value(b, x)?)))
-                }
-                _ => err(format!("expected `(inl …)`/`(inr …)`, got `{s}`")),
             }
         }
         Tp::Fn(_, _) => match as_atom(s, "an opaque literal")? {
@@ -163,8 +146,6 @@ fn un_op(head: &str) -> Option<UnOp> {
         "not" => UnOp::Not,
         "fst" => UnOp::Fst,
         "snd" => UnOp::Snd,
-        "inl" => UnOp::Inl,
-        "inr" => UnOp::Inr,
         _ => return None,
     })
 }
@@ -174,23 +155,12 @@ fn bin_op(head: &str) -> Option<BinOp> {
         "add" => BinOp::Add,
         "sub" => BinOp::Sub,
         "mul" => BinOp::Mul,
-        "pow" => BinOp::Pow,
         "eq" => BinOp::Eq,
         "lt" => BinOp::Lt,
         "le" => BinOp::Le,
         "and" => BinOp::And,
         "or" => BinOp::Or,
         "pair" => BinOp::Pair,
-        "push" => BinOp::Push,
-        _ => return None,
-    })
-}
-
-fn pop_op(head: &str) -> Option<POp> {
-    Some(match head {
-        "aget" => POp::AGet,
-        "aset" => POp::ASet,
-        "select" => POp::Select,
         _ => return None,
     })
 }
@@ -217,9 +187,6 @@ fn parse_expr(tp: &Tp, s: &Sexp) -> Result<Expr> {
     )?;
     match (head, &items[1..]) {
         ("lit", [v]) => Ok(Expr::Lit(parse_value(tp, v)?)),
-        ("arr", args) => Ok(Expr::MkArr(
-            args.iter().map(as_var).collect::<Result<Vec<_>>>()?,
-        )),
         ("if", [cond, then_, else_]) => Ok(Expr::If {
             cond: as_var(cond)?,
             then_: parse_body(then_)?,
@@ -233,18 +200,10 @@ fn parse_expr(tp: &Tp, s: &Sexp) -> Result<Expr> {
                 .map(parse_branch)
                 .collect::<Result<Vec<_>>>()?,
         }),
-        ("self", [arg]) => Ok(Expr::SelfCall(as_var(arg)?)),
-        ("lam", [binder, body]) => {
-            let binder = as_list(binder, "a lambda binder")?;
-            let [v, param_tp] = binder else {
-                return err(format!("lam binder expects (var type), got `{s}`"));
-            };
-            Ok(Expr::Lam {
-                param: as_var(v)?,
-                param_tp: parse_tp(param_tp)?,
-                body: parse_body(body)?,
-            })
-        }
+        ("closure", [definition, captured]) => Ok(Expr::Closure {
+            definition: as_var(definition)?,
+            captured: as_var(captured)?,
+        }),
         ("app", [function, argument]) => Ok(Expr::App {
             function: as_var(function)?,
             argument: as_var(argument)?,
@@ -262,11 +221,6 @@ fn parse_expr(tp: &Tp, s: &Sexp) -> Result<Expr> {
                     ));
                 };
                 Ok(Expr::Bin(o, as_var(a)?, as_var(b)?))
-            } else if let Some(o) = pop_op(head) {
-                Ok(Expr::Pop(
-                    o,
-                    args.iter().map(as_var).collect::<Result<Vec<_>>>()?,
-                ))
             } else {
                 err(format!("malformed expression `{s}`"))
             }
@@ -316,19 +270,6 @@ fn parse_command(s: &Sexp) -> Result<Command> {
                 tp,
             })
         }
-        ("letrec", [var, binder, result_tp, body]) => {
-            let binder = as_list(binder, "a letrec binder")?;
-            let [param, param_tp] = binder else {
-                return err(format!("letrec binder expects (var type), got `{s}`"));
-            };
-            Ok(Command::LetRec {
-                var: as_var(var)?,
-                param: as_var(param)?,
-                param_tp: parse_tp(param_tp)?,
-                result_tp: parse_tp(result_tp)?,
-                body: parse_body(body)?,
-            })
-        }
         ("source", args) => parse_source(args, s),
         ("ret", [var]) => Ok(Command::Ret(as_var(var)?)),
         _ => err(format!("malformed statement `{s}`")),
@@ -353,11 +294,71 @@ fn parse_body(s: &Sexp) -> Result<Block> {
 pub fn parse_program(src: &str) -> Result<Program> {
     let sexp = parse_sexp(src)?;
     let items = as_list(&sexp, "a program")?;
-    match items {
-        [head, result, body] if as_atom(head, "the program head")? == "program" => Ok(Program {
-            result: parse_tp(result)?,
-            body: parse_body(body)?,
-        }),
-        _ => err(format!("expected `(program type body)`, got `{sexp}`")),
+    let [head, result, level @ ..] = items else {
+        return err(format!("expected `(program type def* main)`, got `{sexp}`"));
+    };
+    if as_atom(head, "the program head")? != "program" || level.is_empty() {
+        return err(format!("expected `(program type def* main)`, got `{sexp}`"));
     }
+    let mut definitions = Vec::new();
+    for item in &level[..level.len() - 1] {
+        let fields = as_list(item, "a definition")?;
+        let [def, name, captured_binder, binder, result_tp, body] = fields else {
+            return err(format!(
+                "expected `(def name (captured type) (arg type) type body)`, got `{item}`"
+            ));
+        };
+        if as_atom(def, "a definition head")? != "def" {
+            return err(format!("expected a definition before main, got `{item}`"));
+        }
+        let captured_binder = as_list(captured_binder, "a captured-value binder")?;
+        let [captured, captured_tp] = captured_binder else {
+            return err(format!(
+                "captured-value binder expects (var type), got `{item}`"
+            ));
+        };
+        let binder = as_list(binder, "a definition binder")?;
+        let [param, param_tp] = binder else {
+            return err(format!(
+                "definition binder expects (var type), got `{item}`"
+            ));
+        };
+        definitions.push(Definition {
+            name: as_var(name)?,
+            captured: as_var(captured)?,
+            captured_tp: parse_tp(captured_tp)?,
+            param: as_var(param)?,
+            param_tp: parse_tp(param_tp)?,
+            result_tp: parse_tp(result_tp)?,
+            body: parse_body(body)?,
+        });
+    }
+    let main = level.last().unwrap();
+    let fields = as_list(main, "main")?;
+    let [main_head, params, body] = fields else {
+        return err(format!(
+            "expected `(main ((arg type) …) body)`, got `{main}`"
+        ));
+    };
+    if as_atom(main_head, "the main head")? != "main" {
+        return err(format!("program must end in main, got `{main}`"));
+    }
+    let params = as_list(params, "main parameters")?
+        .iter()
+        .map(|binder| {
+            let fields = as_list(binder, "a main binder")?;
+            let [name, tp] = fields else {
+                return err(format!("main binder expects (var type), got `{binder}`"));
+            };
+            Ok((as_var(name)?, parse_tp(tp)?))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Program {
+        result: parse_tp(result)?,
+        definitions,
+        main: Main {
+            params,
+            body: parse_body(body)?,
+        },
+    })
 }

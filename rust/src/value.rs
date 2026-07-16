@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use num_bigint::BigUint;
+use num_bigint::{BigInt, BigUint};
 
 /// A runtime value of some object type.
 ///
@@ -11,21 +11,18 @@ use num_bigint::BigUint;
 pub enum Value {
     Bool(bool),
     Nat(BigUint),
+    Int(BigInt),
     Unit,
     Pair(Box<Value>, Box<Value>),
-    Array(Vec<Value>),
-    Inl(Box<Value>),
-    Inr(Box<Value>),
     /// The image of a literal with no serializable payload (a function-typed literal).  Inspecting
     /// it in any primitive is a runtime error.
     Opaque,
-    /// A **function value**: a suspended block closing over its captured environment; applying
-    /// it binds `param` and runs `body`.
+    /// A definition reference paired with its explicitly captured value.
     Closure {
         param: String,
         body: crate::ast::Block,
         env: std::collections::HashMap<String, Value>,
-        recursive: bool,
+        definitions: std::collections::HashMap<String, crate::ast::Definition>,
     },
 }
 
@@ -41,20 +38,9 @@ impl fmt::Display for Value {
         match self {
             Value::Bool(b) => write!(f, "{b}"),
             Value::Nat(n) => write!(f, "{n}"),
+            Value::Int(n) => write!(f, "{n}"),
             Value::Unit => write!(f, "unit"),
             Value::Pair(a, b) => write!(f, "({a} {b})"),
-            Value::Array(xs) => {
-                write!(f, "(")?;
-                for (i, x) in xs.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, " ")?;
-                    }
-                    write!(f, "{x}")?;
-                }
-                write!(f, ")")
-            }
-            Value::Inl(x) => write!(f, "(inl {x})"),
-            Value::Inr(x) => write!(f, "(inr {x})"),
             Value::Opaque => write!(f, "opaque"),
             Value::Closure { .. } => write!(f, "<closure>"),
         }

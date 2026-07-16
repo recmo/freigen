@@ -9,14 +9,14 @@ universe u v
 /-- Explicit representation data consumed by the reflector macro.  This is registry data, not a
     typeclass: pass 1 selects a declaration and pass 2 uses that exact term. -/
 structure ReprSpec (α : Type) where
-  code : Tp0
-  relates : α → code.denote → Prop
-  encode : α → code.denote
-  encode_related : ∀ source, relates source (encode source)
+  code : Tp
+  relates : {ctx : DefCtx} → α → code.denote ctx → Prop
+  encode : {ctx : DefCtx} → α → code.denote ctx
+  encode_related : ∀ {ctx} source, relates (ctx := ctx) source (encode source)
 
 /-- Explicit target operation and compatibility witness for one source operation. -/
-structure OpSpec {S : ITree.HSig.{u, v}} {H : Signature}
-    (C : Signature.Compat S H) (e : S.op) where
+structure OpSpec {S : ITree.HSig.{u, v}} {H : Signature} {ctx : DefCtx}
+    (C : Signature.Compat S H ctx) (e : S.op) where
   target : H.op
   witness : C.opRel e target
 

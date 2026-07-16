@@ -1,279 +1,178 @@
-# Freigen Reflector: Reviewer’s Guide
+# Freigen reflector: reviewer’s guide
 
-Freigen reflects a higher-order `Free` program into a small typed PHOAS AST and constructs a
-relational weak-bisimulation proof for that exact AST in the same traversal. The result is not just
-code generation: every successful `reflect%` invocation returns closed syntax together with a
-kernel-checked theorem relating its denotation to `Free.toITree`.
-
-The central output type is [`Reflected`](Sound.lean), morally:
+Freigen turns a higher-order `Free` computation into a typed two-level program and constructs the
+weak-bisimulation certificate for that exact program during emission. A successful `reflect%`
+returns, morally:
 
 ```lean
-{ code : ∀ V, Expr H V none α //
-    ITree.CompE.Eutt C result
+{ code : Closed H α //
+    ITree.CompE.Eutt (C code.ctx) result
       (Free.toITree source)
-      (Expr.denote (code (Tp.denote (ITree.CompE H.spec)))) }
+      (Closed.denote code) }
 ```
 
-The elaborator is therefore outside the trusted argument: it may reject a source program or build
-an inconvenient AST, but it cannot successfully attach an invalid certificate without Lean’s
-kernel rejecting the generated declaration.
+The metaprogram can reject a source term or choose inconvenient code. It cannot certify incorrect
+code without Lean’s kernel accepting a false proof term.
 
-## What to look at
+## The central design
 
-The implementation is organized around three claims.
+The output language is defined in [`../Ast/Basic.lean`](../Ast/Basic.lean).
 
-1. **Specialization is planned, not discovered while emitting.** [`discover`](Plan.lean) produces
-   an immutable dependency-ordered `Plan`. `HelperBoundary` contains the entire source-argument
-   layout, so represented arguments, static specialization arguments, and reconstruction cannot
-   disagree.
-2. **Syntax and proof are synchronized locally.** Every computation node returns one
-   [`Emission`](Comp.lean) containing semantic AST, generic PHOAS AST, and the theorem for the
-   semantic AST. There is no later AST recovery, proof search over generated syntax, or global
-   normalization pass.
-3. **Recursion is reflected structurally.** The planner recognizes Lean’s generated `Nat.brecOn`
-   shape. [`NatRec.lean`](NatRec.lean) relates that source functional to the AST’s `letrec`/`mrec`
-   semantics, so a symbolic recursive argument is never normalized by the macro.
-
-The most useful review questions are:
-
-- Is `ReprSpec`—an encoder plus a source/target relation—the right boundary between host values and
-  object types?
-- Is `HelperBoundary` the canonical representation of monomorphic specialization and argument
-  layout?
-- Is the `Nat.brecOn` recognition/adequacy boundary the right prototype for additional recursion
-  backends?
-- Is simultaneous semantic/generic/proof emission preferable to emitting syntax first and proving
-  it in a second traversal?
-- Does the explicit [`Construct`](Construct.lean) adapter layer buy enough auditability to justify
-  mirroring the signatures of computation AST nodes and proof constructors?
-
-## Fast reading route
-
-For a conceptual review, these six stops are sufficient:
-
-1. [`../Ast/Basic.lean`](../Ast/Basic.lean): `Tp0`, `Tp`, `Expr`, and `Expr.denote`. These are the
-   object language and its semantics.
-2. [`Sound.lean`](Sound.lean): `Reflected`, `ReflectionWitnessAt`, `Adequate`, and the
-   `Reflection.*`/`RecReflection.*` rules. This is the semantic contract.
-3. [`Plan.lean`](Plan.lean): `HelperBoundary`, `SpecializationKey`, `Plan`, and `discover`. This is
-   the complete policy for helper specialization and supported recursion recognition.
-4. [`Comp.lean`](Comp.lean): `Emission`, `EmitContext`, the node emitters, and the small `emitComp`
-   dispatcher. This is where source matching, AST construction, and proof construction coincide.
-5. [`Emit.lean`](Emit.lean): `buildRecursiveHelper`, `buildOrdinaryHelper`, `emitProgram`, and
-   `reflectProgram`. This installs the plan and packages the result; it does not traverse a second
-   AST.
-6. [`../Examples/Serialized.lean`](../Examples/Serialized.lean) and
-   [`../AxCheck.lean`](../AxCheck.lean): exact generated trees and the axiom footprint of generated
-   certificates.
-
-For a full implementation audit, continue with `Registry.lean` → `Finite.lean` → `Resolve.lean` for
-representation selection, `Value.lean` for value matching and its small syntax constructors,
-`Construct.lean` for the named computation/proof signature boundary, and `NatConstruct.lean` for
-its recursion-specific extension.
-
-## One worked path
-
-[`Examples/Circuit/Basic.lean`](../Examples/Circuit/Basic.lean) contains a recursive helper whose
-argument comes from an effect, so macro-time evaluation cannot unroll it:
-
-```lean
-def triangularSrc : Nat → Circuit Nat
-  | 0 => pure 0
-  | n + 1 => do
-      let subtotal ← triangularSrc n
-      pure (subtotal + n + 1)
-
-def symbolicRecursiveMain : Circuit Nat := do
-  let n ← Circuit.hint (pure 5)
-  triangularSrc n
-
-#reflect_plan symbolicRecursiveMain
-reflect_def symbolicRecursiveReflected := symbolicRecursiveMain
+```text
+Code       = definition telescope + main
+Definition = captured environment × explicit argument → Expr
+Expr       = values | primitives | if | closure ref env | app fn arg | visible operation
 ```
 
-The plan reports one specialization, `triangularSrc`. The emitted tree contains one `letrec` and a
-symbolic `self` call—not five unrolled copies. `reflect_def` creates both the closed program and:
+A `DefRef` is an intrinsically typed de Bruijn reference. A newly added definition is scoped over
+itself and the older tail of the telescope. That gives exactly the intended stratification:
+self-recursion and calls to dependencies are representable; forward references are not.
 
-```lean
-symbolicRecursiveReflected_sound :
-  ITree.CompE.Eutt CircCompat Eq
-    (Free.toITree symbolicRecursiveMain)
-    (Expr.denote (symbolicRecursiveReflected (Tp.denote M)))
+There is one function representation. `Tp.fn input output` denotes an explicit `Closure`, not a
+Lean function. Constructing a closure pairs a `DefRef` with a packed captured environment, and
+`Expr.app` invokes it. Consequently there is no local-lambda constructor, no distinct definition
+call, no self-call node, and no `letrec`.
+
+The semantic path is:
+
+```text
+Expr.denote
+  : Expr → CompE (visible effects ⊕ Call completedDefinitions) result
+
+Defs.callHandler
+  : Call completedDefinitions → CompE visibleEffects result
+
+Code.denote
+  = interpHandler Defs.callHandler (main.denote ...)
 ```
 
-The complete serialized tree, including source ranges, is guarded in
-[`Serialized.lean`](../Examples/Serialized.lean). Any change to helper spilling, recursion shape,
-operation branches, or source annotations must update an exact expected AST.
+The call handler dispatches the closure’s typed reference into `Defs.denote` and inserts the
+handler’s guarded `tau`. Recursion is therefore an ordinary closure application in syntax and a
+guarded coinductive call in semantics.
 
-## Claims and executable evidence
+## The proof boundary
 
-| Claim | Primary code | Evidence |
-| --- | --- | --- |
-| Successful reflection carries an `Eutt` certificate | [`Sound.lean`](Sound.lean), [`Emit.lean`](Emit.lean) | [`AxCheck.lean`](../AxCheck.lean) |
-| Semantic and generic ASTs stay synchronized | `Emission` and `emitComp` in [`Comp.lean`](Comp.lean) | Full-AST guards in [`Serialized.lean`](../Examples/Serialized.lean) |
-| Helpers are monomorphized by declaration and static arguments | `SpecializationKey` and `discover` in [`Plan.lean`](Plan.lean) | `staticSpecializationMain` in [`Circuit/Basic.lean`](../Examples/Circuit/Basic.lean) |
-| Symbolic recursion is represented by `letrec`/`self`, not unfolded | [`NatRec.lean`](NatRec.lean), `buildRecursiveHelper` in [`Emit.lean`](Emit.lean) | `symbolicRecursiveMain` and `sumMain` in [`Circuit/Basic.lean`](../Examples/Circuit/Basic.lean) and [`Recursion.lean`](../Examples/Recursion.lean) |
-| Dynamic operation blocks preserve bound values and proofs | `emitOrdinaryDynamicBlocks` in [`Comp.lean`](Comp.lean) | Circuit `hint` guards in [`Serialized.lean`](../Examples/Serialized.lean) |
-| Reflection does not depend on aggressive reduction | `exposeComp` in [`Comp.lean`](Comp.lean), recursion recognition in [`Plan.lean`](Plan.lean) | Cached builds plus symbolic helper/recursion AST guards |
+Three files contain the semantic argument.
 
-## Reproduce the checks
+1. [`../ITree/Basic.lean`](../ITree/Basic.lean) defines indexed tree fibers, `asBlock`,
+   `relabelBlock`, monadic bind, call handling, and their coalgebraic laws.
+2. [`../Ast/Run.lean`](../Ast/Run.lean) proves that interpreting calls commutes with embedding a
+   computation into any scoped operation block. The proof is a direct indexed bisimulation; its
+   call cases use `asBlock_bind` and `relabelBlock_bind`.
+3. [`Sound.lean`](Sound.lean) defines `ReflectionWitness` and the compositional rules used by the
+   macro. In particular, `Reflection.op` matches scoped branches using the theorem from
+   `Ast.Run`; it contains no normalization oracle or unproved handler law.
+
+[`../ITree/Handler.lean`](../ITree/Handler.lean) is deliberately small: it only exposes the five
+one-step equations for interpreting return, failure, `tau`, visible operations, and calls at an
+arbitrary result fiber.
+
+## The two reflector passes
+
+Pass one, [`Plan.lean`](Plan.lean), is read-only. `discover`:
+
+- identifies supported helper boundaries;
+- resolves host/object representations;
+- specializes closed static arguments;
+- recognizes re-entry into an active specialization as recursion;
+- records definitions in dependency order.
+
+It emits no AST and no proof terms. The result is an immutable `Plan`.
+
+Pass two executes that plan:
+
+- [`Emit.lean`](Emit.lean) allocates the final `DefCtx`, constructs definitions in dependency
+  order, and packages `Code` plus its theorem.
+- [`Comp.lean`](Comp.lean) is the computation dispatcher. Its “Source matching” section recognizes
+  the few supported source shapes; its construction sections emit the corresponding syntax and
+  proof together.
+- [`Value.lean`](Value.lean) handles pure represented values.
+- [`Construct.lean`](Construct.lean) and [`NatConstruct.lean`](NatConstruct.lean) are typed
+  adapters for assembling long object-language and theorem applications.
+
+Every computation emission carries three synchronized views: semantic target code, generic PHOAS
+code, and the proof for the semantic code. There is no later traversal that attempts to recover a
+proof from a finished AST.
+
+## Recursion
+
+The only current recursion backend is structural unary Nat recursion. The planner uses Lean’s
+recursor metadata to recognize the generated `Nat.brecOn` application; it does not repeatedly
+`whnf` the recursive source body.
+
+[`NatRec.lean`](NatRec.lean) states and proves the bridge between that source functional and the
+ordinary closure/application semantics of one definition in the final telescope.
+[`NatConstruct.lean`](NatConstruct.lean) only builds applications of that theorem.
+
+The important emitted shape is visible in
+[`../Examples/Serialized.lean`](../Examples/Serialized.lean): a recursive branch constructs a
+closure for its own `def` reference and applies it. The loop is neither unrolled nor represented by
+a privileged recursive AST node.
+
+## Recommended reading order
+
+A conceptual review can stop after these eight files:
+
+1. [`../Ast/Basic.lean`](../Ast/Basic.lean) — the language and denotation.
+2. [`../ITree/Basic.lean`](../ITree/Basic.lean) — indexed scoped trees and call interpretation.
+3. [`../Ast/Run.lean`](../Ast/Run.lean) — the scoped call-handler bisimulation.
+4. [`Sound.lean`](Sound.lean) — the certificate interface and compositional proof rules.
+5. [`Plan.lean`](Plan.lean) — specialization discovery.
+6. [`Comp.lean`](Comp.lean) — source matching and node construction.
+7. [`Emit.lean`](Emit.lean) — definition-table construction and packaging.
+8. [`../Examples/Serialized.lean`](../Examples/Serialized.lean) and
+   [`../AxCheck.lean`](../AxCheck.lean) — exact outputs and axiom footprints.
+
+For the extension surface, then read [`Attributes.lean`](Attributes.lean),
+[`Registry.lean`](Registry.lean), [`Resolve.lean`](Resolve.lean), and
+[`Source.lean`](Source.lean). [`Basic.lean`](Basic.lean) contains only the public commands once
+their implementation is understood.
+
+## Files at a glance
+
+| File | Responsibility |
+| --- | --- |
+| `Ast/Basic.lean` | Object language, closures, definition telescope, denotation |
+| `Ast/Run.lean` | Call-handler/block commuting bisimulation |
+| `Ast/Sexp.lean` | Stable two-level serialization |
+| `ITree/Basic.lean` | Scoped coinductive trees, bind, handlers |
+| `ITree/Handler.lean` | Indexed handler equations |
+| `Reflect/Sound.lean` | Semantic contracts and proof constructors |
+| `Reflect/Plan.lean` | Immutable specialization plan |
+| `Reflect/Comp.lean` | Computation matching and lockstep emission |
+| `Reflect/Emit.lean` | Plan execution and final code/theorem packaging |
+| `Reflect/NatRec.lean` | Nat recursion adequacy |
+| `Reflect/Value.lean` | Pure value reification |
+| `Reflect/Construct*.lean` | Typed meta-level construction adapters |
+| `Compile/Registry.lean` | Lightweight persistent artifact registry |
+| `Compile.lean` | Reflection and artifact registration |
+| `Main.lean` | Standalone artifact emitter; imports only the lightweight registry |
+
+The split between `Compile.Registry` and `Compile` is a performance boundary: building the
+emitter executable does not native-compile the reflector and example graph.
+
+## Current accepted fragment
+
+The reflector currently supports registered Nat, Int, Bool, Unit, product, and closure
+representations; registered higher-order operations; ordinary specialized helpers; the supported
+one- or two-value helper boundaries; structural unary Nat recursion; source locations; and dynamic
+operation blocks.
+
+Capturing local source lambdas, recursion schemes other than the Nat backend, unregistered values or
+operations, and escaping source-only values are rejected during elaboration.
+
+## Verification
 
 From the repository root:
 
 ```sh
-# Entire project, including every Freigen.* module
 lake build
-
-# Exact serialized AST regression suite
 lake build Freigen.Examples.Serialized
-
-# Print the axiom footprint of representative generated certificates
 lake env lean Freigen/AxCheck.lean
-
-# Materialize artifacts recorded by #compile
 lake build Freigen:prog
+(cd rust && cargo test)
 ```
 
-The cached full build is currently sub-second on the development machine; the important regression
-criterion is that reflection remains proportional to the represented program rather than to
-reducible source execution.
-
-## Scope and known limits
-
-The accepted fragment is deliberately explicit:
-
-- `Free.pure`, `Free.bind`, and registered `Free.op` computations;
-- registered first-order values, built-in literals, products/projections, supported unary and
-  binary value operations, and checked finite-type casts;
-- nonrecursive helpers with one represented argument or two represented arguments encoded as a
-  product, interleaved with any closed static specialization arguments;
-- structural `Nat.brecOn` helpers with one represented `Nat` argument;
-- dynamic operation blocks in ordinary code; operations inside recursive bodies currently require
-  empty branch types.
-
-Unsupported dynamic helper arguments, unregistered representations or operations, other recursion
-schemes, capturing first-class helper functions, and source-only variables escaping into PHOAS
-code are elaboration errors. [`FirstClass.lean`](../Examples/FirstClass.lean) and the commented
-targets in [`Recursion.lean`](../Examples/Recursion.lean) retain representative future acceptance
-tests.
-
-The main deliberate tradeoffs are:
-
-- **Two phases.** Planning duplicates no emission work, but exists so specialization identity,
-  recursion, and dependency order are settled before any proof term is built.
-- **One lockstep emission.** Semantic code, generic code, and proof share control flow. This avoids
-  recovery passes at the cost of an `Emission` invariant maintained by the node constructors.
-- **Explicit construction adapters.** `Construct.lean` and `NatConstruct.lean` are verbose, but the
-  long computation/proof-rule applications are centralized there and named at call sites. The
-  smaller value-node applications remain next to value matching in `Value.lean`.
-- **One recursion backend.** The generic soundness contracts support recursive bodies; only the
-  `Nat.brecOn` recognition and adequacy backend is implemented.
-
----
-
-# Implementation Reference
-
-## Public surface
-
-Importing [`Basic.lean`](Basic.lean) provides:
-
-- `#reflect_plan program` — print pass-one specializations without emitting code;
-- `reflect_semantic% program` — expose the semantic AST and witness for debugging;
-- `reflect% program` — return closed PHOAS code and its relational theorem;
-- `reflect_def name := program` — install stable code and `name_sound` declarations.
-
-`#compile program => "path"` is the downstream serialization command from `Freigen.Compile`.
-
-Registrations are explicit elaborator data rather than typeclass search: `ast_compat`, `ast_repr`,
-`ast_op`, `ast_inline`, and `ast_render`.
-
-## Files at a glance
-
-| File | Sole responsibility |
-| --- | --- |
-| [`Attributes.lean`](Attributes.lean) | Declares the `ast_*` registry attributes. |
-| [`Registry.lean`](Registry.lean) | Defines `ReprSpec`, `OpSpec`, and built-in representations. |
-| [`Resolve.lean`](Resolve.lean) | Selects explicit registry entries and invokes representation policy. |
-| [`Source.lean`](Source.lean) | Quotes syntax and declaration source ranges. |
-| [`Sound.lean`](Sound.lean) | Defines reflection contracts and proof constructors; no metaprogramming. |
-| [`NatRec.lean`](NatRec.lean) | Proves the `Nat.brecOn` source-functional/AST recursion bridge. |
-| [`Construct.lean`](Construct.lean) | Names computation-AST and proof-rule declaration applications. |
-| [`NatConstruct.lean`](NatConstruct.lean) | Adds construction adapters for the Nat recursion backend. |
-| [`Plan.lean`](Plan.lean) | Recognizes recursion and constructs the immutable helper plan. |
-| [`Value.lean`](Value.lean) | Matches host values and constructs generic value syntax. |
-| [`Comp.lean`](Comp.lean) | Matches computation nodes and emits code plus proofs in lockstep. |
-| [`Emit.lean`](Emit.lean) | Builds/installs planned helpers, executes the root, and packages output. |
-| [`Basic.lean`](Basic.lean) | Exposes the four public elaborators. |
-
-The phase boundary is literal:
-
-```text
-registries ───────┐
-source term ──────┴─→ discover → Plan
-source term + Plan ─→ helper installation → paired emission → Reflected
-```
-
-## Pass 1: discovery
-
-Pass 1 emits no AST and no proof terms. It:
-
-1. Resolves source/target signature compatibility.
-2. Classifies helper arguments as represented values, closed static arguments, or unsupported.
-3. Uses one `SpecializationKey` representation in completed, active, and recursive state.
-4. Walks helper bodies before recording callers, producing dependency order.
-5. Marks re-entry of an active key as recursion.
-6. Records the exact `ReprSpec` selected for every represented boundary argument and result.
-7. Constructs a `HelperBoundary` containing every static segment and represented parameter.
-8. Rejects unsupported boundaries before returning the plan.
-
-The root has a separate entry path: an ordinary root is executed directly, while a recursive root
-is deliberately planned as a helper. Operation mappings are resolved during emission; helper
-specialization and argument classification are not repeated.
-
-## Pass 2: paired emission
-
-Pass 2 maintains three forms of each represented atom:
-
-- a generic PHOAS atom `V α`, used only by closed AST code;
-- a semantic target atom `α.denote`, used by `Expr.denote`;
-- a source atom, used only by the source `Free` term and proof.
-
-The environment also stores `Φ → Rel source target`. A source-only variable or relation proof is
-rejected if it occurs in the generated AST projection.
-
-Every source node produces one `Emission` containing semantic code, generic code, and a
-`ReflectionWitnessAt` for the semantic code. `Construct.*` records name the arguments supplied to
-computation-level `Expr.*` and `Reflection.*` declarations; `Value.lean` owns value syntax. Final
-packaging abstracts the generic program over `V`, specializes it to the semantic carrier for the
-theorem statement, and attaches the already-constructed witness.
-
-Operation construction has three proof-rule cases: recursive operations with empty branches,
-ordinary operations with empty branches, and ordinary operations with dynamic branches. The common
-path resolves the operation, emits its continuation, selects one case, and constructs the final
-node.
-
-## Helper spilling and recursion
-
-Nonrecursive specializations are installed in dependency order as nested `Expr.lam` nodes;
-recursive specializations use `Expr.letrec`. A two-argument helper is spilled as one product
-argument: calls construct the pair, the body projects it, and adequacy uses the conjunction of the
-two representation relations. Each installed helper stores its PHOAS function value and an
-`Adequate` theorem relating source and target calls.
-
-Recursive helper construction uses the source definition’s `Nat.brecOn` functional to build the
-zero and successor ASTs. `natBrecCode` gives semantic and generic bodies the same explicit syntax;
-`mrec_natBrecBody_eq_code` transports structural-induction adequacy locally. Recursive calls become
-`Expr.selfCall`, including beneath effects and continuations. There is no whole-program recursive
-normalization or special case in final packaging.
-
-## Serialization and provenance
-
-`#compile` creates reflected code, its serialized `String`, and a named soundness theorem, then
-records the artifact in a persistent environment extension. The `:prog` library facet evaluates
-recorded strings and writes them to their requested paths.
-
-`Expr.source` is a denotationally transparent annotation containing a module and Lean source range.
-Reflection records the invocation range, a named root’s declaration range, and every spilled
-helper’s declaration range. Imported `.olean` files do not retain subterm `InfoTree` ranges, so
-helper annotations are declaration-granular. Missing ranges omit the annotation; serialization
-preserves those that exist.
+The serialized guards contain the complete multiline AST for every supported example. The Rust
+consumer parses the same closure/application format and executes recursion, main arguments, and
+dynamic operation branches.

@@ -8,7 +8,7 @@ namespace Example
 
 inductive CircOp where
   | assert
-  | hint (result : Tp0)
+  | hint (result : Tp)
 
 abbrev Circ : Signature where
   op := CircOp
@@ -40,7 +40,7 @@ inductive SourceOp : Type 1 where
   | assert
   | hint (result : Type)
 
-/-- The circuit author's signature contains host types only; it has no dependency on `Tp0`. -/
+/-- The circuit author's signature contains host types only. -/
 abbrev Source : ITree.HSig.{0, 1} where
   op := SourceOp
   input
@@ -59,13 +59,13 @@ abbrev Source : ITree.HSig.{0, 1} where
     | .assert, b => nomatch b
     | .hint result, _ => result
 
-inductive CircRel : SourceOp → CircOp → Type 1 where
-  | assert : CircRel .assert .assert
-  | hint (result : Type) (code : Tp0) (repr : result → code.denote → Prop) :
-      CircRel (.hint result) (.hint code)
+inductive CircRel (ctx : DefCtx) : SourceOp → CircOp → Type 1 where
+  | assert : CircRel ctx .assert .assert
+  | hint (result : Type) (code : Tp) (repr : result → code.denote ctx → Prop) :
+      CircRel ctx (.hint result) (.hint code)
 
-@[ast_compat] abbrev CircCompat : Signature.Compat Source Circ where
-  opRel := CircRel
+@[ast_compat] abbrev CircCompat : ∀ ctx, Signature.Compat Source Circ ctx := fun ctx => {
+  opRel := CircRel ctx
   input
     | .assert, source, target => source = target
     | .hint _ _ _, source, target => source = target
@@ -85,18 +85,18 @@ inductive CircRel : SourceOp → CircOp → Type 1 where
     cases w with
     | assert => exact nomatch bs
     | hint _ _ repr => exact repr source target
+}
 
-@[ast_op] def circAssertOp : OpSpec CircCompat SourceOp.assert where
+@[ast_op] def circAssertOp {ctx} : OpSpec (CircCompat ctx) SourceOp.assert where
   target := .assert
-  witness := .assert
+  witness := CircRel.assert
 
-@[ast_op] def circHintOp (repr : ReprSpec α) : OpSpec CircCompat (SourceOp.hint α) where
+@[ast_op] def circHintOp {ctx} (repr : ReprSpec α) :
+    OpSpec (CircCompat ctx) (SourceOp.hint α) where
   target := .hint repr.code
-  witness := .hint α repr.code repr.relates
+  witness := CircRel.hint α repr.code repr.relates
 
 abbrev Circuit (α : Type) := Free Source α
-
-abbrev M := ITree.CompE Circ.spec
 
 @[ast_inline] def Circuit.assert (condition : Bool) : Circuit Unit :=
   .op SourceOp.assert condition (fun b => nomatch b) .pure
@@ -131,15 +131,9 @@ def mainSrc : Circuit Nat := do
 
 def mainMacroReflected := reflect% mainSrc
 
-example : ITree.CompE.Eutt CircCompat Eq
-    (Free.toITree mainSrc) (Expr.denote (mainMacroReflected.1 (Tp.denote M))) :=
+example : ITree.CompE.Eutt (CircCompat _) Eq
+    (Free.toITree mainSrc) (Closed.denote mainMacroReflected.1) :=
   mainMacroReflected.2
-
-example : ∃ (body : Nat → Expr Circ (Tp.denote M) none .nat)
-    (k : (Nat → M Nat) → Expr Circ (Tp.denote M) none .nat),
-    (mainMacroReflected.1 (Tp.denote M)).stripSource =
-      @Expr.lam Circ (Tp.denote M) none .nat .nat .nat body k := by
-  refine ⟨_, _, rfl⟩
 
 def symbolicHelperMain : Circuit Nat := do
   let x ← Circuit.hint (pure 4)
@@ -165,29 +159,20 @@ def symbolicRecursiveMain : Circuit Nat := do
 
 reflect_def symbolicRecursiveReflected := symbolicRecursiveMain
 
-example : ITree.CompE.Eutt CircCompat Eq
+example : ITree.CompE.Eutt (CircCompat _) Eq
     (Free.toITree symbolicRecursiveMain)
-    (Expr.denote (symbolicRecursiveReflected (Tp.denote M))) :=
+    (Closed.denote symbolicRecursiveReflected) :=
   symbolicRecursiveReflected_sound
-
-example : (symbolicRecursiveReflected (Tp.denote M)).leadingSourceRanges.length ≥ 2 := by
-  decide
 
 #compile symbolicRecursiveMain => "build/symbolic-recursive.prog"
 
-example : ∃ (body : Nat → Expr Circ (Tp.denote M) none .nat)
-    (k : (Nat → M Nat) → Expr Circ (Tp.denote M) none .nat),
-    (symbolicHelperReflected.1 (Tp.denote M)).stripSource =
-      @Expr.lam Circ (Tp.denote M) none .nat .nat .nat body k := by
-  refine ⟨_, _, rfl⟩
-
-example : ITree.CompE.Eutt CircCompat Eq
+example : ITree.CompE.Eutt (CircCompat _) Eq
     (Free.toITree symbolicHelperMain)
-    (Expr.denote (symbolicHelperReflected.1 (Tp.denote M))) :=
+    (Closed.denote symbolicHelperReflected.1) :=
   symbolicHelperReflected.2
 
-example : ITree.CompE.Eutt CircCompat Eq
-    (Free.toITree symbolicHelperMain) (Expr.denote (symbolicHelperNamed (Tp.denote M))) :=
+example : ITree.CompE.Eutt (CircCompat _) Eq
+    (Free.toITree symbolicHelperMain) (Closed.denote symbolicHelperNamed) :=
   symbolicHelperNamed_sound
 
 def twiceSqAssertSrc (x : Nat) : Circuit Nat := do
@@ -214,15 +199,13 @@ def tupledHelperMain : Circuit Nat := do
 
 reflect_def tupledHelperReflected := tupledHelperMain
 
-example : ITree.CompE.Eutt CircCompat Eq
+example : ITree.CompE.Eutt (CircCompat _) Eq
     (Free.toITree tupledHelperMain)
-    (Expr.denote (tupledHelperReflected (Tp.denote M))) :=
+    (Closed.denote tupledHelperReflected) :=
   tupledHelperReflected_sound
 
-example : (nestedHelperReflected (Tp.denote M)).sourceRange?.isSome := by decide
-
-example : ITree.CompE.Eutt CircCompat Eq
-    (Free.toITree nestedHelperMain) (Expr.denote (nestedHelperReflected (Tp.denote M))) :=
+example : ITree.CompE.Eutt (CircCompat _) Eq
+    (Free.toITree nestedHelperMain) (Closed.denote nestedHelperReflected) :=
   nestedHelperReflected_sound
 
 def discardHint {α : Type} (x : α) : Circuit Unit := do
@@ -237,116 +220,44 @@ def staticSpecializationMain : Circuit Unit := do
 
 reflect_def staticSpecializationReflected := staticSpecializationMain
 
-example : ITree.CompE.Eutt CircCompat Eq
+example : ITree.CompE.Eutt (CircCompat _) Eq
     (Free.toITree staticSpecializationMain)
-    (Expr.denote (staticSpecializationReflected (Tp.denote M))) :=
+    (Closed.denote staticSpecializationReflected) :=
   staticSpecializationReflected_sound
 
 def pureReflected := reflect% (pure 7 : Circuit Nat)
 
-example : (pureReflected.1 (Tp.denote M)).stripSource =
-    Expr.natLit 7 (fun n => .ret n) := rfl
-
-example : (pureReflected.1 (Tp.denote M)).sourceRange?.isSome := by decide
-
-example : ITree.CompE.Eutt CircCompat Eq
+example : ITree.CompE.Eutt (CircCompat _) Eq
     (Free.toITree (pure 7 : Circuit Nat))
-    (Expr.denote (pureReflected.1 (Tp.denote M))) :=
+    (Closed.denote pureReflected.1) :=
   pureReflected.2
 
 def hintMacroReflected := reflect% (Circuit.hint (pure 7 : Circuit Nat))
 
 def assertMacroReflected := reflect% (Circuit.assert true)
 
-example : ITree.CompE.Eutt CircCompat Eq
+example : ITree.CompE.Eutt (CircCompat _) Eq
     (Free.toITree (Circuit.hint (pure 7 : Circuit Nat)))
-    (Expr.denote (hintMacroReflected.1 (Tp.denote M))) :=
+    (Closed.denote hintMacroReflected.1) :=
   hintMacroReflected.2
 
-example : ITree.CompE.Eutt CircCompat Eq
+example : ITree.CompE.Eutt (CircCompat _) Eq
     (Free.toITree (Circuit.assert true))
-    (Expr.denote (assertMacroReflected.1 (Tp.denote M))) :=
+    (Closed.denote assertMacroReflected.1) :=
   assertMacroReflected.2
 
-section Ast
+/-- `main` may expose first-order arguments even though `reflect%` currently emits closed programs. -/
+def argumentMain : Code Circ [.nat] .nat where
+  ctx := []
+  program := fun _ => {
+    defs := .nil
+    main := fun
+      | .cons x .nil => .ret x
+  }
 
-variable {V : Tp → Type}
-
-def sqAssertAst (x : V .nat) : Expr Circ V none .nat :=
-  .bin .mul x x fun y =>
-  .bin .le x y fun condition =>
-  .op .assert condition (fun b => nomatch b) fun _ =>
-  .ret y
-
-def sumSqAst (sq : V (.fn .nat .nat)) (n : V .nat) :
-    Expr Circ V (some (.nat, .nat)) .nat :=
-  .natLit 0 fun zero =>
-  .bin .eq n zero fun condition =>
-  .ite condition
-    (.ret zero)
-    (.natLit 1 fun one =>
-      .bin .sub n one fun n' =>
-      .selfCall n' fun s =>
-      .app sq n fun y =>
-      .bin .add s y fun result =>
-      .ret result)
-    fun value => .ret value
-
-def mainAst : Closed Circ .nat := fun _ =>
-  .lam sqAssertAst fun sq =>
-  .letrec (sumSqAst sq) fun sumSq =>
-  .natLit 3 fun three =>
-  .app sumSq three fun s =>
-  .unitLit fun unit =>
-  .op (.hint .nat) unit (fun _ _ => .ret s) fun h =>
-  .bin .eq h s fun condition =>
-  .op .assert condition (fun b => nomatch b) fun _ =>
-  .ret h
-
-def identityAst : Closed Circ (.fn .nat .nat) := fun _ =>
-  .lam (fun x => .ret x) fun identity =>
-  .ret identity
-
-end Ast
-
-def sqD (x : Nat) : M Nat := Expr.denote (sqAssertAst x)
-
-def recursiveBody (n : Nat) :
-    ITree.CompE (ITree.Sum Circ.spec (ITree.Call Nat Nat)) Nat :=
-  Expr.denote (sumSqAst sqD n)
-
-def mainTree : M Nat := Expr.denote (mainAst _)
-
-def identityTree : M (Nat → M Nat) := Expr.denote (identityAst _)
-
-example : ITree.CompE.bind identityTree (fun f => f 7) =
+example : Code.denote argumentMain (.cons 7 .nil) =
     ITree.CompE.ret 7 := by
-  change ITree.CompE.bind (ITree.CompE.ret (fun x => ITree.CompE.ret x))
-    (fun f => f 7) = ITree.CompE.ret 7
-  rw [ITree.CompE.bind_ret]
-
-/-! A dynamic binder used beneath recursion. -/
-
-inductive DynOp where
-  | withNat
-
-abbrev DynSig : Signature where
-  op := DynOp
-  input := fun _ => .unit
-  output := fun _ => .nat
-  branch := fun _ => Unit
-  branchInput := fun _ _ => .nat
-  branchOutput := fun _ _ => .nat
-
-def recursiveDynamicBlock {V : Tp → Type} (_n : V .nat) :
-    Expr DynSig V (some (.nat, .nat)) .nat :=
-  .unitLit fun unit =>
-  .op .withNat unit
-    (fun _ x => .selfCall x fun y => .ret y)
-    fun y => .ret y
-
-def dynamicSource : Free DynSig.spec Nat :=
-  .op .withNat () (fun _ x => .pure x) .pure
+  simp only [Code.denote, argumentMain, Expr.denote, ITree.CompE.interpHandler_ret]
 
 end Example
 end Ast

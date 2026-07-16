@@ -60,14 +60,13 @@ def resolveRepr (α : Lean.Expr) : MetaM Lean.Expr := do
 /-- Select a representation that agrees with the target type and relation imposed by the current
     computation boundary.  A host type can have a preferred precise representation while an
     operation compatibility deliberately exposes its erased carrier. -/
-def resolveReprFor (α targetTp relates : Lean.Expr) : MetaM Lean.Expr := do
+def resolveReprFor (ctx α targetTp relates : Lean.Expr) : MetaM Lean.Expr := do
   let expected ← mkAppM ``ReprSpec #[α]
   let agrees (repr : Lean.Expr) : MetaM Bool := do
     unless ← isDefEq (← inferType repr) expected do return false
     let code ← mkAppM ``ReprSpec.code #[repr]
-    let reprTp ← mkAppM ``Tp.base #[code]
-    unless ← isDefEq reprTp targetTp do return false
-    let reprRel ← mkAppM ``ReprSpec.relates #[repr]
+    unless ← isDefEq code targetTp do return false
+    let reprRel ← mkAppOptM ``ReprSpec.relates #[none, some repr, some ctx]
     isDefEq reprRel relates
   let saved ← get
   try
@@ -87,12 +86,17 @@ def resolveReprFor (α targetTp relates : Lean.Expr) : MetaM Lean.Expr := do
 /-- Resolve the source/target signature compatibility selected for `S`. -/
 def resolveCompat (S : Lean.Expr) : MetaM (Lean.Expr × Lean.Expr) := do
   let H ← mkFreshExprMVar (mkConst ``Signature)
-  let expected ← mkAppM ``Signature.Compat #[S, H]
-  try
-    let compat ← resolveRegistered astCompatAttr expected
-    return (← instantiateMVars H, compat)
-  catch _ => throwError
-    "reflect%: source signature has no registered AST compatibility{indentExpr S}"
+  let ctxType := Lean.mkConst ``DefCtx
+  let expected ← withLocalDeclD `ctx ctxType fun ctx => do
+    mkForallFVars #[ctx] (← mkAppM ``Signature.Compat #[S, H, ctx])
+  let saved ← get
+  for candidate in ← registryEntries astCompatAttr do
+    try
+      let compat ← mkConstWithFreshMVarLevels candidate
+      unless ← isDefEq (← inferType compat) expected do throwError "type mismatch"
+      return (← instantiateMVars H, ← instantiateMVars compat)
+    catch _ => set saved
+  throwError "reflect%: source signature has no registered AST compatibility{indentExpr S}"
 
 /-- Resolve the exact target operation and compatibility witness for one source operation. -/
 def resolveOp (C e : Lean.Expr) : MetaM Lean.Expr := do

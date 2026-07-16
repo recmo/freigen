@@ -4,32 +4,10 @@ namespace Freigen
 
 universe u v
 
-/-!
-## The object-type universe and the AST
-
-* **Higher-order operations stay uninterpreted.** Ordinary effects are zero-branch operations;
-  scoped constructs carry blocks that may dynamically bind values.
-* **No `prog → defs → exprs` stratification.**  Function definitions — recursive or not — are
-  a single inline `letrec` node, so the reflector can emit a definition in one pass, right
-  where it is first encountered.
-* **A self-call is a call event, not a first-class value.**  Inside a `letrec` body the
-  definition reaches itself through the dedicated `selfCall` node, and the knot is tied by
-  `mrec` — ITree-canon.  A first-class self is impossible: it would have to be a Kleisli arrow
-  into the base domain *before* the knot exists.  The `Option (Tp × Tp)` **recursion-slot
-  index** on `Expr` tracks the enclosing `letrec` statically. Operation blocks retain this slot,
-  so recursive calls remain available beneath effects, handlers, and dynamic binders.
-  *After* the knot, the continuation receives the definition as an ordinary first-class
-  `V (.fn a b)` value.
-* **Deliberately tiny universe**: `nat`/`bool`/products, first-order function binders, and a
-  handful of primitives.
-
-The reflector relates this AST to `Free.toITree` in the same coinductive domain.
--/
-
 namespace Ast
 
 /-- A source range retained by reflection. Positions use Lean's one-based line and zero-based
-    Unicode-column convention. `module` identifies the source file through the Lean search path. -/
+Unicode-column convention. `module` identifies the source file through the Lean search path. -/
 structure SourceRange where
   module : Lean.Name
   startLine : Nat
@@ -38,259 +16,379 @@ structure SourceRange where
   endColumn : Nat
   deriving Repr, DecidableEq
 
-/-! ### Object types -/
+/-! ## Object types and stratified definition references -/
 
-/-- First-order object types: exactly the types effects may exchange with the ITree event
-    system. -/
-inductive Tp0 : Type
-  | nat  : Tp0
-  | int  : Tp0
-  | bool : Tp0
-  | unit : Tp0
-  | prod : Tp0 → Tp0 → Tp0
-
-namespace Tp0
-
-/-- Denote a first-order object type directly into Lean. -/
-@[reducible] def denote : Tp0 → Type
-  | .nat      => Nat
-  | .int      => Int
-  | .bool     => Bool
-  | .unit     => Unit
-  | .prod a b => a.denote × b.denote
-
-end Tp0
-
-/-- The full object-language type universe: either a first-order type or a function type. -/
+/-- The complete object-language type universe. Function values are explicit closures rather than
+Lean functions, so every type has one monad-independent runtime representation. -/
 inductive Tp : Type
-  | base : Tp0 → Tp
-  | fn   : Tp → Tp → Tp
+  | nat
+  | int
+  | bool
+  | unit
+  | prod : Tp → Tp → Tp
+  | fn : Tp → Tp → Tp
+  deriving DecidableEq
+
+/-- A definition's captured environment, explicit argument, and result types. -/
+structure DefSig where
+  captures : Tp
+  input : Tp
+  output : Tp
+  deriving DecidableEq
+
+/-- New definitions are added at the head. A definition body can name itself and entries in its
+tail, but cannot name definitions introduced later. -/
+abbrev DefCtx := List DefSig
+
+/-- A typed de Bruijn reference into a definition context. The first index is the closure
+environment carried by values referring to the definition. -/
+inductive DefRef : DefCtx → Tp → Tp → Tp → Type where
+  | here : DefRef (decl :: prior) decl.captures decl.input decl.output
+  | there : DefRef prior captures input output →
+      DefRef (decl :: prior) captures input output
+
+namespace DefRef
+
+def weaken (decl : DefSig) :
+    DefRef ctx captures input output →
+      DefRef (decl :: ctx) captures input output :=
+  .there
+
+end DefRef
+
+/-- Evidence that `large` extends `small` only by adding newer definitions. -/
+inductive Extension (small : DefCtx) : DefCtx → Type where
+  | refl : Extension small small
+  | step : Extension small large → Extension small (decl :: large)
+
+namespace Extension
+
+def trans : Extension small middle → Extension middle large → Extension small large
+  | extension, .refl => extension
+  | extension, .step rest => .step (trans extension rest)
+
+end Extension
+
+def DefRef.lift : Extension small large →
+    DefRef small captures input output → DefRef large captures input output
+  | .refl, ref => ref
+  | .step extension, ref => .there (ref.lift extension)
+
+/-! ## Runtime values -/
+
+/- Function values are code references paired with a packed captured environment. `Packed` is
+the strictly-positive fixed point; `Closure` is its function fiber. Keeping the recursive domain
+behind closures lets ordinary object data retain its direct Lean representation. -/
+mutual
+  inductive Packed (ctx : DefCtx) : Tp → Type
+    | nat : Nat → Packed ctx .nat
+    | int : Int → Packed ctx .int
+    | bool : Bool → Packed ctx .bool
+    | unit : Packed ctx .unit
+    | prod : Packed ctx left → Packed ctx right → Packed ctx (.prod left right)
+    | closure : Closure ctx input output → Packed ctx (.fn input output)
+
+  inductive Closure (ctx : DefCtx) : Tp → Tp → Type
+    | mk : DefRef ctx captures input output → Packed ctx captures →
+        Closure ctx input output
+end
 
 namespace Tp
 
-abbrev nat : Tp := .base .nat
-abbrev int : Tp := .base .int
-abbrev bool : Tp := .base .bool
-abbrev unit : Tp := .base .unit
-abbrev prod (a b : Tp0) : Tp := .base (.prod a b)
-
-/-- Denote an object type over an arbitrary target monad `M`.  A function type denotes as a
-    **Kleisli arrow into `M`** — a function value is a suspended, potentially effectful
-    computation.  Quantifying the target keeps every downstream statement parametric in the
-    interpreter.  Reducible so type-class search and unification see through it. -/
-@[reducible] def denote (M : Type → Type) : Tp → Type
-  | .base t => t.denote
-  | .fn a b => a.denote M → M (b.denote M)
+/-- Direct runtime denotation. Only function types use the inductive closure domain. -/
+@[reducible] def denote (ctx : DefCtx) : Tp → Type
+  | .nat => Nat
+  | .int => Int
+  | .bool => Bool
+  | .unit => Unit
+  | .prod left right => left.denote ctx × right.denote ctx
+  | .fn input output => Closure ctx input output
 
 end Tp
 
-/-! ### Reified primitive operations -/
+namespace Packed
 
-/-- Unary primitives, indexed by (argument, result) first-order object type. -/
-inductive Un : Tp0 → Tp0 → Type
+def pack : {tp : Tp} → tp.denote ctx → Packed ctx tp
+  | .nat, value => .nat value
+  | .int, value => .int value
+  | .bool, value => .bool value
+  | .unit, _ => .unit
+  | .prod _ _, value => .prod (pack value.1) (pack value.2)
+  | .fn _ _, value => .closure value
+
+def unpack : {tp : Tp} → Packed ctx tp → tp.denote ctx
+  | .nat, .nat value => value
+  | .int, .int value => value
+  | .bool, .bool value => value
+  | .unit, .unit => ()
+  | .prod _ _, .prod left right => (left.unpack, right.unpack)
+  | .fn _ _, .closure value => value
+
+@[simp] theorem unpack_pack : {tp : Tp} → (value : tp.denote ctx) →
+    unpack (pack value) = value
+  | .nat, _ => rfl
+  | .int, _ => rfl
+  | .bool, _ => rfl
+  | .unit, _ => rfl
+  | .prod _ _, value => by
+      simp only [pack, unpack, unpack_pack]
+  | .fn _ _, _ => rfl
+
+end Packed
+
+/-! ## Reified primitive operations -/
+
+inductive Un : Tp → Tp → Type
   | not : Un .bool .bool
-  | fst {a b : Tp0} : Un (.prod a b) a
-  | snd {a b : Tp0} : Un (.prod a b) b
+  | fst : Un (.prod left right) left
+  | snd : Un (.prod left right) right
 
-/-- Denote a unary primitive to its Lean operation. -/
-def Un.denote {a b : Tp0} : Un a b → a.denote → b.denote
-  | .not, x => !x
-  | .fst, p => p.1
-  | .snd, p => p.2
+def Un.denote : Un input output → input.denote ctx → output.denote ctx
+  | .not, value => !value
+  | .fst, value => value.1
+  | .snd, value => value.2
 
-/-- Binary primitives, indexed by (left, right, result) first-order object type. -/
-inductive Bin : Tp0 → Tp0 → Tp0 → Type
+inductive Bin : Tp → Tp → Tp → Type
   | add : Bin .nat .nat .nat
   | sub : Bin .nat .nat .nat
   | mul : Bin .nat .nat .nat
   | intAdd : Bin .int .int .int
   | intSub : Bin .int .int .int
   | intMul : Bin .int .int .int
-  | eq  : Bin .nat .nat .bool
+  | eq : Bin .nat .nat .bool
   | intEq : Bin .int .int .bool
-  | lt  : Bin .nat .nat .bool
-  | le  : Bin .nat .nat .bool
+  | lt : Bin .nat .nat .bool
+  | le : Bin .nat .nat .bool
   | and : Bin .bool .bool .bool
-  | or  : Bin .bool .bool .bool
-  | pair {a b : Tp0} : Bin a b (.prod a b)
+  | or : Bin .bool .bool .bool
+  | pair : Bin left right (.prod left right)
 
-/-- Denote a binary primitive to its Lean operation. -/
-def Bin.denote {a b c : Tp0} :
-    Bin a b c → a.denote → b.denote → c.denote
-  | .add,  x, y => x + y
-  | .sub,  x, y => x - y
-  | .mul,  x, y => x * y
-  | .intAdd, x, y => x + y
-  | .intSub, x, y => x - y
-  | .intMul, x, y => x * y
-  | .eq,   x, y => x == y
-  | .intEq, x, y => x == y
-  | .lt,   x, y => decide (x < y)
-  | .le,   x, y => decide (x ≤ y)
-  | .and,  x, y => x && y
-  | .or,   x, y => x || y
-  | .pair, x, y => (x, y)
+def Bin.denote : Bin left right output →
+    left.denote ctx → right.denote ctx → output.denote ctx
+  | .add, left, right => left + right
+  | .sub, left, right => left - right
+  | .mul, left, right => left * right
+  | .intAdd, left, right => left + right
+  | .intSub, left, right => left - right
+  | .intMul, left, right => left * right
+  | .eq, left, right => left == right
+  | .intEq, left, right => left == right
+  | .lt, left, right => decide (left < right)
+  | .le, left, right => decide (left ≤ right)
+  | .and, left, right => left && right
+  | .or, left, right => left || right
+  | .pair, left, right => (left, right)
 
-/-! ### Unified higher-order AST -/
+/-! ## Effect and call signatures -/
 
 structure Signature : Type 1 where
   op : Type
-  input : op → Tp0
-  output : op → Tp0
+  input : op → Tp
+  output : op → Tp
   branch : op → Type
-  branchInput : (e : op) → branch e → Tp0
-  branchOutput : (e : op) → branch e → Tp0
+  branchInput : (e : op) → branch e → Tp
+  branchOutput : (e : op) → branch e → Tp
 
-@[reducible] def Signature.spec (H : Signature) : ITree.HSig where
-  op := H.op
-  input := fun e => (H.input e).denote
-  output := fun e => (H.output e).denote
-  branch := H.branch
-  branchInput := fun e b => (H.branchInput e b).denote
-  branchOutput := fun e b => (H.branchOutput e b).denote
+@[reducible] def Signature.spec (signature : Signature) (ctx : DefCtx) : ITree.HSig where
+  op := signature.op
+  input := fun e => (signature.input e).denote ctx
+  output := fun e => (signature.output e).denote ctx
+  branch := signature.branch
+  branchInput := fun e b => (signature.branchInput e b).denote ctx
+  branchOutput := fun e b => (signature.branchOutput e b).denote ctx
 
-/-- An AST signature correspondence is the generic interaction-tree correspondence to its spec. -/
-abbrev Signature.Compat (S : ITree.HSig.{u, v}) (H : Signature) :=
-  ITree.HSig.Compat S H.spec
+abbrev Signature.Compat (S : ITree.HSig.{u, v}) (H : Signature) (ctx : DefCtx) :=
+  ITree.HSig.Compat S (H.spec ctx)
 
-@[reducible] def DomSig (H : Signature) : Option (Tp × Tp) → ITree.HSig
-  | none => H.spec
-  | some (a, b) => ITree.Sum H.spec
-      (ITree.Call (a.denote (ITree.CompE H.spec)) (b.denote (ITree.CompE H.spec)))
+inductive CallOp (ctx : DefCtx) where
+  | call {input output : Tp} : Closure ctx input output → CallOp ctx
 
-@[reducible] def DomSig.baseOp (H : Signature) : (r : Option (Tp × Tp)) → H.op → (DomSig H r).op
-  | none, e => e
-  | some _, e => .inl e
+@[reducible] def Call (ctx : DefCtx) : ITree.HSig where
+  op := CallOp ctx
+  input
+    | .call (input := input) _ => input.denote ctx
+  output
+    | .call (output := output) _ => output.denote ctx
+  branch := fun _ => PEmpty
+  branchInput := fun _ branch => nomatch branch
+  branchOutput := fun _ branch => nomatch branch
 
-abbrev Signature.CompatAt (S : ITree.HSig.{u, v}) (H : Signature)
-    (r : Option (Tp × Tp)) := ITree.HSig.Compat S (DomSig H r)
+abbrev OpenM (H : Signature) (ctx : DefCtx) :=
+  ITree.CompE (ITree.Sum (H.spec ctx) (Call ctx))
 
-@[reducible] def DomR (H : Signature) (r : Option (Tp × Tp)) : Type → Type :=
-  ITree.CompE (DomSig H r)
+/-- Emit one dynamically typed closure application into the global call effect. -/
+def invoke {H : Signature} (fn : Closure ctx input output) (value : input.denote ctx) :
+    OpenM H ctx (output.denote ctx) :=
+  ITree.CompE.op (.inr (.call fn)) value
+    (fun branch => nomatch branch.1) ITree.CompE.ret
 
-def DomR.ret {H : Signature} : {r : Option (Tp × Tp)} → {α : Type} → α → DomR H r α
-  | none, _, x | some _, _, x => ITree.CompE.ret x
+@[simp] theorem bind_invoke {H : Signature}
+    (fn : Closure ctx input output) (value : input.denote ctx)
+    (k : output.denote ctx → OpenM H ctx α) :
+    ITree.CompE.bind (invoke fn value) k =
+      ITree.CompE.op (H := ITree.Sum (H.spec ctx) (Call ctx))
+        (Sum.inr (.call fn)) value
+        (fun branch => nomatch branch.1) k := by
+  apply ITree.CompE.eq_of_dest_eq
+  change ITree.CompE.destAt
+      (ITree.CompE.bind
+        (ITree.CompE.opAt (H := ITree.Sum (H.spec ctx) (Call ctx))
+          (Sum.inr (.call fn)) value
+          (fun branch => ITree.CompE.asBlock (nomatch branch.1)) ITree.CompE.ret)
+        k) = _
+  rw [ITree.CompE.bind_opAt]
+  rw [ITree.CompE.dest_opAt]
+  change _ = ITree.CompE.dest
+    (ITree.CompE.op (H := ITree.Sum (H.spec ctx) (Call ctx))
+      (Sum.inr (.call fn)) value
+      (fun branch => nomatch branch.1) k)
+  rw [ITree.CompE.dest_op]
+  refine Sigma.ext rfl ?_
+  apply heq_of_eq
+  funext ar
+  cases ar with
+  | block branch => nomatch branch.1
+  | cont output =>
+      change ITree.CompE.bind (ITree.CompE.ret output) k = k output
+      rw [ITree.CompE.bind_ret]
 
-def DomR.fail {H : Signature} : {r : Option (Tp × Tp)} → {α : Type} → DomR H r α
-  | none, _ | some _, _ => ITree.CompE.fail
+/-! ## Expressions -/
 
-def DomR.bind {H : Signature} : {r : Option (Tp × Tp)} → {α β : Type} →
-    DomR H r α → (α → DomR H r β) → DomR H r β
-  | none, _, _, m, k | some _, _, _, m, k => ITree.CompE.bind m k
+/-- Expressions use PHOAS only for ordinary values. Static code references are intrinsically
+scoped de Bruijn references; function values are constructed explicitly as closures and applied
+through the single global call effect. -/
+inductive Expr (H : Signature) (scope : DefCtx) (V : Tp → Type) : Tp → Type 2 where
+  | source {α} : SourceRange → Expr H scope V α → Expr H scope V α
+  | ret {α} : V α → Expr H scope V α
+  | natLit {α} : Nat → (V .nat → Expr H scope V α) → Expr H scope V α
+  | intLit {α} : Int → (V .int → Expr H scope V α) → Expr H scope V α
+  | boolLit {α} : Bool → (V .bool → Expr H scope V α) → Expr H scope V α
+  | unitLit {α} : (V .unit → Expr H scope V α) → Expr H scope V α
+  | un {α input output} : Un input output → V input →
+      (V output → Expr H scope V α) → Expr H scope V α
+  | bin {α left right output} : Bin left right output → V left → V right →
+      (V output → Expr H scope V α) → Expr H scope V α
+  | ite {α β} : V .bool → Expr H scope V β → Expr H scope V β →
+      (V β → Expr H scope V α) → Expr H scope V α
+  | closure {α captures input output} :
+      DefRef scope captures input output → V captures →
+      (V (.fn input output) → Expr H scope V α) → Expr H scope V α
+  | app {α input output} : V (.fn input output) → V input →
+      (V output → Expr H scope V α) → Expr H scope V α
+  | op {α} (e : H.op) : V (H.input e) →
+      ((b : H.branch e) → V (H.branchInput e b) →
+        Expr H scope V (H.branchOutput e b)) →
+      (V (H.output e) → Expr H scope V α) → Expr H scope V α
 
-def DomR.lift {H : Signature} : {r : Option (Tp × Tp)} → {α : Type} →
-    ITree.CompE H.spec α → DomR H r α
-  | none, _, t => t
-  | some (a, b), _, t => ITree.CompE.sumL
-      (F := ITree.Call (a.denote (ITree.CompE H.spec))
-        (b.denote (ITree.CompE H.spec))) t
+def Expr.denote {H : Signature} (extension : Extension scope full) :
+    {α : Tp} → Expr H scope (Tp.denote full) α → OpenM H full (α.denote full)
+  | _, .source _ body => body.denote extension
+  | _, .ret value => ITree.CompE.ret value
+  | _, .natLit value k => (k value).denote extension
+  | _, .intLit value k => (k value).denote extension
+  | _, .boolLit value k => (k value).denote extension
+  | _, .unitLit k => (k ()).denote extension
+  | _, .un operation input k => (k (operation.denote input)).denote extension
+  | _, .bin operation left right k =>
+      (k (operation.denote left right)).denote extension
+  | _, .ite condition yes no k =>
+      (cond condition (yes.denote extension) (no.denote extension)) >>= fun value =>
+        (k value).denote extension
+  | _, .closure ref captured k =>
+      (k (.mk (ref.lift extension) (.pack captured))).denote extension
+  | _, .app fn input k =>
+      invoke fn input >>= fun output =>
+          (k output).denote extension
+  | _, .op operation input blocks k =>
+      ITree.CompE.op (.inl operation) input
+        (fun branch => (blocks branch.1 branch.2).denote extension)
+        ITree.CompE.ret >>= fun output =>
+          (k output).denote extension
 
-def DomR.perform {H : Signature} : {r : Option (Tp × Tp)} → (e : H.op) →
-    (H.input e).denote →
-    ((b : H.branch e) → (H.branchInput e b).denote →
-      DomR H r (H.branchOutput e b).denote) →
-    DomR H r (H.output e).denote
-  | none, e, i, blocks => ITree.CompE.op e i
-      (fun bx => blocks bx.1 bx.2) ITree.CompE.ret
-  | some _, e, i, blocks => ITree.CompE.op (.inl e) i
-      (fun bx => blocks bx.1 bx.2) ITree.CompE.ret
-
-/-- PHOAS target for proof-erasing reflection. Operation blocks retain the ambient recursion
-    slot and bind the value dynamically supplied to each branch. -/
-inductive Expr (H : Signature) (V : Tp → Type) : Option (Tp × Tp) → Tp → Type 2 where
-  | source {r α} : SourceRange → Expr H V r α → Expr H V r α
-  | ret {r α} : V α → Expr H V r α
-  | natLit {r α} : Nat → (V .nat → Expr H V r α) → Expr H V r α
-  | intLit {r α} : Int → (V .int → Expr H V r α) → Expr H V r α
-  | boolLit {r α} : Bool → (V .bool → Expr H V r α) → Expr H V r α
-  | unitLit {r α} : (V .unit → Expr H V r α) → Expr H V r α
-  | un {r α a b} : Un a b → V (.base a) →
-      (V (.base b) → Expr H V r α) → Expr H V r α
-  | bin {r α a b c} : Bin a b c → V (.base a) → V (.base b) →
-      (V (.base c) → Expr H V r α) → Expr H V r α
-  | ite {r α β} : V .bool → Expr H V r β → Expr H V r β →
-      (V β → Expr H V r α) → Expr H V r α
-  | lam {r α a b} : (V a → Expr H V none b) →
-      (V (.fn a b) → Expr H V r α) → Expr H V r α
-  | app {r α a b} : V (.fn a b) → V a →
-      (V b → Expr H V r α) → Expr H V r α
-  | letrec {r α a b} : (V a → Expr H V (some (a, b)) b) →
-      (V (.fn a b) → Expr H V r α) → Expr H V r α
-  | selfCall {α a b} : V a → (V b → Expr H V (some (a, b)) α) →
-      Expr H V (some (a, b)) α
-  | op {r α} (e : H.op) : V (.base (H.input e)) →
-      ((b : H.branch e) → V (.base (H.branchInput e b)) →
-        Expr H V r (.base (H.branchOutput e b))) →
-      (V (.base (H.output e)) → Expr H V r α) → Expr H V r α
-
-def Expr.denote {H : Signature} : {r : Option (Tp × Tp)} → {α : Tp} →
-    Expr H (Tp.denote (ITree.CompE H.spec)) r α →
-      DomR H r (α.denote (ITree.CompE H.spec))
-  | _, _, .source _ body => Expr.denote body
-  | _, _, .ret v => DomR.ret v
-  | _, _, .natLit n k => Expr.denote (k n)
-  | _, _, .intLit n k => Expr.denote (k n)
-  | _, _, .boolLit b k => Expr.denote (k b)
-  | _, _, .unitLit k => Expr.denote (k ())
-  | _, _, .un o x k => Expr.denote (k (o.denote x))
-  | _, _, .bin o x y k => Expr.denote (k (o.denote x y))
-  | _, _, .ite c t e k => DomR.bind (cond c (Expr.denote t) (Expr.denote e)) fun v =>
-      Expr.denote (k v)
-  | _, _, .lam body k => Expr.denote (k fun x => Expr.denote (body x))
-  | _, _, .app f x k => DomR.bind (DomR.lift (f x)) fun v => Expr.denote (k v)
-  | _, _, .letrec body k =>
-      Expr.denote (k (ITree.CompE.mrec fun x => Expr.denote (body x)))
-  | _, _, .selfCall x k =>
-      ITree.CompE.bind
-        (ITree.CompE.op (Sum.inr ITree.CallOp.call) x
-          (fun bx => nomatch bx.1) ITree.CompE.ret)
-        fun v => Expr.denote (k v)
-  | _, _, .op e i blocks k =>
-      DomR.bind (DomR.perform e i fun b x => Expr.denote (blocks b x)) fun o =>
-        Expr.denote (k o)
-
-/-- Remove leading provenance annotations for structural consumers that do not need them. -/
 def Expr.stripSource {H : Signature} {V : Tp → Type} :
-    {r : Option (Tp × Tp)} → {α : Tp} → Expr H V r α → Expr H V r α
-  | _, _, .source _ body => body.stripSource
-  | _, _, body => body
+    {α : Tp} → Expr H scope V α → Expr H scope V α
+  | _, .source _ body => body.stripSource
+  | _, body => body
 
-def Expr.sourceRange? {H : Signature} {V : Tp → Type} {r : Option (Tp × Tp)} {α : Tp} :
-    Expr H V r α → Option SourceRange
+def Expr.sourceRange? {H : Signature} {V : Tp → Type}
+    {α : Tp} : Expr H scope V α → Option SourceRange
   | .source range _ => some range
   | _ => none
 
 def Expr.leadingSourceRanges {H : Signature} {V : Tp → Type} :
-    {r : Option (Tp × Tp)} → {α : Tp} → Expr H V r α → List SourceRange
-  | _, _, .source range body => range :: body.leadingSourceRanges
-  | _, _, _ => []
+    {α : Tp} → Expr H scope V α → List SourceRange
+  | _, .source range body => range :: body.leadingSourceRanges
+  | _, _ => []
 
-def Closed (H : Signature) (α : Tp) : Type 2 := ∀ V, Expr H V none α
+/-! ## Definition tables and programs -/
 
-/-- A typed environment for the first-order arguments of a reflected main program. -/
-inductive MainArgs (V : Tp0 → Type) : List Tp0 → Type 1 where
+inductive MainArgs (V : Tp → Type) : List Tp → Type 1 where
   | nil : MainArgs V []
   | cons : V α → MainArgs V αs → MainArgs V (α :: αs)
 
 namespace MainArgs
 
-def map {V W : Tp0 → Type} (f : ∀ α, V α → W α) :
-    {αs : List Tp0} → MainArgs V αs → MainArgs W αs
+def map {V W : Tp → Type} (f : ∀ α, V α → W α) :
+    {αs : List Tp} → MainArgs V αs → MainArgs W αs
   | [], .nil => .nil
-  | _ :: _, .cons x xs => .cons (f _ x) (xs.map f)
+  | _ :: _, .cons value rest => .cons (f _ value) (rest.map f)
 
 end MainArgs
 
-/-- Closed AST program with an external, first-order main-argument telescope.  Specialized helper
-    definitions are represented by nested `Expr.letrec` nodes in `main`. -/
-structure Program (H : Signature) (args : List Tp0) (α : Tp) : Type 2 where
-  main : ∀ V, MainArgs (fun t => V (.base t)) args → Expr H V none α
+/-- A definition telescope. Every body is syntactically scoped over exactly itself and the older
+definitions, while its PHOAS values will later be instantiated in the completed context. -/
+inductive Defs (H : Signature) (V : Tp → Type) : DefCtx → Type 2 where
+  | nil : Defs H V []
+  | add (prior : Defs H V ctx)
+      (body : V decl.captures → V decl.input →
+        Expr H (decl :: ctx) V decl.output) :
+      Defs H V (decl :: ctx)
 
-def Program.denote {H : Signature} {args : List Tp0} {α : Tp}
-    (p : Program H args α)
-    (xs : MainArgs Tp0.denote args) : ITree.CompE H.spec (α.denote (ITree.CompE H.spec)) :=
-  Expr.denote (p.main _ xs)
+abbrev Bodies (H : Signature) (full : DefCtx) :=
+  {captures input output : Tp} → DefRef full captures input output →
+    captures.denote full → input.denote full → OpenM H full (output.denote full)
+
+def Defs.denote {H : Signature} {full : DefCtx} :
+    {scope : DefCtx} → Defs H (Tp.denote full) scope → Extension scope full →
+      {captures input output : Tp} → DefRef scope captures input output →
+        captures.denote full → input.denote full → OpenM H full (output.denote full)
+  | _, .add _ body, extension, _, _, _, .here, captured, input =>
+      (body captured input).denote extension
+  | _, .add prior _, extension, _, _, _, .there ref, captured, input =>
+      prior.denote
+        (Extension.trans (Extension.step Extension.refl) extension)
+        ref captured input
+
+def Defs.callHandler {H : Signature} {full : DefCtx}
+    (defs : Defs H (Tp.denote full) full) :
+    ITree.CompE.Handler (H.spec full) (Call full)
+  | _, .call (.mk ref captured), input, _ =>
+      defs.denote .refl ref captured.unpack input
+
+structure Program (H : Signature) (ctx : DefCtx) (V : Tp → Type)
+    (args : List Tp) (output : Tp) : Type 2 where
+  defs : Defs H V ctx
+  main : MainArgs V args → Expr H ctx V output
+
+/-- A closed definition telescope together with an argument-taking main expression. -/
+structure Code (H : Signature) (args : List Tp) (output : Tp) : Type 2 where
+  ctx : DefCtx
+  program : ∀ V, Program H ctx V args output
+
+abbrev Closed (H : Signature) (output : Tp) := Code H [] output
+
+def Code.denote {H : Signature} {args : List Tp} {output : Tp}
+    (code : Code H args output) :
+    MainArgs (Tp.denote code.ctx) args →
+      ITree.CompE (H.spec code.ctx) (output.denote code.ctx) :=
+  let program := code.program (Tp.denote code.ctx)
+  fun inputs =>
+    ITree.CompE.interpHandler program.defs.callHandler
+      ((program.main inputs).denote .refl)
+
+def Closed.denote {H : Signature} {output : Tp} (code : Closed H output) :
+    ITree.CompE (H.spec code.ctx) (output.denote code.ctx) :=
+  Code.denote code .nil
 
 end Ast
-
 end Freigen

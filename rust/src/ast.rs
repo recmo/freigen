@@ -6,11 +6,10 @@ use crate::value::Value;
 pub enum Tp {
     Bool,
     Nat,
+    Int,
     Unit,
     Prod(Box<Tp>, Box<Tp>),
     Fn(Box<Tp>, Box<Tp>),
-    Array(Box<Tp>),
-    Sum(Box<Tp>, Box<Tp>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -18,8 +17,6 @@ pub enum UnOp {
     Not,
     Fst,
     Snd,
-    Inl,
-    Inr,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -27,21 +24,12 @@ pub enum BinOp {
     Add,
     Sub,
     Mul,
-    Pow,
     Eq,
     Lt,
     Le,
     And,
     Or,
     Pair,
-    Push,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum POp {
-    AGet,
-    ASet,
-    Select,
 }
 
 pub type Var = String;
@@ -66,23 +54,16 @@ pub enum Expr {
     Lit(Value),
     Un(UnOp, Var),
     Bin(BinOp, Var, Var),
-    Pop(POp, Vec<Var>),
-    MkArr(Vec<Var>),
     If {
         cond: Var,
         then_: Block,
         else_: Block,
     },
-    Lam {
-        param: Var,
-        param_tp: Tp,
-        body: Block,
-    },
+    Closure { definition: Var, captured: Var },
     App {
         function: Var,
         argument: Var,
     },
-    SelfCall(Var),
     Op {
         name: String,
         input: Var,
@@ -92,22 +73,8 @@ pub enum Expr {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Command {
-    Let {
-        var: Var,
-        tp: Tp,
-        value: Expr,
-    },
-    LetRec {
-        var: Var,
-        param: Var,
-        param_tp: Tp,
-        result_tp: Tp,
-        body: Block,
-    },
-    Source {
-        range: SourceRange,
-        body: Block,
-    },
+    Let { var: Var, tp: Tp, value: Expr },
+    Source { range: SourceRange, body: Block },
     Ret(Var),
 }
 
@@ -117,7 +84,25 @@ pub struct Block {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct Definition {
+    pub name: Var,
+    pub captured: Var,
+    pub captured_tp: Tp,
+    pub param: Var,
+    pub param_tp: Tp,
+    pub result_tp: Tp,
+    pub body: Block,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Main {
+    pub params: Vec<(Var, Tp)>,
+    pub body: Block,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct Program {
     pub result: Tp,
-    pub body: Block,
+    pub definitions: Vec<Definition>,
+    pub main: Main,
 }

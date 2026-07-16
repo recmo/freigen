@@ -194,42 +194,138 @@ def relabelBlock {α β : Type u} {e : H.op} {b : H.Block e}
 private inductive AsBlockState (H : HSig.{u, v}) (α : Type u)
     (root : H.op) (br : H.Block root) :
     Ix H → Type (max u v) where
-  | normal :
+  | root :
       CompE H (H.branchOutput root br.1) → AsBlockState H α root br (.block root br)
-  | block {e : H.op} {b : H.Block e} :
-      BlockE H (H.branchOutput root br.1) e b → AsBlockState H α root br (.block e b)
+  | copy {i : Ix H} : Tree H α i → AsBlockState H α root br i
 
 /-- Coalgebra embedding a public computation as a scoped block. -/
 private def asBlockCo {α : Type u} (root : H.op) (br : H.Block root) :
     (i : Ix H) → AsBlockState H α root br i →
       Step H α (AsBlockState H α root br) i
-  | .block _ _, .normal t =>
+  | .block _ _, .root t =>
       match dest t with
       | ⟨.ret a, _⟩ => Step.ret a
-      | ⟨.tau, c⟩ => Step.tau (.normal (c Ar.tau : CompE H (H.branchOutput root br.1)))
+      | ⟨.tau, c⟩ => Step.tau (.root (c Ar.tau : CompE H (H.branchOutput root br.1)))
       | ⟨.fail, _⟩ => Step.fail
 
       | ⟨.op e input, c⟩ =>
           Step.op e input
-            (fun b => .block (c (Ar.block b) : BlockE H (H.branchOutput root br.1) e b))
-            (fun o => .normal (c (Ar.cont o) : CompE H (H.branchOutput root br.1)))
-  | .block e₀ b₀, .block t =>
+            (fun b => .copy (relabelBlock
+              (c (Ar.block b) : BlockE H (H.branchOutput root br.1) e b)))
+            (fun o => .root (c (Ar.cont o) : CompE H (H.branchOutput root br.1)))
+  | _, .copy t =>
       match destAt t with
-      | ⟨.ret a, _⟩ => Step.ret a
-      | ⟨.tau, c⟩ =>
-          Step.tau (.block (c Ar.tau : BlockE H (H.branchOutput root br.1) e₀ b₀))
-      | ⟨.fail, _⟩ => Step.fail
-
-      | ⟨.op e input, c⟩ =>
-          Step.op e input
-            (fun b => .block (c (Ar.block b) : BlockE H (H.branchOutput root br.1) e b))
-            (fun o => .block (c (Ar.cont o) : BlockE H (H.branchOutput root br.1) e₀ b₀))
+      | ⟨position, children⟩ => ⟨position, fun ar => .copy (children ar)⟩
 
 /-- Embed a public computation returning a branch result as the corresponding internal block. -/
 def asBlock {α : Type u} {e : H.op} {b : H.Block e}
     (t : CompE H (H.branchOutput e b.1)) : BlockE H α e b :=
   corecAt (H := H) (α := α) (asBlockCo (α := α) e b)
-    (AsBlockState.normal t)
+    (AsBlockState.root t)
+
+def rehomeBlock {α : Type u} {root : H.op} {rootBranch : H.Block root}
+    {e : H.op} {branch : H.Block e}
+    (tree : BlockE H (H.branchOutput root rootBranch.1) e branch) :
+    BlockE H α e branch :=
+  relabelBlock tree
+
+private theorem asBlock_copy {α : Type u} (root : H.op) (rootBranch : H.Block root)
+    {i : Ix H} (tree : Tree H α i) :
+    corecAt (asBlockCo (α := α) root rootBranch)
+      (.copy tree : AsBlockState H α root rootBranch i) = tree := by
+  refine IxPFunctor.M.bisim (P := P H α)
+    (fun i left right => left = corecAt (asBlockCo (α := α) root rootBranch)
+      (.copy right : AsBlockState H α root rootBranch i)) ?_ _ _ rfl
+  intro i left right related
+  subst left
+  obtain ⟨position, children, equation⟩ : ∃ p c, destAt right = ⟨p, c⟩ :=
+    ⟨_, _, rfl⟩
+  refine ⟨position,
+    fun ar => corecAt (asBlockCo (α := α) root rootBranch)
+      (.copy (children ar) : AsBlockState H α root rootBranch _),
+    children, ?_, equation, fun _ => rfl⟩
+  rw [raw_dest_corecAt, asBlockCo, equation]
+  rfl
+
+
+@[simp] theorem dest_asBlock {α : Type u} {e₀ : H.op} {b₀ : H.Block e₀}
+    (tree : CompE H (H.branchOutput e₀ b₀.1)) :
+    destAt (asBlock (α := α) tree) =
+      match dest tree with
+      | ⟨.ret value, _⟩ => Step.ret value
+      | ⟨.tau, children⟩ => Step.tau (asBlock (α := α) (children Ar.tau))
+      | ⟨.fail, _⟩ => Step.fail
+      | ⟨.op e input, children⟩ => Step.op e input
+          (fun branch => relabelBlock
+            (α := H.branchOutput e₀ b₀.1) (β := α)
+            (children (Ar.block branch)))
+          (fun output => asBlock (α := α) (children (Ar.cont output))) := by
+  rw [asBlock, dest_corecAt]
+  obtain ⟨position, children, equation⟩ : ∃ p c, dest tree = ⟨p, c⟩ :=
+    ⟨_, _, rfl⟩
+  rw [asBlockCo, equation]
+  cases position with
+  | ret =>
+      simp only [IxPFunctor.map, Step.ret]
+      refine Sigma.ext rfl ?_
+      apply heq_of_eq
+      funext impossible
+      nomatch impossible
+  | tau =>
+      simp only [IxPFunctor.map, Step.tau]
+      refine Sigma.ext rfl ?_
+      apply heq_of_eq
+      funext ar
+      cases ar
+      rfl
+  | fail =>
+      simp only [IxPFunctor.map, Step.fail]
+      refine Sigma.ext rfl ?_
+      apply heq_of_eq
+      funext impossible
+      nomatch impossible
+  | op operation input =>
+      simp only [IxPFunctor.map, Step.op]
+      refine Sigma.ext rfl ?_
+      apply heq_of_eq
+      funext ar
+      cases ar with
+      | block branch => exact asBlock_copy e₀ b₀ _
+      | cont output => rfl
+
+@[simp] theorem asBlock_ret {α : Type u} {e : H.op} {b : H.Block e}
+    (value : H.branchOutput e b.1) :
+    asBlock (α := α) (ret value) = retAt value := by
+  apply eq_of_destAt_eq
+  simp only [dest_asBlock, dest_ret, dest_retAt, Step.ret]
+
+@[simp] theorem asBlock_tau {α : Type u} {e : H.op} {b : H.Block e}
+    (tree : CompE H (H.branchOutput e b.1)) :
+    asBlock (α := α) (tau tree) = tauAt (asBlock (α := α) tree) := by
+  apply eq_of_destAt_eq
+  simp only [dest_asBlock, dest_tau, dest_tauAt, Step.tau]
+
+@[simp] theorem asBlock_fail {α : Type u} {e : H.op} {b : H.Block e} :
+    asBlock (α := α) (fail : CompE H (H.branchOutput e b.1)) = failAt := by
+  apply eq_of_destAt_eq
+  simp only [dest_asBlock, dest_fail, dest_failAt, Step.fail]
+
+theorem asBlock_opAt {α : Type u} {root : H.op} {rootBranch : H.Block root}
+    (e : H.op) (input : H.input e)
+    (blocks : (branch : H.Block e) →
+      BlockE H (H.branchOutput root rootBranch.1) e branch)
+    (continuation : H.output e → CompE H (H.branchOutput root rootBranch.1)) :
+    asBlock (α := α) (opAt e input blocks continuation) =
+      opAt e input
+        (fun branch => relabelBlock
+          (α := H.branchOutput root rootBranch.1) (β := α) (blocks branch))
+        (fun output => asBlock (α := α) (continuation output)) := by
+  apply eq_of_destAt_eq
+  rw [dest_asBlock]
+  rw [show dest (opAt e input blocks continuation) =
+    Step.op e input blocks continuation from dest_opAt e input blocks continuation]
+  rw [dest_opAt]
+  simp only [Step.op]
 
 /-- Public scoped bind node.  Public block computations are embedded into the corresponding
     internal block fibers. -/
@@ -474,6 +570,113 @@ theorem corec_copy {α β : Type u} {i : Ix H}
   rw [bindCo, hy]
   rfl
 
+@[simp] theorem bindAt_ret {α β : Type u} {i : Ix H} (a : α)
+    (k : α → Tree H β i) : bindAt (ret a) k = k a := by
+  apply eq_of_destAt_eq
+  obtain ⟨p, c, hk⟩ : ∃ p c, destAt (k a) = ⟨p, c⟩ := ⟨_, _, rfl⟩
+  rw [bindAt, dest_corecAt, bindCo_bind_ret, hk]
+  refine Sigma.ext rfl ?_
+  apply heq_of_eq
+  funext x
+  exact corec_copy (k := k) (c x)
+
+@[simp] theorem bindAt_tau {α β : Type u} {i : Ix H} (t : CompE H α)
+    (k : α → Tree H β i) : bindAt (tau t) k = tauAt (bindAt t k) := by
+  apply eq_of_destAt_eq
+  rw [bindAt, dest_corecAt, bindCo_bind_tau, dest_tauAt]
+  simp only [IxPFunctor.map, Step.tau]
+  refine Sigma.ext rfl ?_
+  apply heq_of_eq
+  funext ar
+  cases ar
+  rfl
+
+@[simp] theorem bindAt_fail {α β : Type u} {i : Ix H}
+    (k : α → Tree H β i) : bindAt (fail : CompE H α) k = failAt := by
+  apply eq_of_destAt_eq
+  rw [bindAt, dest_corecAt, bindCo_bind_fail, dest_failAt]
+  simp only [IxPFunctor.map, Step.fail]
+  refine Sigma.ext rfl ?_
+  apply heq_of_eq
+  funext impossible
+  nomatch impossible
+
+@[simp] theorem bindAt_opAt {α β : Type u} {i : Ix H}
+    (e : H.op) (input : H.input e)
+    (blocks : (b : H.Block e) → BlockE H α e b)
+    (c : H.output e → CompE H α) (k : α → Tree H β i) :
+    bindAt (opAt e input blocks c) k =
+      opAt e input (fun b => relabelBlock (blocks b))
+        (fun output => bindAt (c output) k) := by
+  apply eq_of_destAt_eq
+  rw [bindAt, dest_corecAt, bindCo_bind_opAt, dest_opAt]
+  simp only [IxPFunctor.map, Step.op]
+  refine Sigma.ext rfl ?_
+  apply heq_of_eq
+  funext ar
+  cases ar with
+  | block b => exact corec_copy (k := k) (relabelBlock (blocks b))
+  | cont output => rfl
+
+private inductive AsBlockBindRel {α : Type u} (root : H.op) (branch : H.Block root) :
+    (i : Ix H) → Tree H α i → Tree H α i → Prop where
+  | root (tree : CompE H (H.branchOutput root branch.1)) :
+      AsBlockBindRel root branch (.block root branch)
+        (asBlock (α := α) tree)
+        (bindAt tree (fun value => retAt value))
+  | eq {i : Ix H} {left right : Tree H α i} (equal : left = right) :
+      AsBlockBindRel root branch i left right
+
+/-- `asBlock` is the non-normal unit bind. This equation is the useful semantic interface;
+the corecursor implementation above exists only to satisfy strict positivity. -/
+theorem asBlock_eq_bindAt {α : Type u} {root : H.op} {branch : H.Block root}
+    (tree : CompE H (H.branchOutput root branch.1)) :
+    asBlock (α := α) tree = bindAt tree (fun value => retAt value) := by
+  refine IxPFunctor.M.bisim (P := P H α) (AsBlockBindRel root branch) ?_
+    _ _ (.root tree)
+  intro i left right related
+  cases related with
+  | eq equal =>
+      cases equal
+      obtain ⟨position, children, equation⟩ : ∃ p c, destAt left = ⟨p, c⟩ :=
+        ⟨_, _, rfl⟩
+      exact ⟨position, children, children, equation, equation, fun _ => .eq rfl⟩
+  | root tree =>
+      rcases cases_view tree with
+        ⟨value, rfl⟩ | rfl | ⟨child, rfl⟩ |
+          ⟨operation, input, blocks, continuation, rfl⟩
+      · rw [asBlock_ret, bindAt_ret]
+        let step : Step H α (Tree H α) (.block root branch) := Step.ret value
+        exact ⟨step.1, step.2, step.2, raw_dest_mkAt step, raw_dest_mkAt step,
+          fun impossible => nomatch impossible⟩
+      · rw [asBlock_fail, bindAt_fail]
+        let step : Step H α (Tree H α) (.block root branch) := Step.fail
+        exact ⟨step.1, step.2, step.2, raw_dest_mkAt step, raw_dest_mkAt step,
+          fun impossible => nomatch impossible⟩
+      · rw [asBlock_tau, bindAt_tau]
+        let leftStep : Step H α (Tree H α) (.block root branch) :=
+          Step.tau (asBlock (α := α) child)
+        let rightStep : Step H α (Tree H α) (.block root branch) :=
+          Step.tau (bindAt child (fun value => retAt value))
+        exact ⟨.tau, leftStep.2, rightStep.2,
+          raw_dest_mkAt leftStep, raw_dest_mkAt rightStep, fun ar => by
+            cases ar
+            exact .root child⟩
+      · rw [asBlock_opAt, bindAt_opAt]
+        let leftStep : Step H α (Tree H α) (.block root branch) :=
+          Step.op operation input
+            (fun b => relabelBlock (blocks b))
+            (fun output => asBlock (α := α) (continuation output))
+        let rightStep : Step H α (Tree H α) (.block root branch) :=
+          Step.op operation input
+            (fun b => relabelBlock (blocks b))
+            (fun output => bindAt (continuation output) (fun value => retAt value))
+        exact ⟨.op operation input, leftStep.2, rightStep.2,
+          raw_dest_mkAt leftStep, raw_dest_mkAt rightStep, fun ar => by
+            cases ar with
+            | block b => exact .eq rfl
+            | cont output => exact .root (continuation output)⟩
+
 @[simp] theorem bind_ret {α β : Type u} (a : α) (k : α → CompE H β) :
     bind (ret a) k = k a := by
   apply eq_of_dest_eq
@@ -623,7 +826,7 @@ private theorem relabelBlock_id {α : Type u} {e : H.op} {b : H.Block e}
           | block b => exact .block (blocks b)
           | cont o => exact .block (k o)
 
-private theorem dest_relabelBlock {α β : Type u} {e₀ : H.op} {b₀ : H.Block e₀}
+theorem dest_relabelBlock {α β : Type u} {e₀ : H.op} {b₀ : H.Block e₀}
     (t : BlockE H α e₀ b₀) :
     destAt (relabelBlock (α := α) (β := β) t) =
       match destAt t with
@@ -696,6 +899,39 @@ private theorem dest_relabelBlock {α β : Type u} {e₀ : H.op} {b₀ : H.Block
       apply heq_of_eq
       funext h
       cases h <;> rfl
+
+@[simp] theorem relabelBlock_retAt {α β : Type u} {e : H.op} {b : H.Block e}
+    (value : H.branchOutput e b.1) :
+    relabelBlock (α := α) (β := β)
+      (retAt value : BlockE H α e b) = retAt value := by
+  apply eq_of_destAt_eq
+  simp only [dest_relabelBlock, dest_retAt, Step.ret]
+
+@[simp] theorem relabelBlock_tauAt {α β : Type u} {e : H.op} {b : H.Block e}
+    (tree : BlockE H α e b) :
+    relabelBlock (α := α) (β := β) (tauAt tree) =
+      tauAt (relabelBlock (α := α) (β := β) tree) := by
+  apply eq_of_destAt_eq
+  simp only [dest_relabelBlock, dest_tauAt, Step.tau]
+
+@[simp] theorem relabelBlock_failAt {α β : Type u} {e : H.op} {b : H.Block e} :
+    relabelBlock (α := α) (β := β) (failAt : BlockE H α e b) = failAt := by
+  apply eq_of_destAt_eq
+  simp only [dest_relabelBlock, dest_failAt, Step.fail]
+
+theorem relabelBlock_opAt {α β : Type u} {root : H.op} {rootBranch : H.Block root}
+    (operation : H.op) (input : H.input operation)
+    (blocks : (branch : H.Block operation) → BlockE H α operation branch)
+    (continuation : H.output operation → BlockE H α root rootBranch) :
+    relabelBlock (α := α) (β := β)
+        (opAt operation input blocks continuation) =
+      opAt operation input
+        (fun branch => relabelBlock (α := α) (β := β) (blocks branch))
+        (fun output => relabelBlock (α := α) (β := β)
+          (continuation output)) := by
+  apply eq_of_destAt_eq
+  rw [dest_relabelBlock, dest_opAt, dest_opAt]
+  simp only [Step.op]
 
 private inductive RelabelCompRel {α β γ : Type u} :
     (i : Ix H) → Tree H γ i → Tree H γ i → Prop where
@@ -786,6 +1022,184 @@ private theorem relabelBlock_comp {α β γ : Type u} {e : H.op} {b : H.Block e}
           cases h with
           | block b => exact .block (blocks b)
           | cont o => exact .block (k o)
+
+private inductive BindAtAssocRel {α β γ : Type u} {target : Ix H}
+    (k : α → CompE H β) (h : β → Tree H γ target) :
+    (i : Ix H) → Tree H γ i → Tree H γ i → Prop where
+  | root (tree : CompE H α) :
+      BindAtAssocRel k h target
+        (bindAt (bind tree k) h)
+        (bindAt tree fun value => bindAt (k value) h)
+  | eq {i : Ix H} {left right : Tree H γ i} (equal : left = right) :
+      BindAtAssocRel k h i left right
+
+/-- Associativity when the final continuation returns into any internal result fiber. -/
+theorem bindAt_assoc {α β γ : Type u} {target : Ix H} (tree : CompE H α)
+    (k : α → CompE H β) (h : β → Tree H γ target) :
+    bindAt (bind tree k) h = bindAt tree (fun value => bindAt (k value) h) := by
+  refine IxPFunctor.M.bisim (P := P H γ) (BindAtAssocRel k h) ?_
+    _ _ (.root tree)
+  intro i left right related
+  cases related with
+  | eq equal =>
+      cases equal
+      obtain ⟨position, children, equation⟩ : ∃ p c, destAt left = ⟨p, c⟩ :=
+        ⟨_, _, rfl⟩
+      exact ⟨position, children, children, equation, equation, fun _ => .eq rfl⟩
+  | root tree =>
+      rcases cases_view tree with
+        ⟨value, rfl⟩ | rfl | ⟨child, rfl⟩ |
+          ⟨operation, input, blocks, continuation, rfl⟩
+      · simp only [bind_ret, bindAt_ret]
+        obtain ⟨position, children, equation⟩ :
+            ∃ p c, destAt (bindAt (k value) h) = ⟨p, c⟩ := ⟨_, _, rfl⟩
+        exact ⟨position, children, children, equation, equation, fun _ => .eq rfl⟩
+      · simp only [bind_fail, bindAt_fail]
+        let step : Step H γ (Tree H γ) target := Step.fail
+        exact ⟨step.1, step.2, step.2, raw_dest_mkAt step, raw_dest_mkAt step,
+          fun impossible => nomatch impossible⟩
+      · simp only [bind_tau, bindAt_tau]
+        let leftStep : Step H γ (Tree H γ) target :=
+          Step.tau (bindAt (bind child k) h)
+        let rightStep : Step H γ (Tree H γ) target :=
+          Step.tau (bindAt child fun value => bindAt (k value) h)
+        exact ⟨.tau, leftStep.2, rightStep.2,
+          raw_dest_mkAt leftStep, raw_dest_mkAt rightStep, fun ar => by
+            cases ar
+            exact .root child⟩
+      · simp only [bind_opAt, bindAt_opAt]
+        let leftStep : Step H γ (Tree H γ) target :=
+          Step.op operation input
+            (fun branch => relabelBlock (α := β) (β := γ)
+              (relabelBlock (α := α) (β := β) (blocks branch)))
+            (fun output => bindAt (bind (continuation output) k) h)
+        let rightStep : Step H γ (Tree H γ) target :=
+          Step.op operation input
+            (fun branch => relabelBlock (α := α) (β := γ) (blocks branch))
+            (fun output => bindAt (continuation output)
+              (fun value => bindAt (k value) h))
+        exact ⟨.op operation input, leftStep.2, rightStep.2,
+          raw_dest_mkAt leftStep, raw_dest_mkAt rightStep, fun ar => by
+            cases ar with
+            | block branch => exact .eq (relabelBlock_comp (blocks branch))
+            | cont output => exact .root (continuation output)⟩
+
+theorem asBlock_bind {α γ : Type u} {root : H.op} {branch : H.Block root}
+    (tree : CompE H α)
+    (k : α → CompE H (H.branchOutput root branch.1)) :
+    asBlock (α := γ) (bind tree k) =
+      bindAt tree (fun value => asBlock (α := γ) (k value)) := by
+  rw [asBlock_eq_bindAt, bindAt_assoc]
+  apply congrArg (bindAt tree)
+  funext value
+  exact (asBlock_eq_bindAt (k value)).symm
+
+private inductive RelabelBindRel {α β γ : Type u}
+    (root : H.op) (branch : H.Block root)
+    (k : α → BlockE H β root branch) :
+    (i : Ix H) → Tree H γ i → Tree H γ i → Prop where
+  | root (tree : CompE H α) :
+      RelabelBindRel root branch k (.block root branch)
+        (relabelBlock (α := β) (β := γ) (bindAt tree k))
+        (bindAt tree fun value => relabelBlock (α := β) (β := γ) (k value))
+  | eq {i : Ix H} {left right : Tree H γ i} (equal : left = right) :
+      RelabelBindRel root branch k i left right
+
+theorem relabelBlock_bind {α β γ : Type u}
+    {root : H.op} {branch : H.Block root} (tree : CompE H α)
+    (k : α → BlockE H β root branch) :
+    relabelBlock (α := β) (β := γ) (bindAt tree k) =
+      bindAt tree (fun value => relabelBlock (α := β) (β := γ) (k value)) := by
+  refine IxPFunctor.M.bisim (P := P H γ) (RelabelBindRel root branch k) ?_
+    _ _ (.root tree)
+  intro i left right related
+  cases related with
+  | eq equal =>
+      cases equal
+      obtain ⟨position, children, equation⟩ : ∃ p c, destAt left = ⟨p, c⟩ :=
+        ⟨_, _, rfl⟩
+      exact ⟨position, children, children, equation, equation, fun _ => .eq rfl⟩
+  | root tree =>
+      rcases cases_view tree with
+        ⟨value, rfl⟩ | rfl | ⟨child, rfl⟩ |
+          ⟨operation, input, blocks, continuation, rfl⟩
+      · simp only [bindAt_ret]
+        obtain ⟨position, children, equation⟩ : ∃ p c,
+            destAt (relabelBlock (α := β) (β := γ) (k value)) = ⟨p, c⟩ :=
+          ⟨_, _, rfl⟩
+        exact ⟨position, children, children, equation, equation, fun _ => .eq rfl⟩
+      · simp only [bindAt_fail]
+        rw [show relabelBlock (α := β) (β := γ)
+          (failAt : BlockE H β root branch) = failAt from by
+            apply eq_of_destAt_eq
+            rw [dest_relabelBlock, dest_failAt, dest_failAt]
+            simp only [Step.fail]]
+        let step : Step H γ (Tree H γ) (.block root branch) := Step.fail
+        exact ⟨step.1, step.2, step.2, raw_dest_mkAt step, raw_dest_mkAt step,
+          fun impossible => nomatch impossible⟩
+      · simp only [bindAt_tau]
+        rw [show relabelBlock (α := β) (β := γ)
+          (tauAt (bindAt child k)) =
+            tauAt (relabelBlock (α := β) (β := γ) (bindAt child k)) from by
+              apply eq_of_destAt_eq
+              rw [dest_relabelBlock, dest_tauAt, dest_tauAt]
+              simp only [Step.tau]]
+        let leftStep : Step H γ (Tree H γ) (.block root branch) :=
+          Step.tau (relabelBlock (α := β) (β := γ) (bindAt child k))
+        let rightStep : Step H γ (Tree H γ) (.block root branch) :=
+          Step.tau (bindAt child fun value =>
+            relabelBlock (α := β) (β := γ) (k value))
+        exact ⟨.tau, leftStep.2, rightStep.2,
+          raw_dest_mkAt leftStep, raw_dest_mkAt rightStep, fun ar => by
+            cases ar
+            exact .root child⟩
+      · simp only [bindAt_opAt]
+        let leftStep : Step H γ (Tree H γ) (.block root branch) :=
+          Step.op operation input
+            (fun nested => relabelBlock (α := β) (β := γ)
+              (relabelBlock (α := α) (β := β) (blocks nested)))
+            (fun output => relabelBlock (α := β) (β := γ)
+              (bindAt (continuation output) k))
+        let rightStep : Step H γ (Tree H γ) (.block root branch) :=
+          Step.op operation input
+            (fun nested => relabelBlock (α := α) (β := γ) (blocks nested))
+            (fun output => bindAt (continuation output) fun value =>
+              relabelBlock (α := β) (β := γ) (k value))
+        refine ⟨.op operation input, leftStep.2, rightStep.2, ?_,
+          raw_dest_mkAt rightStep, ?_⟩
+        · change destAt (relabelBlock (opAt operation input _ _)) = leftStep
+          rw [dest_relabelBlock, dest_opAt]
+          rfl
+        · intro ar
+          cases ar with
+                | block nested => exact .eq (relabelBlock_comp (blocks nested))
+                | cont output => exact .root (continuation output)
+
+/-- Re-embedding a public computation is independent of the ambient normal-result type. -/
+theorem relabelBlock_asBlock {α β : Type u} {root : H.op}
+    {branch : H.Block root}
+    (tree : CompE H (H.branchOutput root branch.1)) :
+    relabelBlock (α := α) (β := β) (asBlock (α := α) tree) =
+      asBlock (α := β) tree := by
+  rw [asBlock_eq_bindAt, relabelBlock_bind]
+  rw [asBlock_eq_bindAt]
+  apply congrArg (bindAt tree)
+  funext value
+  rw [relabelBlock_retAt]
+
+/-- Binding a public operation changes only its ordinary continuation. Scoped branches do not
+depend on the ambient result type. -/
+theorem bind_op {α β : Type u} (operation : H.op) (input : H.input operation)
+    (blocks : (branch : H.Block operation) →
+      CompE H (H.branchOutput operation branch.1))
+    (continuation : H.output operation → CompE H α) (k : α → CompE H β) :
+    bind (op operation input blocks continuation) k =
+      op operation input blocks (fun output => bind (continuation output) k) := by
+  unfold op
+  rw [bind_opAt]
+  congr 1
+  funext branch
+  exact relabelBlock_asBlock (blocks branch)
 
 private inductive BindRightRel {α : Type u} :
     (i : Ix H) → Tree H α i → Tree H α i → Prop where
@@ -1647,32 +2061,6 @@ theorem interp_bind_sumL {σ ρ α β : Type u}
   | block bx => exact nomatch bx.1
   | cont o => rfl
 
-@[simp] theorem bind_op_no_branches {α β : Type u}
-    (e : H.op) (empty : ∀ b : H.branch e, False) (input : H.input e)
-    (blocks : (b : H.Block e) → CompE H (H.branchOutput e b.1))
-    (k : H.output e → CompE H α) (h : α → CompE H β) :
-    bind (op e input blocks k) h =
-      op e input blocks (fun o => bind (k o) h) := by
-  apply eq_of_dest_eq
-  change destAt (bind (opAt e input (fun b => asBlock (blocks b)) k) h) = _
-  rw [bind_opAt, dest_opAt]
-  change _ = dest (op e input blocks (fun o => bind (k o) h))
-  rw [dest_op]
-  refine Sigma.ext rfl ?_
-  apply heq_of_eq
-  funext ar
-  cases ar with
-  | block bx => exact nomatch empty bx.1
-  | cont o => rfl
-
-theorem op_eq_bind_no_branches {α : Type u}
-    (e : H.op) (empty : ∀ b : H.branch e, False) (input : H.input e)
-    (blocks : (b : H.Block e) → CompE H (H.branchOutput e b.1))
-    (k : H.output e → CompE H α) :
-    op e input blocks k = bind (op e input blocks ret) k := by
-  rw [bind_op_no_branches e empty]
-  simp only [bind_ret]
-
 @[simp] theorem interp_call {σ ρ γ : Type u}
     (body : σ → CompE (Sum H (Call σ ρ)) ρ) (s : σ)
     (blocks : (b : (Sum H (Call σ ρ)).Block (.inr CallOp.call)) →
@@ -1704,46 +2092,14 @@ theorem op_eq_bind_no_branches {α : Type u}
   cases ar
   rfl
 
-theorem interp_op_no_branches {σ ρ γ : Type u}
-    (body : σ → CompE (Sum H (Call σ ρ)) ρ)
-    (e : H.op) (empty : ∀ b : H.branch e, False) (input : H.input e)
-    (blocks : (b : (Sum H (Call σ ρ)).Block (.inl e)) →
-      CompE (Sum H (Call σ ρ)) ((Sum H (Call σ ρ)).branchOutput (.inl e) b.1))
-    (k : H.output e → CompE (Sum H (Call σ ρ)) γ) :
-    interp body (op (.inl e) input blocks k) =
-      op e input (fun bx => nomatch empty bx.1) (fun o => interp body (k o)) := by
-  apply eq_of_dest_eq
-  change destAt (interp body (op (.inl e) input blocks k)) =
-    destAt (op e input (fun bx => nomatch empty bx.1) (fun o => interp body (k o)))
-  rw [interp, dest_corecAt]
-  have hn : interpCoNormal body (op (.inl e) input blocks k) =
-      Step.op e input (fun bx => nomatch empty bx.1) k := by
-    unfold interpCoNormal
-    rw [dest_op]
-    refine Sigma.ext rfl ?_
-    apply heq_of_eq
-    funext ar
-    cases ar with
-    | block bx => exact nomatch empty bx.1
-    | cont o => rfl
-  rw [show interpCo body .normal (op (.inl e) input blocks k) =
-    Step.op e input (fun bx => nomatch empty bx.1) k from hn]
-  have hd : destAt (op e input (fun bx => nomatch empty bx.1)
-      (fun o => interp body (k o))) =
-      Step.op e input
-        (fun b => asBlock ((fun bx => nomatch empty bx.1) b))
-        (fun o => interp body (k o)) := dest_op _ _ _ _
-  rw [hd]
-  refine Sigma.ext rfl ?_
-  apply heq_of_eq
-  funext ar
-  cases ar with
-  | block bx => exact nomatch empty bx.1
-  | cont o => rfl
-
 def mrec {σ ρ : Type u}
     (body : σ → CompE (Sum H (Call σ ρ)) ρ) : σ → CompE H ρ :=
   fun s => interp body (body s)
+
+/-- The recursive arrow supplied to a fix body.  Kept as a named operation so clients can state
+    local body equalities without unfolding the implementation of `mfix`. -/
+def recursiveCall {σ ρ : Type u} : σ → CompE (Sum H (Call σ ρ)) ρ :=
+  fun s => op (Sum.inr CallOp.call) s (fun bx => nomatch bx.1) ret
 
 /-- Tie a recursive Kleisli arrow in the existing call-extended computation monad.
 
@@ -1752,10 +2108,177 @@ ordinary function applications; the private arrow supplied here emits a `Call`, 
 closes those calls while inserting the guarding `tau`. -/
 def mfix {σ ρ : Type u}
     (body : (σ → CompE (Sum H (Call σ ρ)) ρ) →
-      σ → CompE (Sum H (Call σ ρ)) ρ) :
+    σ → CompE (Sum H (Call σ ρ)) ρ) :
     σ → CompE H ρ :=
-  mrec (body fun s =>
-    op (Sum.inr CallOp.call) s (fun bx => nomatch bx.1) ret)
+  mrec (body recursiveCall)
+
+/-! ### Heterogeneous effect interpretation -/
+
+/-- Interpret the right side of a sum with a handler that runs in the same open sum.  The handler
+receives every scoped block, so this operation is valid for arbitrary higher-order signatures, not
+only zero-branch effects.  Each handled operation contributes one guarding `tau`. -/
+abbrev Handler (H F : HSig.{u, v}) :=
+  {α : Type u} → (e : F.op) → F.input e →
+    ((b : F.branch e) → (bi : F.branchInput e b) →
+      BlockE (Sum H F) α (.inr e) ⟨b, bi⟩) →
+    CompE (Sum H F) (F.output e)
+
+@[reducible] def handlerSourceIx {H F : HSig.{u, v}} : Ix H → Ix (Sum H F)
+  | .normal => .normal
+  | .block e bx => .block (.inl e) bx
+
+@[reducible] def handlerResultIn {H F : HSig.{u, v}} {α : Type u} :
+    (i : Ix H) → result H α i → result (Sum H F) α (handlerSourceIx i)
+  | .normal, value => value
+  | .block _ _, value => value
+
+abbrev HandlerState (H F : HSig.{u, v}) (α : Type u) (i : Ix H) :=
+  Tree (Sum H F) α (handlerSourceIx i)
+
+def interpHandlerCoNormal {H F : HSig.{u, v}} (handler : Handler H F)
+    (t : CompE (Sum H F) α) :
+    Step H α (HandlerState H F α) .normal :=
+  match dest t with
+  | ⟨.ret a, _⟩ => Step.ret a
+  | ⟨.tau, c⟩ => Step.tau (c Ar.tau)
+  | ⟨.fail, _⟩ => Step.fail
+  | ⟨.op (.inl e) input, c⟩ => Step.op e input
+      (fun bx => c (Ar.block bx))
+      (fun o => c (Ar.cont o))
+  | ⟨.op (.inr e) input, c⟩ => Step.tau
+      (bindAt
+        (handler e input fun b bi => c (Ar.block ⟨b, bi⟩))
+        fun o => c (Ar.cont o))
+
+def interpHandlerCo {H F : HSig.{u, v}} (handler : Handler H F) :
+    (i : Ix H) → HandlerState H F α i →
+      Step H α (HandlerState H F α) i
+  | .normal, t => interpHandlerCoNormal handler t
+  | i@(.block _ _), t =>
+      match destAt t with
+      | ⟨.ret a, _⟩ => Step.ret (cast (by cases i <;> rfl) a)
+      | ⟨.tau, c⟩ => Step.tau (c Ar.tau)
+      | ⟨.fail, _⟩ => Step.fail
+      | ⟨.op (.inl e) input, c⟩ => Step.op e input
+          (fun bx => c (Ar.block bx))
+          (fun o => c (Ar.cont o))
+      | ⟨.op (.inr e) input, c⟩ => Step.tau
+          (bindAt
+            (handler e input fun b bi => c (Ar.block ⟨b, bi⟩))
+            fun o => c (Ar.cont o))
+
+def interpHandlerAt {H F : HSig.{u, v}} (handler : Handler H F) {i : Ix H}
+    (t : HandlerState H F α i) : Tree H α i :=
+  corecAt (interpHandlerCo handler) t
+
+def interpHandler {H F : HSig.{u, v}} (handler : Handler H F)
+    (t : CompE (Sum H F) α) : CompE H α :=
+  corecAt (interpHandlerCo handler) t
+
+@[simp] theorem interpHandler_ret {H F : HSig.{u, v}} (handler : Handler H F)
+    (value : α) : interpHandler handler (ret value) = ret value := by
+  apply eq_of_dest_eq
+  change destAt (interpHandler handler (ret value)) = destAt (ret value)
+  rw [interpHandler, dest_corecAt]
+  have step : interpHandlerCoNormal handler (ret value) = Step.ret value := by
+    unfold interpHandlerCoNormal
+    rw [dest_ret]
+    rfl
+  rw [show interpHandlerCo handler .normal (ret value) = Step.ret value from step]
+  refine Sigma.ext rfl ?_
+  apply heq_of_eq
+  funext impossible
+  nomatch impossible
+
+@[simp] theorem interpHandler_tau {H F : HSig.{u, v}} (handler : Handler H F)
+    (tree : CompE (Sum H F) α) :
+    interpHandler handler (tau tree) = tau (interpHandler handler tree) := by
+  apply eq_of_dest_eq
+  change destAt (interpHandler handler (tau tree)) =
+    destAt (tau (interpHandler handler tree))
+  rw [interpHandler, dest_corecAt]
+  let targetStep : Step H α (HandlerState H F α) .normal :=
+    @Step.tau H α (HandlerState H F α) .normal tree
+  have step : interpHandlerCoNormal handler (tau tree) = targetStep := by
+    unfold interpHandlerCoNormal
+    rw [dest_tau]
+    rfl
+  rw [show interpHandlerCo handler .normal (tau tree) = targetStep from step]
+  dsimp [targetStep, IxPFunctor.map]
+  rw [show destAt (tau (interpHandler handler tree)) =
+    Step.tau (interpHandler handler tree) from dest_tauAt _]
+  refine Sigma.ext rfl ?_
+  apply heq_of_eq
+  funext ar
+  cases ar
+  rfl
+
+@[simp] theorem interpHandler_fail {H F : HSig.{u, v}} (handler : Handler H F) :
+    interpHandler handler (fail : CompE (Sum H F) α) = fail := by
+  apply eq_of_dest_eq
+  change destAt (interpHandler handler (fail : CompE (Sum H F) α)) = destAt fail
+  rw [interpHandler, dest_corecAt]
+  have step : interpHandlerCoNormal handler
+      (fail : CompE (Sum H F) α) = Step.fail := by
+    unfold interpHandlerCoNormal
+    rw [dest_fail]
+    rfl
+  rw [show interpHandlerCo handler .normal (fail : CompE (Sum H F) α) =
+    Step.fail from step]
+  refine Sigma.ext rfl ?_
+  apply heq_of_eq
+  funext impossible
+  nomatch impossible
+
+theorem interpHandler_op_right {H F : HSig.{u, v}} (handler : Handler H F)
+    (e : F.op) (input : F.input e)
+    (blocks : (b : F.Block e) → CompE (Sum H F) (F.branchOutput e b.1))
+    (k : F.output e → CompE (Sum H F) α) :
+    interpHandler handler (op (.inr e) input blocks k) =
+      tau (interpHandler handler
+        (bind
+          (@handler α e input fun b bi =>
+            asBlock (α := α) (blocks ⟨b, bi⟩))
+          k)) := by
+  apply eq_of_dest_eq
+  change destAt (interpHandler handler (op (.inr e) input blocks k)) =
+    destAt (tau (interpHandler handler
+      (bind
+        (@handler α e input fun b bi =>
+          asBlock (α := α) (blocks ⟨b, bi⟩))
+        k)))
+  rw [interpHandler, dest_corecAt]
+  let targetStep : Step H α (HandlerState H F α) .normal :=
+    Step.tau
+        (bindAt
+          (@handler α e input fun b bi => asBlock (α := α) (blocks ⟨b, bi⟩))
+          k)
+  have step : interpHandlerCoNormal handler (op (.inr e) input blocks k) =
+      targetStep := by
+    unfold interpHandlerCoNormal
+    rw [dest_op]
+    rfl
+  rw [show interpHandlerCo handler .normal (op (.inr e) input blocks k) =
+    targetStep from step]
+  dsimp [targetStep, IxPFunctor.map]
+  rw [show destAt (tau (interpHandler handler
+      (bind
+        (@handler α e input fun b bi => asBlock (α := α) (blocks ⟨b, bi⟩))
+        k))) =
+    Step.tau (interpHandler handler
+      (bind
+        (@handler α e input fun b bi => asBlock (α := α) (blocks ⟨b, bi⟩))
+        k)) from dest_tauAt _]
+  refine Sigma.ext rfl ?_
+  apply heq_of_eq
+  funext ar
+  cases ar
+  rfl
+
+/-! The indexed equations are the coalgebraic interface used by scoped simulations. They expose
+the actual internal block children produced by the handler, rather than re-embedding public
+computations and asking for an unnecessarily strong commuting equality. -/
+
 
 end CompE
 

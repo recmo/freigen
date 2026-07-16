@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use num_bigint::BigUint;
-use num_traits::{ToPrimitive, Zero};
+use num_traits::Zero;
 
 use crate::ast::*;
 use crate::value::Value;
@@ -31,6 +31,7 @@ impl std::error::Error for Error {}
 
 type Result<T> = std::result::Result<T, Error>;
 type Env = HashMap<Var, Value>;
+type Definitions = HashMap<Var, Definition>;
 
 fn malformed<T>(message: impl Into<String>) -> Result<T> {
     Err(Error::Malformed(message.into()))
@@ -64,7 +65,7 @@ pub struct BranchCalls<'a, 'p> {
     interp: &'a Interpreter<'p>,
     branches: &'a [Branch],
     env: Env,
-    recursive: Option<Value>,
+    definitions: Definitions,
     depth: usize,
 }
 
@@ -92,7 +93,7 @@ impl BranchCalls<'_, '_> {
         self.interp.eval_block(
             handler,
             &mut env,
-            self.recursive.clone(),
+            &mut self.definitions.clone(),
             self.depth,
             &branch.body,
         )
@@ -113,46 +114,50 @@ impl<'p> Interpreter<'p> {
     }
 
     pub fn run<H: Handler>(&self, handler: &mut H) -> Result<Value> {
-        self.eval_block(handler, &mut Env::new(), None, 0, &self.program.body)
+        self.run_main(handler, Vec::new())
     }
 
-    /// Compatibility spelling for callers of the previous SDK. Promoted programs are closed.
     pub fn run_main<H: Handler>(&self, handler: &mut H, args: Vec<Value>) -> Result<Value> {
-        if !args.is_empty() {
-            return malformed("promoted programs are closed and take no main arguments");
+        if args.len() != self.program.main.params.len() {
+            return malformed(format!(
+                "main expects {} arguments, got {}",
+                self.program.main.params.len(),
+                args.len()
+            ));
         }
-        self.run(handler)
+        let mut definitions = Definitions::new();
+        for definition in &self.program.definitions {
+            definitions.insert(definition.name.clone(), definition.clone());
+        }
+        let mut env = Env::new();
+        for ((name, _), value) in self.program.main.params.iter().zip(args) {
+            env.insert(name.clone(), value);
+        }
+        self.eval_block(
+            handler,
+            &mut env,
+            &mut definitions,
+            0,
+            &self.program.main.body,
+        )
     }
 
     fn eval_block<H: Handler>(
         &self,
         handler: &mut H,
         env: &mut Env,
-        recursive: Option<Value>,
+        definitions: &mut Definitions,
         depth: usize,
         block: &Block,
     ) -> Result<Value> {
         for command in &block.commands {
             match command {
                 Command::Let { var, value, .. } => {
-                    let value = self.eval_expr(handler, env, recursive.clone(), depth, value)?;
+                    let value = self.eval_expr(handler, env, definitions, depth, value)?;
                     env.insert(var.clone(), value);
                 }
-                Command::LetRec {
-                    var, param, body, ..
-                } => {
-                    env.insert(
-                        var.clone(),
-                        Value::Closure {
-                            param: param.clone(),
-                            body: body.clone(),
-                            env: env.clone(),
-                            recursive: true,
-                        },
-                    );
-                }
                 Command::Source { body, .. } => {
-                    return self.eval_block(handler, env, recursive, depth, body);
+                    return self.eval_block(handler, env, definitions, depth, body);
                 }
                 Command::Ret(var) => return lookup(env, var),
             }
@@ -175,16 +180,10 @@ impl<'p> Interpreter<'p> {
                 param,
                 body,
                 mut env,
-                recursive,
+                mut definitions,
             } => {
-                let self_closure = recursive.then(|| Value::Closure {
-                    param: param.clone(),
-                    body: body.clone(),
-                    env: env.clone(),
-                    recursive: true,
-                });
                 env.insert(param, argument);
-                self.eval_block(handler, &mut env, self_closure, depth + 1, &body)
+                self.eval_block(handler, &mut env, &mut definitions, depth + 1, &body)
             }
             other => malformed(format!("application of non-function `{other}`")),
         }
@@ -194,7 +193,7 @@ impl<'p> Interpreter<'p> {
         &self,
         handler: &mut H,
         env: &mut Env,
-        recursive: Option<Value>,
+        definitions: &mut Definitions,
         depth: usize,
         expr: &Expr,
     ) -> Result<Value> {
@@ -202,44 +201,42 @@ impl<'p> Interpreter<'p> {
             Expr::Lit(value) => Ok(value.clone()),
             Expr::Un(op, value) => eval_un(*op, lookup(env, value)?),
             Expr::Bin(op, left, right) => eval_bin(*op, lookup(env, left)?, lookup(env, right)?),
-            Expr::Pop(op, args) => {
-                let args = args
-                    .iter()
-                    .map(|arg| lookup(env, arg))
-                    .collect::<Result<Vec<_>>>()?;
-                eval_pop(op, args)
-            }
-            Expr::MkArr(values) => Ok(Value::Array(
-                values
-                    .iter()
-                    .map(|value| lookup(env, value))
-                    .collect::<Result<Vec<_>>>()?,
-            )),
             Expr::If { cond, then_, else_ } => {
                 let chosen = if as_bool(lookup(env, cond)?)? {
                     then_
                 } else {
                     else_
                 };
-                self.eval_block(handler, &mut env.clone(), recursive, depth, chosen)
+                self.eval_block(
+                    handler,
+                    &mut env.clone(),
+                    &mut definitions.clone(),
+                    depth,
+                    chosen,
+                )
             }
-            Expr::Lam { param, body, .. } => Ok(Value::Closure {
-                param: param.clone(),
-                body: body.clone(),
-                env: env.clone(),
-                recursive: false,
-            }),
+            Expr::Closure {
+                definition,
+                captured,
+            } => {
+                let definition = definitions.get(definition).cloned().ok_or_else(|| {
+                    Error::Malformed(format!("unknown definition `{definition}`"))
+                })?;
+                let mut closure_env = Env::new();
+                closure_env.insert(definition.captured, lookup(env, captured)?);
+                Ok(Value::Closure {
+                    param: definition.param,
+                    body: definition.body,
+                    env: closure_env,
+                    definitions: definitions.clone(),
+                })
+            }
             Expr::App { function, argument } => self.apply(
                 handler,
                 lookup(env, function)?,
                 lookup(env, argument)?,
                 depth,
             ),
-            Expr::SelfCall(argument) => {
-                let closure =
-                    recursive.ok_or_else(|| Error::Malformed("self-call outside letrec".into()))?;
-                self.apply(handler, closure, lookup(env, argument)?, depth)
-            }
             Expr::Op {
                 name,
                 input,
@@ -250,7 +247,7 @@ impl<'p> Interpreter<'p> {
                     interp: self,
                     branches,
                     env: env.clone(),
-                    recursive,
+                    definitions: definitions.clone(),
                     depth,
                 };
                 handler.op(name, input, &mut calls)
@@ -265,13 +262,6 @@ fn lookup(env: &Env, var: &Var) -> Result<Value> {
         .ok_or_else(|| Error::Malformed(format!("unbound variable `{var}`")))
 }
 
-fn as_nat(value: Value) -> Result<BigUint> {
-    match value {
-        Value::Nat(value) => Ok(value),
-        other => malformed(format!("expected nat, got `{other}`")),
-    }
-}
-
 fn as_bool(value: Value) -> Result<bool> {
     match value {
         Value::Bool(value) => Ok(value),
@@ -284,8 +274,6 @@ fn eval_un(op: UnOp, value: Value) -> Result<Value> {
         (UnOp::Not, Value::Bool(value)) => Ok(Value::Bool(!value)),
         (UnOp::Fst, Value::Pair(left, _)) => Ok(*left),
         (UnOp::Snd, Value::Pair(_, right)) => Ok(*right),
-        (UnOp::Inl, value) => Ok(Value::Inl(Box::new(value))),
-        (UnOp::Inr, value) => Ok(Value::Inr(Box::new(value))),
         (op, value) => malformed(format!("unary op {op:?} applied to `{value}`")),
     }
 }
@@ -295,48 +283,43 @@ fn eval_bin(op: BinOp, left: Value, right: Value) -> Result<Value> {
         BinOp::Pair => Ok(Value::Pair(Box::new(left), Box::new(right))),
         BinOp::And => Ok(Value::Bool(as_bool(left)? && as_bool(right)?)),
         BinOp::Or => Ok(Value::Bool(as_bool(left)? || as_bool(right)?)),
-        BinOp::Add => Ok(Value::Nat(as_nat(left)? + as_nat(right)?)),
-        BinOp::Sub => {
-            let (left, right) = (as_nat(left)?, as_nat(right)?);
-            Ok(Value::Nat(if left >= right {
-                left - right
-            } else {
-                BigUint::zero()
-            }))
-        }
-        BinOp::Mul => Ok(Value::Nat(as_nat(left)? * as_nat(right)?)),
-        BinOp::Eq => Ok(Value::Bool(as_nat(left)? == as_nat(right)?)),
-        BinOp::Lt => Ok(Value::Bool(as_nat(left)? < as_nat(right)?)),
-        BinOp::Le => Ok(Value::Bool(as_nat(left)? <= as_nat(right)?)),
-        BinOp::Push => match left {
-            Value::Array(mut values) => {
-                values.push(right);
-                Ok(Value::Array(values))
-            }
-            other => malformed(format!("push on `{other}`")),
+        BinOp::Add => match (left, right) {
+            (Value::Nat(left), Value::Nat(right)) => Ok(Value::Nat(left + right)),
+            (Value::Int(left), Value::Int(right)) => Ok(Value::Int(left + right)),
+            (left, right) => malformed(format!("add applied to `{left}` and `{right}`")),
         },
-        unsupported => malformed(format!("unsupported primitive {unsupported:?}")),
-    }
-}
-
-fn eval_pop(op: &POp, mut args: Vec<Value>) -> Result<Value> {
-    match op {
-        POp::Select if args.len() == 3 => {
-            let else_ = args.pop().unwrap();
-            let then_ = args.pop().unwrap();
-            Ok(if as_bool(args.pop().unwrap())? {
-                then_
-            } else {
-                else_
-            })
-        }
-        POp::AGet if args.len() == 2 => {
-            let index = as_nat(args.pop().unwrap())?.to_usize().ok_or(Error::Fail)?;
-            match args.pop().unwrap() {
-                Value::Array(values) => values.get(index).cloned().ok_or(Error::Fail),
-                other => malformed(format!("indexing `{other}`")),
+        BinOp::Sub => {
+            match (left, right) {
+                (Value::Nat(left), Value::Nat(right)) => Ok(Value::Nat(if left >= right {
+                    left - right
+                } else {
+                    BigUint::zero()
+                })),
+                (Value::Int(left), Value::Int(right)) => Ok(Value::Int(left - right)),
+                (left, right) => malformed(format!("sub applied to `{left}` and `{right}`")),
             }
         }
-        _ => malformed(format!("unsupported partial primitive {op:?}")),
+        BinOp::Mul => match (left, right) {
+            (Value::Nat(left), Value::Nat(right)) => Ok(Value::Nat(left * right)),
+            (Value::Int(left), Value::Int(right)) => Ok(Value::Int(left * right)),
+            (left, right) => malformed(format!("mul applied to `{left}` and `{right}`")),
+        },
+        BinOp::Eq => match (left, right) {
+            (Value::Nat(left), Value::Nat(right)) => Ok(Value::Bool(left == right)),
+            (Value::Int(left), Value::Int(right)) => Ok(Value::Bool(left == right)),
+            (Value::Bool(left), Value::Bool(right)) => Ok(Value::Bool(left == right)),
+            (Value::Unit, Value::Unit) => Ok(Value::Bool(true)),
+            (left, right) => malformed(format!("eq applied to `{left}` and `{right}`")),
+        },
+        BinOp::Lt => match (left, right) {
+            (Value::Nat(left), Value::Nat(right)) => Ok(Value::Bool(left < right)),
+            (Value::Int(left), Value::Int(right)) => Ok(Value::Bool(left < right)),
+            (left, right) => malformed(format!("lt applied to `{left}` and `{right}`")),
+        },
+        BinOp::Le => match (left, right) {
+            (Value::Nat(left), Value::Nat(right)) => Ok(Value::Bool(left <= right)),
+            (Value::Int(left), Value::Int(right)) => Ok(Value::Bool(left <= right)),
+            (left, right) => malformed(format!("le applied to `{left}` and `{right}`")),
+        },
     }
 }

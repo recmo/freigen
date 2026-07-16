@@ -1,430 +1,407 @@
-import Freigen.Ast.Basic
-import Freigen.ITree.Eutt
+import Freigen.Ast.Run
 
 namespace Freigen
 namespace Ast
 
 universe u v
 
-/-! ## Reflection contracts -/
-
-abbrev EvalM (H : Signature) (α : Type) := ITree.CompE H.spec α
-
-structure ReflectionWitnessAt {S : ITree.HSig.{u, v}} {H : Signature}
-    {r : Option (Tp × Tp)} (C : Signature.CompatAt S H r)
+/-- A continuation-strengthened correspondence for an expression in a completed definition
+table. Keeping the continuation inside the open call computation avoids requiring a global
+`interpHandler_bind` law. -/
+structure ReflectionWitness {S : ITree.HSig.{u, v}} {H : Signature}
+    {ctx scope : DefCtx} (C : Signature.Compat S H ctx)
+    (defs : Defs H (Tp.denote ctx) ctx) (extension : Extension scope ctx)
     (Φ : Prop) (α : Tp) {A : Type u}
-    (result : A → α.denote (ITree.CompE H.spec) → Prop) (m : Free S A)
-    (e : Expr H (Tp.denote (ITree.CompE H.spec)) r α) : Type (max u v + 2) where
-  sound : Φ → ITree.CompE.Eutt C result (Free.toITree m) (Expr.denote e)
-
-abbrev ReflectionWitness {S : ITree.HSig.{u, v}} {H : Signature}
-    (C : Signature.Compat S H) (Φ : Prop) (α : Tp) {A : Type u}
-    (result : A → α.denote (ITree.CompE H.spec) → Prop) (m : Free S A)
-    (e : Expr H (Tp.denote (ITree.CompE H.spec)) none α) :=
-  ReflectionWitnessAt C Φ α result m e
-
-/-- Closed output of `reflect%`: parametric PHOAS code and its relational tree semantics. -/
-def Reflected {S : ITree.HSig.{u, v}} {H : Signature}
-    (C : Signature.Compat S H) (α : Tp) {A : Type u}
-    (result : A → α.denote (ITree.CompE H.spec) → Prop) (m : Free S A) :
-    Type 2 :=
-  { code : Closed H α // ITree.CompE.Eutt C result (Free.toITree m)
-    (Expr.denote (code (Tp.denote (ITree.CompE H.spec)))) }
-
-/-- Continuation-strengthened soundness for an expression inside a recursive body.  Recursive
-    calls consume the source function's induction hypothesis at the already-composed
-    continuation, so no global `interp_bind` theorem is required. -/
-structure RecReflectionWitness {S : ITree.HSig.{u, v}} {H : Signature}
-    {a b : Tp} (C : Signature.Compat S H)
-    (body : a.denote (ITree.CompE H.spec) →
-      Expr H (Tp.denote (ITree.CompE H.spec)) (some (a, b)) b)
-    (Φ : Prop) (α : Tp) {A : Type u}
-    (result : A → α.denote (ITree.CompE H.spec) → Prop)
-    (m : Free S A)
-    (e : Expr H (Tp.denote (ITree.CompE H.spec)) (some (a, b)) α) :
-    Type (max u v + 2) where
+    (result : A → α.denote ctx → Prop) (source : Free S A)
+    (target : Expr H scope (Tp.denote ctx) α) : Type (max u v + 2) where
   sound : Φ → ∀ {Z : Type u} {B : Type} (q : Z → B → Prop)
-    (ks : A → Free S Z)
-    (kt : α.denote (ITree.CompE H.spec) →
-      ITree.CompE (DomSig H (some (a, b))) B),
-    (∀ source target, result source target →
-      ITree.CompE.Eutt C q (Free.toITree (ks source))
-        (ITree.CompE.interp (fun x => Expr.denote (body x)) (kt target))) →
-    ITree.CompE.Eutt C q (Free.toITree (m.bind ks))
-      (ITree.CompE.interp (fun x => Expr.denote (body x))
-        (ITree.CompE.bind (Expr.denote e) kt))
+    (sourceK : A → Free S Z) (targetK : α.denote ctx → OpenM H ctx B),
+    (∀ sourceResult targetResult, result sourceResult targetResult →
+      ITree.CompE.Eutt C q (Free.toITree (sourceK sourceResult))
+        (defs.run (targetK targetResult))) →
+    ITree.CompE.Eutt C q (Free.toITree (source.bind sourceK))
+      (defs.run (ITree.CompE.bind (target.denote extension) targetK))
 
-def RecCallAdequate {S : ITree.HSig.{u, v}} {H : Signature}
-    {a b : Tp} (C : Signature.Compat S H)
-    (body : a.denote (ITree.CompE H.spec) →
-      Expr H (Tp.denote (ITree.CompE H.spec)) (some (a, b)) b)
-    (Φ : Prop) {A : Type u}
-    (result : A → b.denote (ITree.CompE H.spec) → Prop)
-    (m : Free S A) (targetArg : a.denote (ITree.CompE H.spec)) : Prop :=
-  Φ → ∀ {Z : Type u} {B : Type} (q : Z → B → Prop)
-    (ks : A → Free S Z)
-    (kt : b.denote (ITree.CompE H.spec) →
-      ITree.CompE (DomSig H (some (a, b))) B),
-    (∀ source target, result source target →
-      ITree.CompE.Eutt C q (Free.toITree (ks source))
-        (ITree.CompE.interp (fun x => Expr.denote (body x)) (kt target))) →
-    ITree.CompE.Eutt C q (Free.toITree (m.bind ks))
-      (ITree.CompE.interp (fun x => Expr.denote (body x))
-        (ITree.CompE.bind (Expr.denote (body targetArg)) kt))
+def ReflectionWitness.close {S : ITree.HSig.{u, v}} {H : Signature}
+    {ctx scope : DefCtx} {C : Signature.Compat S H ctx}
+    {defs : Defs H (Tp.denote ctx) ctx} {extension : Extension scope ctx}
+    {α : Tp} {A : Type u} {result : A → α.denote ctx → Prop}
+    {source : Free S A} {target : Expr H scope (Tp.denote ctx) α}
+    (witness : ReflectionWitness C defs extension True α result source target) :
+    ITree.CompE.Eutt C result (Free.toITree source)
+      (defs.run (target.denote extension)) := by
+  have sound := witness.sound True.intro result
+    (fun value => .pure value) ITree.CompE.ret (by
+      intro sourceResult targetResult related
+      change ITree.CompE.Eutt C result (ITree.CompE.ret sourceResult)
+        (defs.run (ITree.CompE.ret targetResult))
+      rw [Defs.run, ITree.CompE.interpHandler_ret]
+      exact ITree.CompE.Eutt.of_step C
+        (.ret result sourceResult targetResult related))
+  simpa only [Free.bind_pure, ITree.CompE.bind_ret_right,
+    Defs.run, ITree.CompE.interpHandler_ret] using sound
 
-/-- Soundness contract stored for a spilled helper specialization. -/
-def Adequate {S : ITree.HSig.{u, v}} {H : Signature} (C : Signature.Compat S H)
-    {A B : Type u} {a b : Tp}
-    (argRel : A → a.denote (ITree.CompE H.spec) → Prop)
-    (resultRel : B → b.denote (ITree.CompE H.spec) → Prop)
+/-- Closed output of `reflect%`. Compatibility and the result relation are polymorphic in the
+program context because the definition telescope is stored inside the code package. -/
+def Reflected {S : ITree.HSig.{u, v}} {H : Signature}
+    (C : ∀ ctx, Signature.Compat S H ctx) (α : Tp) {A : Type u}
+    (result : ∀ {ctx}, A → α.denote ctx → Prop) (source : Free S A) : Type 2 :=
+  { code : Closed H α //
+    ITree.CompE.Eutt (C code.ctx) (@result code.ctx)
+      (Free.toITree source) (Closed.denote code) }
+
+/-- CPS adequacy of one open target computation. -/
+def Adequate {S : ITree.HSig.{u, v}} {H : Signature} {ctx : DefCtx}
+    (C : Signature.Compat S H ctx) (defs : Defs H (Tp.denote ctx) ctx)
+    {A B : Type u} {input output : Tp}
+    (argRel : A → input.denote ctx → Prop)
+    (resultRel : B → output.denote ctx → Prop)
     (source : A → Free S B)
-    (target : a.denote (ITree.CompE H.spec) →
-      ITree.CompE H.spec (b.denote (ITree.CompE H.spec))) : Prop :=
+    (target : input.denote ctx → OpenM H ctx (output.denote ctx)) : Prop :=
   ∀ sourceArg targetArg, argRel sourceArg targetArg →
-    ITree.CompE.Eutt C resultRel (Free.toITree (source sourceArg)) (target targetArg)
+    ∀ {Z : Type u} {R : Type} (q : Z → R → Prop)
+      (sourceK : B → Free S Z) (targetK : output.denote ctx → OpenM H ctx R),
+      (∀ sourceResult targetResult, resultRel sourceResult targetResult →
+        ITree.CompE.Eutt C q (Free.toITree (sourceK sourceResult))
+          (defs.run (targetK targetResult))) →
+      ITree.CompE.Eutt C q (Free.toITree ((source sourceArg).bind sourceK))
+        (defs.run (ITree.CompE.bind (target targetArg) targetK))
 
-def Adequate.congrTarget {S : ITree.HSig.{u, v}} {H : Signature}
-    {C : Signature.Compat S H} {A B : Type u} {a b : Tp}
-    {argRel : A → a.denote (ITree.CompE H.spec) → Prop}
-    {resultRel : B → b.denote (ITree.CompE H.spec) → Prop}
-    {source : A → Free S B}
-    {target target' : a.denote (ITree.CompE H.spec) →
-      ITree.CompE H.spec (b.denote (ITree.CompE H.spec))}
-    (h : target = target') (sound : Adequate C argRel resultRel source target) :
-    Adequate C argRel resultRel source target' := by
-  subst target'
-  exact sound
+theorem Defs.run_bind_invoke {H : Signature} {ctx : DefCtx}
+    (defs : Defs H (Tp.denote ctx) ctx)
+    (ref : DefRef ctx captures input output) (captured : Packed ctx captures)
+    (argument : input.denote ctx) (k : output.denote ctx → OpenM H ctx α) :
+    defs.run (ITree.CompE.bind (invoke (.mk ref captured) argument) k) =
+      ITree.CompE.tau
+        (defs.run (ITree.CompE.bind
+          (defs.denote .refl ref captured.unpack argument) k)) := by
+  rw [bind_invoke]
+  unfold Defs.run
+  rw [ITree.CompE.interpHandler_op_right]
+  rfl
 
 theorem related_of_eq {A B : Type} {rel : A → B → Prop} {source : A} {x y : B}
     (h : y = x) (hx : rel source x) : rel source y := by
   cases h
   exact hx
 
-/-! ## Leaf constructors -/
+/-! ## Structural expression constructors -/
 
-/-- Attach source provenance without changing denotation or the synchronized soundness proof. -/
 def Reflection.source {S : ITree.HSig.{u, v}} {H : Signature}
-    {r : Option (Tp × Tp)} {C : Signature.CompatAt S H r}
-    {Φ : Prop} {α : Tp} {A : Type u}
-    {result : A → α.denote (ITree.CompE H.spec) → Prop} {m : Free S A}
-    (code : Expr H (Tp.denote (ITree.CompE H.spec)) r α)
-    (range : SourceRange) (sound : ReflectionWitnessAt C Φ α result m code) :
-    ReflectionWitnessAt C Φ α result m (.source range code) :=
+    {ctx scope : DefCtx} {C : Signature.Compat S H ctx}
+    {defs : Defs H (Tp.denote ctx) ctx} {extension : Extension scope ctx}
+    {Φ : Prop} {α : Tp} {A : Type u} {result : A → α.denote ctx → Prop}
+    {source : Free S A} (target : Expr H scope (Tp.denote ctx) α)
+    (range : SourceRange)
+    (sound : ReflectionWitness C defs extension Φ α result source target) :
+    ReflectionWitness C defs extension Φ α result source (.source range target) :=
   ⟨sound.sound⟩
 
-def Reflection.ret {S : ITree.HSig.{u, v}} {H : Signature} {r : Option (Tp × Tp)}
-    {C : Signature.CompatAt S H r}
-    {Φ : Prop} {α : Tp} {A : Type u}
-    {result : A → α.denote (ITree.CompE H.spec) → Prop}
-    (v : α.denote (ITree.CompE H.spec)) {v' : A} (h : Φ → result v' v) :
-    ReflectionWitnessAt C Φ α result (.pure v') (.ret v) :=
-  ⟨fun hPhi => by
-    cases r with
-    | none => exact ITree.CompE.Eutt.of_step C (.ret result v' v (h hPhi))
-    | some ab =>
-        cases ab
-        exact ITree.CompE.Eutt.of_step C (.ret result v' v (h hPhi))⟩
-
-/-! ## Recursive-body constructors -/
-
-def RecReflection.ret {S : ITree.HSig.{u, v}} {H : Signature}
-    {a b α : Tp} {C : Signature.Compat S H}
-    {body : a.denote (ITree.CompE H.spec) →
-      Expr H (Tp.denote (ITree.CompE H.spec)) (some (a, b)) b}
-    {Φ : Prop} {A : Type u}
-    {result : A → α.denote (ITree.CompE H.spec) → Prop}
-    (v : α.denote (ITree.CompE H.spec)) {v' : A}
-    (h : Φ → result v' v) :
-    RecReflectionWitness C body Φ α result (.pure v') (.ret v) :=
+def Reflection.ret {S : ITree.HSig.{u, v}} {H : Signature}
+    {ctx scope : DefCtx} {C : Signature.Compat S H ctx}
+    {defs : Defs H (Tp.denote ctx) ctx} {extension : Extension scope ctx}
+    {Φ : Prop} {α : Tp} {A : Type u} {result : A → α.denote ctx → Prop}
+    (targetValue : α.denote ctx) {sourceValue : A}
+    (related : Φ → result sourceValue targetValue) :
+    ReflectionWitness C defs extension Φ α result (.pure sourceValue) (.ret targetValue) :=
   ⟨fun hΦ => by
-    intro Z B q ks kt hk
+    intro Z R q sourceK targetK continuation
     rw [Free.toITree_bind]
     change ITree.CompE.Eutt C q
-      (ITree.CompE.bind (ITree.CompE.ret v') (fun x => Free.toITree (ks x)))
-      (ITree.CompE.interp (fun x => Expr.denote (body x))
-        (ITree.CompE.bind (ITree.CompE.ret v) kt))
+      (ITree.CompE.bind (ITree.CompE.ret sourceValue)
+        (fun value => Free.toITree (sourceK value)))
+      (defs.run (ITree.CompE.bind (ITree.CompE.ret targetValue) targetK))
     rw [ITree.CompE.bind_ret, ITree.CompE.bind_ret]
-    exact hk v' v (h hΦ)⟩
+    exact continuation sourceValue targetValue (related hΦ)⟩
 
-def RecReflection.selfCall {S : ITree.HSig.{u, v}} {H : Signature}
-    {a b α : Tp} {C : Signature.Compat S H}
-    {body : a.denote (ITree.CompE H.spec) →
-      Expr H (Tp.denote (ITree.CompE H.spec)) (some (a, b)) b}
-    {Φ : Prop} {A Z : Type u}
-    {callRel : A → b.denote (ITree.CompE H.spec) → Prop}
-    {result : Z → α.denote (ITree.CompE H.spec) → Prop}
-    (sourceCall : Free S A) (targetArg : a.denote (ITree.CompE H.spec))
-    (ih : Φ → RecCallAdequate C body True callRel sourceCall targetArg)
+def Reflection.discharge {S : ITree.HSig.{u, v}} {H : Signature}
+    {ctx scope : DefCtx} {C : Signature.Compat S H ctx}
+    {defs : Defs H (Tp.denote ctx) ctx} {extension : Extension scope ctx}
+    {Φ : Prop} {α : Tp} {A : Type u} {result : A → α.denote ctx → Prop}
+    {source : Free S A} {target : Expr H scope (Tp.denote ctx) α}
+    (h : Φ) (sound : ReflectionWitness C defs extension Φ α result source target) :
+    ReflectionWitness C defs extension True α result source target :=
+  ⟨fun _ => sound.sound h⟩
+
+def ReflectionWitness.congrTargetDenote {S : ITree.HSig.{u, v}} {H : Signature}
+    {ctx scope : DefCtx} {C : Signature.Compat S H ctx}
+    {defs : Defs H (Tp.denote ctx) ctx} {extension : Extension scope ctx}
+    {Φ : Prop} {α : Tp} {A : Type u} {result : A → α.denote ctx → Prop}
+    {source : Free S A} {left right : Expr H scope (Tp.denote ctx) α}
+    (equal : left.denote extension = right.denote extension)
+    (sound : ReflectionWitness C defs extension Φ α result source left) :
+    ReflectionWitness C defs extension Φ α result source right := by
+  constructor
+  intro hΦ Z R q sourceK targetK continuation
+  rw [← equal]
+  exact sound.sound hΦ q sourceK targetK continuation
+
+/-! ## Calls -/
+
+def Reflection.bindCall {S : ITree.HSig.{u, v}} {H : Signature}
+    {ctx scope : DefCtx} {C : Signature.Compat S H ctx}
+    {defs : Defs H (Tp.denote ctx) ctx} {extension : Extension scope ctx}
+    {Φ : Prop} {input output α : Tp} {A Z : Type u}
+    {callRel : A → output.denote ctx → Prop}
+    {result : Z → α.denote ctx → Prop}
+    (fn : Closure ctx input output) (argument : input.denote ctx)
+    {sourceCall : Free S A}
+    (callSound : Φ → ∀ {Y : Type u} {R : Type} (q : Y → R → Prop)
+      (sourceK : A → Free S Y) (targetK : output.denote ctx → OpenM H ctx R),
+      (∀ sourceResult targetResult, callRel sourceResult targetResult →
+        ITree.CompE.Eutt C q (Free.toITree (sourceK sourceResult))
+          (defs.run (targetK targetResult))) →
+      ITree.CompE.Eutt C q (Free.toITree (sourceCall.bind sourceK))
+        (defs.run (ITree.CompE.bind (invoke fn argument) targetK)))
     {sourceK : A → Free S Z}
-    (k : ∀ target, Expr H (Tp.denote (ITree.CompE H.spec)) (some (a, b)) α)
+    (k : output.denote ctx → Expr H scope (Tp.denote ctx) α)
     (kSound : ∀ target source, callRel source target →
-      RecReflectionWitness C body Φ α result (sourceK source) (k target)) :
-    RecReflectionWitness C body Φ α result (sourceCall.bind sourceK)
-      (.selfCall targetArg k) :=
+      ReflectionWitness C defs extension Φ α result (sourceK source) (k target)) :
+    ReflectionWitness C defs extension Φ α result (sourceCall.bind sourceK)
+      (.app fn argument k) :=
   ⟨fun hΦ => by
-    intro Y B q ks kt hk
-    have sourceAssoc : (sourceCall.bind sourceK).bind ks =
-        sourceCall.bind (fun source => (sourceK source).bind ks) :=
-      LawfulMonad.bind_assoc sourceCall sourceK ks
-    rw [sourceAssoc, Free.toITree_bind]
-    let targetK := fun target =>
-      ITree.CompE.bind (Expr.denote (k target)) kt
-    have hcont : ∀ source target, callRel source target →
-        ITree.CompE.Eutt C q
-          (Free.toITree ((sourceK source).bind ks))
-          (ITree.CompE.interp (fun x => Expr.denote (body x)) (targetK target)) := by
-      intro source target hrel
-      exact (kSound target source hrel).sound hΦ q ks kt hk
-    have hcall := ih hΦ True.intro q
-      (fun source => (sourceK source).bind ks) targetK hcont
-    rw [Free.toITree_bind] at hcall
-    change ITree.CompE.Eutt C q
-      (ITree.CompE.bind (Free.toITree sourceCall)
-        (fun source => Free.toITree ((sourceK source).bind ks)))
-      (ITree.CompE.interp (fun x => Expr.denote (body x))
-        (ITree.CompE.bind (Expr.denote (.selfCall targetArg k)) kt))
-    simp only [Expr.denote, ITree.CompE.bind_assoc]
-    rw [ITree.CompE.bind_call (F := H.spec)]
+    intro Y R q sourceRest targetRest restSound
+    have sourceAssoc : (sourceCall.bind sourceK).bind sourceRest =
+        sourceCall.bind (fun source => (sourceK source).bind sourceRest) :=
+      LawfulMonad.bind_assoc sourceCall sourceK sourceRest
+    rw [sourceAssoc]
+    change ITree.CompE.Eutt C q _
+      (defs.run (ITree.CompE.bind
+        (ITree.CompE.bind (invoke fn argument)
+          (fun target => (k target).denote extension)) targetRest))
+    rw [ITree.CompE.bind_assoc]
+    exact callSound hΦ q
+      (fun source => (sourceK source).bind sourceRest)
+      (fun target => ITree.CompE.bind ((k target).denote extension) targetRest)
+      (fun source target related =>
+        (kSound target source related).sound hΦ q sourceRest targetRest restSound)⟩
+
+def Reflection.call {S : ITree.HSig.{u, v}} {H : Signature}
+    {ctx scope : DefCtx} {C : Signature.Compat S H ctx}
+    {defs : Defs H (Tp.denote ctx) ctx} {extension : Extension scope ctx}
+    {Φ : Prop} {input output : Tp} {A : Type u}
+    {result : A → output.denote ctx → Prop}
+    (fn : Closure ctx input output) (argument : input.denote ctx)
+    {source : Free S A}
+    (sound : Φ → ∀ {Y : Type u} {R : Type} (q : Y → R → Prop)
+      (sourceK : A → Free S Y) (targetK : output.denote ctx → OpenM H ctx R),
+      (∀ sourceResult targetResult, result sourceResult targetResult →
+        ITree.CompE.Eutt C q (Free.toITree (sourceK sourceResult))
+          (defs.run (targetK targetResult))) →
+      ITree.CompE.Eutt C q (Free.toITree (source.bind sourceK))
+        (defs.run (ITree.CompE.bind (invoke fn argument) targetK))) :
+    ReflectionWitness C defs extension Φ output result source
+      (.app fn argument .ret) :=
+  by
+    simpa only [Free.bind_pure] using
+      (Reflection.bindCall (extension := extension) fn argument sound .ret
+        fun target source related => Reflection.ret target (fun _ => related))
+
+def Reflection.closure {S : ITree.HSig.{u, v}} {H : Signature}
+    {ctx scope : DefCtx} {C : Signature.Compat S H ctx}
+    {defs : Defs H (Tp.denote ctx) ctx} {extension : Extension scope ctx}
+    {Φ : Prop} {captures input output α : Tp} {A : Type u}
+    {result : A → α.denote ctx → Prop} (ref : DefRef scope captures input output)
+    (captured : captures.denote ctx)
+    (body : Closure ctx input output → Expr H scope (Tp.denote ctx) α)
+    {source : Free S A}
+    (sound : ReflectionWitness C defs extension Φ α result source
+      (body (.mk (ref.lift extension) (.pack captured)))) :
+    ReflectionWitness C defs extension Φ α result source (.closure ref captured body) := by
+  exact ReflectionWitness.congrTargetDenote
+    (left := body (.mk (ref.lift extension) (.pack captured)))
+    (right := .closure ref captured body) rfl sound
+
+/-! ## Higher-order operations -/
+
+def Reflection.op {S : ITree.HSig.{u, v}} {H : Signature}
+    {ctx scope : DefCtx} (C : Signature.Compat S H ctx)
+    {defs : Defs H (Tp.denote ctx) ctx} {extension : Extension scope ctx}
+    {Φ : Prop} {α : Tp} {A : Type u}
+    {result : A → α.denote ctx → Prop}
+    (sourceOp : S.op) (targetOp : H.op) (witness : C.opRel sourceOp targetOp)
+    (targetInput : (H.input targetOp).denote ctx) {sourceInput : S.input sourceOp}
+    (inputRelated : Φ → C.input witness sourceInput targetInput)
+    {sourceBlocks : (branch : S.branch sourceOp) → S.branchInput sourceOp branch →
+      Free S (S.branchOutput sourceOp branch)}
+    (targetBlocks : (branch : H.branch targetOp) →
+      (H.branchInput targetOp branch).denote ctx →
+        Expr H scope (Tp.denote ctx) (H.branchOutput targetOp branch))
+    (blockSound : ∀ targetBranch targetValue sourceBranch,
+      (branchRelated : C.branch witness sourceBranch targetBranch) →
+      ∀ sourceValue, C.branchInput witness branchRelated sourceValue targetValue →
+        ReflectionWitness C defs extension Φ (H.branchOutput targetOp targetBranch)
+          (C.branchOutput witness branchRelated)
+          (sourceBlocks sourceBranch sourceValue) (targetBlocks targetBranch targetValue))
+    {sourceContinuation : S.output sourceOp → Free S A}
+    (targetContinuation : (H.output targetOp).denote ctx →
+      Expr H scope (Tp.denote ctx) α)
+    (continuationSound : ∀ targetValue sourceValue,
+      C.output witness sourceValue targetValue →
+        ReflectionWitness C defs extension Φ α result
+          (sourceContinuation sourceValue) (targetContinuation targetValue)) :
+    ReflectionWitness C defs extension Φ α result
+      (.op sourceOp sourceInput sourceBlocks sourceContinuation)
+      (.op targetOp targetInput targetBlocks targetContinuation) := by
+  constructor
+  intro hΦ Z R q sourceK targetK restSound
+  let sourceBlocks' := fun (branch : S.branch sourceOp)
+      (input : S.branchInput sourceOp branch) =>
+    Free.toITree (sourceBlocks branch input)
+  let sourceContinuation' := fun output =>
+    ITree.CompE.bind (Free.toITree (sourceContinuation output))
+      (fun value => Free.toITree (sourceK value))
+  let targetBlocks' := fun (branch : H.branch targetOp)
+      (input : (H.branchInput targetOp branch).denote ctx) =>
+    defs.run ((targetBlocks branch input).denote extension)
+  let targetContinuation' := fun output =>
+    defs.run (ITree.CompE.bind
+      ((targetContinuation output).denote extension) targetK)
+  have matched : ITree.CompE.Eutt C q
+      (ITree.CompE.bind
+        (ITree.CompE.op sourceOp sourceInput
+          (fun branch => sourceBlocks' branch.1 branch.2) ITree.CompE.ret)
+        sourceContinuation')
+      (ITree.CompE.bind
+        (ITree.CompE.op targetOp targetInput
+          (fun branch => targetBlocks' branch.1 branch.2) ITree.CompE.ret)
+        targetContinuation') :=
+    ITree.CompE.Eutt.of_step C
+      (.op q witness sourceInput targetInput (inputRelated hΦ)
+        sourceBlocks' sourceContinuation' targetBlocks' targetContinuation'
+        (fun sourceBranch targetBranch branchRelated sourceValue targetValue
+            branchInput =>
+          (Reflection.discharge hΦ
+            (blockSound targetBranch targetValue sourceBranch branchRelated
+              sourceValue branchInput)).close)
+        (fun sourceValue targetValue output => by
+          simpa only [sourceContinuation', targetContinuation', Free.toITree_bind]
+            using (continuationSound targetValue sourceValue output).sound
+              hΦ q sourceK targetK restSound))
+  apply ITree.CompE.Eutt.congr C _ _ matched
+  · rw [Free.toITree_bind, Free.toITree_op, ITree.CompE.bind_assoc]
+  · change ITree.CompE.bind
+        (ITree.CompE.op targetOp targetInput
+          (fun branch => targetBlocks' branch.1 branch.2) ITree.CompE.ret)
+        targetContinuation' =
+      defs.run (ITree.CompE.bind
+        ((Expr.op targetOp targetInput targetBlocks targetContinuation).denote extension)
+        targetK)
+    rw [ITree.CompE.bind_op]
     simp only [ITree.CompE.bind_ret]
-    rw [ITree.CompE.interp_call]
-    exact ITree.CompE.Eutt.tauR C hcall⟩
+    change ITree.CompE.op targetOp targetInput
+        (fun branch => defs.run
+          ((targetBlocks branch.1 branch.2).denote extension))
+        (fun output => defs.run (ITree.CompE.bind
+          ((targetContinuation output).denote extension) targetK)) = _
+    change _ = defs.run (ITree.CompE.bind
+      (ITree.CompE.bind
+        (ITree.CompE.op (.inl targetOp) targetInput
+          (fun branch =>
+            (targetBlocks branch.1 branch.2).denote extension)
+          ITree.CompE.ret)
+        (fun output => (targetContinuation output).denote extension))
+      targetK)
+    rw [ITree.CompE.bind_assoc, ITree.CompE.bind_op]
+    simp only [ITree.CompE.bind_ret]
+    rw [Defs.run_op]
 
-/-- A spilled nonrecursive helper call inside a recursive body. -/
-def RecReflection.bindCall {S : ITree.HSig.{u, v}} {H : Signature}
-    {ra rb arg resultTp α : Tp} {C : Signature.Compat S H}
-    {body : ra.denote (ITree.CompE H.spec) →
-      Expr H (Tp.denote (ITree.CompE H.spec)) (some (ra, rb)) rb}
-    {Φ : Prop} {A Z : Type u}
-    {argRel : A → resultTp.denote (ITree.CompE H.spec) → Prop}
-    {result : Z → α.denote (ITree.CompE H.spec) → Prop}
-    (f : arg.denote (ITree.CompE H.spec) →
-      ITree.CompE H.spec (resultTp.denote (ITree.CompE H.spec)))
-    (x : arg.denote (ITree.CompE H.spec)) {m : Free S A}
-    (hm : Φ → ITree.CompE.Eutt C argRel (Free.toITree m) (f x))
+/-! ## Definition adequacy and recursion -/
+
+def RecCallAdequate {S : ITree.HSig.{u, v}} {H : Signature}
+    {ctx : DefCtx} (C : Signature.Compat S H ctx)
+    (defs : Defs H (Tp.denote ctx) ctx)
+    {B : Type u} {input output : Tp}
+    (resultRel : B → output.denote ctx → Prop)
+    (sourceCall : Free S B) (targetFn : Closure ctx input output)
+    (targetArg : input.denote ctx) : Prop :=
+  ∀ {Z : Type u} {R : Type} (q : Z → R → Prop)
+    (sourceK : B → Free S Z) (targetK : output.denote ctx → OpenM H ctx R),
+    (∀ sourceResult targetResult, resultRel sourceResult targetResult →
+      ITree.CompE.Eutt C q (Free.toITree (sourceK sourceResult))
+        (defs.run (targetK targetResult))) →
+    ITree.CompE.Eutt C q (Free.toITree (sourceCall.bind sourceK))
+      (defs.run (ITree.CompE.bind (invoke targetFn targetArg) targetK))
+
+def Reflection.recursiveCall {S : ITree.HSig.{u, v}} {H : Signature}
+    {ctx scope : DefCtx} {C : Signature.Compat S H ctx}
+    {defs : Defs H (Tp.denote ctx) ctx} {extension : Extension scope ctx}
+    {Φ : Prop} {input output α : Tp} {A Z : Type u}
+    {callRel : A → output.denote ctx → Prop}
+    {result : Z → α.denote ctx → Prop}
+    (sourceCall : Free S A) (targetFn : Closure ctx input output)
+    (targetArg : input.denote ctx)
+    (ih : Φ → RecCallAdequate C defs callRel sourceCall targetFn targetArg)
     {sourceK : A → Free S Z}
-    (k : resultTp.denote (ITree.CompE H.spec) →
-      Expr H (Tp.denote (ITree.CompE H.spec)) (some (ra, rb)) α)
-    (kSound : ∀ target source, argRel source target →
-      RecReflectionWitness C body Φ α result (sourceK source) (k target)) :
-    RecReflectionWitness C body Φ α result (m.bind sourceK) (.app f x k) :=
-  ⟨fun hΦ => by
-    intro Y B q ks kt hk
-    have sourceAssoc : (m.bind sourceK).bind ks =
-        m.bind (fun source => (sourceK source).bind ks) :=
-      LawfulMonad.bind_assoc m sourceK ks
-    rw [sourceAssoc, Free.toITree_bind]
-    change ITree.CompE.Eutt C q
-      (ITree.CompE.bind (Free.toITree m)
-        (fun source => Free.toITree ((sourceK source).bind ks)))
-      (ITree.CompE.interp (fun x => Expr.denote (body x))
-        (ITree.CompE.bind (Expr.denote (.app f x k)) kt))
-    simp only [Expr.denote, DomR.bind, DomR.lift, ITree.CompE.bind_assoc]
-    rw [ITree.CompE.interp_bind_sumL]
-    apply ITree.CompE.Eutt.bind C (hm hΦ)
-    intro source target hrel
-    exact (kSound target source hrel).sound hΦ q ks kt hk⟩
-
-def RecReflection.opNoBranches {S : ITree.HSig.{u, v}} {H : Signature}
-    {ra rb α : Tp} {C : Signature.Compat S H}
-    {body : ra.denote (ITree.CompE H.spec) →
-      Expr H (Tp.denote (ITree.CompE H.spec)) (some (ra, rb)) rb}
-    {Φ : Prop} {A : Type u}
-    {result : A → α.denote (ITree.CompE H.spec) → Prop}
-    (e : S.op) (h : H.op) (w : C.opRel e h)
-    (sourceEmpty : ∀ b : S.branch e, False)
-    (targetEmpty : ∀ b : H.branch h, False)
-    (input : (H.input h).denote) {sourceInput : S.input e}
-    (hi : Φ → C.input w sourceInput input)
-    {sourceBlocks : (br : S.branch e) → S.branchInput e br →
-      Free S (S.branchOutput e br)}
-    {sourceK : S.output e → Free S A}
-    (k : ∀ target, Expr H (Tp.denote (ITree.CompE H.spec))
-      (some (ra, rb)) α)
-    (kSound : ∀ target source, C.output w source target →
-      RecReflectionWitness C body Φ α result (sourceK source) (k target)) :
-    RecReflectionWitness C body Φ α result (.op e sourceInput sourceBlocks sourceK)
-      (.op h input (fun bt => nomatch targetEmpty bt) k) :=
-  ⟨fun hΦ => by
-      intro Z B q ks kt hk
-      rw [Free.toITree_bind]
-      rw [Free.toITree_op]
-      rw [ITree.CompE.bind_assoc]
-      simp only [Expr.denote, DomR.perform, DomR.bind]
-      rw [ITree.CompE.bind_assoc]
-      rw [ITree.CompE.bind_op_no_branches
-        (H := DomSig H (some (ra, rb))) (Sum.inl h)
-        targetEmpty]
-      simp only [ITree.CompE.bind_ret]
-      rw [ITree.CompE.interp_op_no_branches
-        (empty := targetEmpty)]
-      rw [ITree.CompE.op_eq_bind_no_branches (H := H.spec) h targetEmpty]
-      apply ITree.CompE.Eutt.of_step C
-      exact .op q w sourceInput input (hi hΦ)
-        (fun bs xs => Free.toITree (sourceBlocks bs xs))
-        (fun os => ITree.CompE.bind (Free.toITree (sourceK os))
-          (fun source => Free.toITree (ks source)))
-        (fun bt xt => nomatch targetEmpty bt)
-        (fun ot => ITree.CompE.interp (fun x => Expr.denote (body x))
-          (ITree.CompE.bind (Expr.denote (k ot)) kt))
-        (fun bs => nomatch sourceEmpty bs)
-        (fun os ot ho => by
-          rw [← Free.toITree_bind]
-          exact (kSound ot os ho).sound hΦ q ks kt hk)⟩
-
-/-! ## Generic recursion adequacy -/
+    (k : output.denote ctx → Expr H scope (Tp.denote ctx) α)
+    (kSound : ∀ target source, callRel source target →
+      ReflectionWitness C defs extension Φ α result (sourceK source) (k target)) :
+    ReflectionWitness C defs extension Φ α result (sourceCall.bind sourceK)
+      (.app targetFn targetArg k) :=
+  Reflection.bindCall targetFn targetArg ih k kSound
 
 theorem RecReflection.wellFounded {S : ITree.HSig.{u, v}} {H : Signature}
-    {a b : Tp} {C : Signature.Compat S H} {A B : Type u}
-    (argRel : A → a.denote (ITree.CompE H.spec) → Prop)
-    (resultRel : B → b.denote (ITree.CompE H.spec) → Prop)
+    {ctx scope : DefCtx} {C : Signature.Compat S H ctx}
+    (defs : Defs H (Tp.denote ctx) ctx) (extension : Extension scope ctx)
+    {captures input output : Tp} (self : DefRef scope captures input output)
+    (captured : captures.denote ctx)
+    {A B : Type u}
+    (argRel : A → input.denote ctx → Prop)
+    (resultRel : B → output.denote ctx → Prop)
     (source : A → Free S B)
-    (body : a.denote (ITree.CompE H.spec) →
-      Expr H (Tp.denote (ITree.CompE H.spec)) (some (a, b)) b)
+    (body : captures.denote ctx → input.denote ctx →
+      Expr H scope (Tp.denote ctx) output)
+    (dispatch : ∀ argument,
+      defs.denote .refl (self.lift extension) captured argument =
+        (body captured argument).denote extension)
     (order : A → A → Prop) (wf : WellFounded order)
     (bodySound : ∀ sourceArg targetArg, argRel sourceArg targetArg →
       (∀ smaller targetSmaller, argRel smaller targetSmaller →
         order smaller sourceArg →
-        RecCallAdequate C body True resultRel (source smaller) targetSmaller) →
-      RecReflectionWitness C body True b resultRel
-        (source sourceArg) (body targetArg)) :
-    ∀ sourceArg targetArg, argRel sourceArg targetArg →
-      RecCallAdequate C body True resultRel (source sourceArg) targetArg := by
+        RecCallAdequate C defs resultRel (source smaller)
+          (.mk (self.lift extension) (.pack captured)) targetSmaller) →
+      ReflectionWitness C defs extension True output resultRel
+        (source sourceArg) (body captured targetArg)) :
+    Adequate C defs argRel resultRel source
+      (fun argument => invoke (.mk (self.lift extension) (.pack captured)) argument) := by
   intro sourceArg
   induction sourceArg using wf.induction with
   | h sourceArg ih =>
-      intro targetArg hrel
-      exact (bodySound sourceArg targetArg hrel
-        (fun smaller targetSmaller hsmall hlt =>
-          ih smaller hlt targetSmaller hsmall)).sound
+      intro targetArg related Z R q sourceK targetK continuation
+      have bodyWitness := bodySound sourceArg targetArg related
+        (fun smaller targetSmaller smallerRelated smallerOrder =>
+          ih smaller smallerOrder targetSmaller smallerRelated)
+      have bodyAdequate := bodyWitness.sound True.intro q sourceK targetK continuation
+      rw [Defs.run_bind_invoke, Packed.unpack_pack, dispatch targetArg]
+      exact ITree.CompE.Eutt.tauR C bodyAdequate
 
-theorem RecReflection.adequate {S : ITree.HSig.{u, v}} {H : Signature}
-    {a b : Tp} {C : Signature.Compat S H} {A B : Type u}
-    (argRel : A → a.denote (ITree.CompE H.spec) → Prop)
-    (resultRel : B → b.denote (ITree.CompE H.spec) → Prop)
+theorem RecReflection.nonrecursiveAdequate
+    {S : ITree.HSig.{u, v}} {H : Signature}
+    {ctx scope : DefCtx} {C : Signature.Compat S H ctx}
+    (defs : Defs H (Tp.denote ctx) ctx) (extension : Extension scope ctx)
+    {captures input output : Tp} (self : DefRef scope captures input output)
+    (captured : captures.denote ctx)
+    {A B : Type u}
+    (argRel : A → input.denote ctx → Prop)
+    (resultRel : B → output.denote ctx → Prop)
     (source : A → Free S B)
-    (body : a.denote (ITree.CompE H.spec) →
-      Expr H (Tp.denote (ITree.CompE H.spec)) (some (a, b)) b)
-    (order : A → A → Prop) (wf : WellFounded order)
+    (body : captures.denote ctx → input.denote ctx →
+      Expr H scope (Tp.denote ctx) output)
+    (dispatch : ∀ argument,
+      defs.denote .refl (self.lift extension) captured argument =
+        (body captured argument).denote extension)
     (bodySound : ∀ sourceArg targetArg, argRel sourceArg targetArg →
-      (∀ smaller targetSmaller, argRel smaller targetSmaller →
-        order smaller sourceArg →
-        RecCallAdequate C body True resultRel (source smaller) targetSmaller) →
-      RecReflectionWitness C body True b resultRel
-        (source sourceArg) (body targetArg)) :
-    Adequate C argRel resultRel source
-      (ITree.CompE.mrec fun x => Expr.denote (body x)) := by
-  intro sourceArg targetArg hrel
-  have hcps : RecCallAdequate C body True resultRel
-      (source sourceArg) targetArg :=
-    wellFounded argRel resultRel source body order wf bodySound
-      sourceArg targetArg hrel
-  have h := hcps (Z := B) (B := b.denote (ITree.CompE H.spec))
-    True.intro resultRel (fun source => .pure source) ITree.CompE.ret (by
-    intro source target hresult
-    simp only [Free.toITree, Free.eval, ITree.CompE.interp_ret]
-    exact ITree.CompE.Eutt.of_step C (.ret resultRel source target hresult))
-  simp only [Free.bind_pure, ITree.CompE.bind_ret_right] at h
-  exact h
-
-/-! ## Ordinary computation constructors -/
-
-/-- Soundness of a helper call followed by a source continuation. -/
-def Reflection.bindCall {S : ITree.HSig.{u, v}} {H : Signature}
-    {C : Signature.Compat S H} {Φ : Prop} {a b α : Tp} {A Z : Type u}
-    {argRel : A → b.denote (ITree.CompE H.spec) → Prop}
-    {result : Z → α.denote (ITree.CompE H.spec) → Prop}
-    (f : a.denote (ITree.CompE H.spec) →
-      ITree.CompE H.spec (b.denote (ITree.CompE H.spec)))
-    (x : a.denote (ITree.CompE H.spec)) {m : Free S A}
-    (hm : Φ → ITree.CompE.Eutt C argRel (Free.toITree m) (f x))
-    {ks : A → Free S Z}
-    (k : b.denote (ITree.CompE H.spec) →
-      Expr H (Tp.denote (ITree.CompE H.spec)) none α)
-    (kSound : ∀ target source, argRel source target →
-      ReflectionWitness C Φ α result (ks source) (k target)) :
-    ReflectionWitness C Φ α result (m.bind ks) (.app f x k) := by
-  constructor
-  intro hΦ
-  rw [Free.toITree_bind]
-  apply ITree.CompE.Eutt.bind C (hm hΦ)
-  exact fun source target h => (kSound target source h).sound hΦ
-
-def Reflection.call {S : ITree.HSig.{u, v}} {H : Signature}
-    {C : Signature.Compat S H} {Φ : Prop} {a b : Tp} {A : Type u}
-    {result : A → b.denote (ITree.CompE H.spec) → Prop}
-    (f : a.denote (ITree.CompE H.spec) →
-      ITree.CompE H.spec (b.denote (ITree.CompE H.spec)))
-    (x : a.denote (ITree.CompE H.spec)) {m : Free S A}
-    (hm : Φ → ITree.CompE.Eutt C result (Free.toITree m) (f x)) :
-    ReflectionWitness C Φ b result m (.app f x .ret) :=
-  ⟨fun hΦ => by
-      change ITree.CompE.Eutt C result (Free.toITree m)
-        (ITree.CompE.bind (f x) ITree.CompE.ret)
-      rw [ITree.CompE.bind_ret_right]
-      exact hm hΦ⟩
-
-def Reflection.lam {S : ITree.HSig.{u, v}} {H : Signature}
-    {C : Signature.Compat S H} {Φ : Prop} {a b α : Tp} {A : Type u}
-    {result : A → α.denote (ITree.CompE H.spec) → Prop} {m : Free S A}
-    (body : a.denote (ITree.CompE H.spec) →
-      Expr H (Tp.denote (ITree.CompE H.spec)) none b)
-    (k : (a.denote (ITree.CompE H.spec) →
-        ITree.CompE H.spec (b.denote (ITree.CompE H.spec))) →
-      Expr H (Tp.denote (ITree.CompE H.spec)) none α)
-    (kSound : ReflectionWitness C Φ α result m
-      (k (fun x => Expr.denote (body x)))) :
-    ReflectionWitness C Φ α result m (.lam body k) :=
-  let f := fun x => Expr.denote (body x)
-  ⟨fun hΦ => by
-      change ITree.CompE.Eutt C result (Free.toITree m) (Expr.denote (k f))
-      exact kSound.sound hΦ⟩
-
-def Reflection.letrec {S : ITree.HSig.{u, v}} {H : Signature}
-    {C : Signature.Compat S H} {Φ : Prop} {a b α : Tp} {A : Type u}
-    {result : A → α.denote (ITree.CompE H.spec) → Prop} {m : Free S A}
-    (body : a.denote (ITree.CompE H.spec) →
-      Expr H (Tp.denote (ITree.CompE H.spec)) (some (a, b)) b)
-    (k : (a.denote (ITree.CompE H.spec) →
-        ITree.CompE H.spec (b.denote (ITree.CompE H.spec))) →
-      Expr H (Tp.denote (ITree.CompE H.spec)) none α)
-    (kSound : ReflectionWitness C Φ α result m
-      (k (ITree.CompE.mrec fun x => Expr.denote (body x)))) :
-    ReflectionWitness C Φ α result m (.letrec body k) :=
-  let f := ITree.CompE.mrec fun x => Expr.denote (body x)
-  ⟨fun hΦ => by
-      change ITree.CompE.Eutt C result (Free.toITree m) (Expr.denote (k f))
-      exact kSound.sound hΦ⟩
-
-def Reflection.op {S : ITree.HSig.{u, v}} {H : Signature} (C : Signature.Compat S H)
-    {Φ : Prop} {α : Tp} {A : Type u}
-    {result : A → α.denote (ITree.CompE H.spec) → Prop}
-    (e : S.op) (h : H.op) (w : C.opRel e h)
-    (input : (H.input h).denote) {sourceInput : S.input e}
-    (hi : Φ → C.input w sourceInput input)
-    {sourceBlocks : (b : S.branch e) → S.branchInput e b →
-      Free S (S.branchOutput e b)}
-    (blocks : ∀ bt xt, Expr H (Tp.denote (ITree.CompE H.spec)) none
-      (.base (H.branchOutput h bt)))
-    (blockSound : ∀ bt xt bs, (hbr : C.branch w bs bt) →
-      ∀ xs, C.branchInput w hbr xs xt →
-        ReflectionWitness C Φ (.base (H.branchOutput h bt))
-          (C.branchOutput w hbr) (sourceBlocks bs xs) (blocks bt xt))
-    {ks : S.output e → Free S A}
-    (k : ∀ ot, Expr H (Tp.denote (ITree.CompE H.spec)) none α)
-    (kSound : ∀ ot os, C.output w os ot →
-      ReflectionWitness C Φ α result (ks os) (k ot)) :
-    ReflectionWitness C Φ α result (.op e sourceInput sourceBlocks ks)
-      (.op h input blocks k) :=
-  ⟨fun hPhi => by
-      simp only [Expr.denote, DomR.perform, DomR.bind, Free.toITree]
-      apply ITree.CompE.Eutt.of_step C
-      exact .op result w sourceInput input (hi hPhi)
-        (fun b x => Free.toITree (sourceBlocks b x))
-        (fun o => Free.toITree (ks o))
-        (fun b x => Expr.denote (blocks b x))
-        (fun o => Expr.denote (k o))
-        (fun bs bt hbr xs xt hx => blockSound bt xt bs hbr xs hx |>.sound hPhi)
-        (fun os ot ho => kSound ot os ho |>.sound hPhi)⟩
+      ReflectionWitness C defs extension True output resultRel
+        (source sourceArg) (body captured targetArg)) :
+    Adequate C defs argRel resultRel source
+      (fun argument => invoke (.mk (self.lift extension) (.pack captured)) argument) := by
+  let order := fun _ _ : A => False
+  have wf : WellFounded order :=
+    ⟨fun value => .intro value fun _ impossible => False.elim impossible⟩
+  apply RecReflection.wellFounded defs extension self captured argRel resultRel
+    source body dispatch order wf
+  intro sourceArg targetArg related _
+  exact bodySound sourceArg targetArg related
 
 end Ast
 end Freigen

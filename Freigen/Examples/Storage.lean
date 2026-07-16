@@ -42,7 +42,7 @@ inductive StoreRel : StoreOp → StoreOp → Type where
   | get : StoreRel .get .get
   | set : StoreRel .set .set
 
-@[ast_compat] abbrev Compat : Signature.Compat Source Target where
+@[ast_compat] abbrev Compat : ∀ ctx, Signature.Compat Source Target ctx := fun _ => {
   opRel := StoreRel
   input
     | .get, source, target => source = target
@@ -60,12 +60,13 @@ inductive StoreRel : StoreOp → StoreOp → Type where
   branchOutput := by
     intro _ _ _ source
     exact nomatch source
+}
 
-@[ast_op] def getOp : OpSpec Compat StoreOp.get where
+@[ast_op] def getOp {ctx} : OpSpec (Compat ctx) StoreOp.get where
   target := .get
   witness := .get
 
-@[ast_op] def setOp : OpSpec Compat StoreOp.set where
+@[ast_op] def setOp {ctx} : OpSpec (Compat ctx) StoreOp.set where
   target := .set
   witness := .set
 
@@ -100,8 +101,8 @@ def getProgram : Store Nat := get 0
 
 reflect_def reflected := getProgram
 
-example : ITree.CompE.Eutt Compat Eq (Free.toITree getProgram)
-    (Expr.denote (reflected (Tp.denote (ITree.CompE Target.spec)))) :=
+example : ITree.CompE.Eutt (Compat _) Eq (Free.toITree getProgram)
+    (Closed.denote reflected) :=
   reflected_sound
 
 -- Future acceptance target: pair-valued operation inputs are not yet reified generically.

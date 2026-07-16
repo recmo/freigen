@@ -1,4 +1,4 @@
-import Freigen.Compile
+import Freigen.Compile.Registry
 import Lean
 
 open Lean Meta

@@ -1,37 +1,41 @@
 (program unit
-  (source Client.Program 24 9 24 18
+  (main ()
     (block
-      (source Client.Program 15 0 20 26
+      (source Client.Program 24 9 24 18
         (block
-          (let v0 unit (lit unit))
-          (let v3 nat
-            (op hint v0
-              (branch b1
-                (block
-                  (let v2 nat (lit 15))
-                  (ret v2)
+          (source Client.Program 15 0 20 26
+            (block
+              (let v0 unit (lit unit))
+              (let v3 nat
+                (op hint v0
+                  (branch b1
+                    (block
+                      (let v2 nat (lit 15))
+                      (ret v2)
+                    )
+                  )
                 )
               )
-            )
-          )
-          (let v4 unit (lit unit))
-          (let v8 nat
-            (op hint v4
-              (branch b5
-                (block
-                  (let v6 nat (lit 2))
-                  (let v7 nat (mul v3 v6))
-                  (ret v7)
+              (let v4 unit (lit unit))
+              (let v8 nat
+                (op hint v4
+                  (branch b5
+                    (block
+                      (let v6 nat (lit 2))
+                      (let v7 nat (mul v3 v6))
+                      (ret v7)
+                    )
+                  )
                 )
               )
+              (let v9 nat (lit 30))
+              (let v10 bool (eq v8 v9))
+              (let v11 unit
+                (op assert v10)
+              )
+              (ret v11)
             )
           )
-          (let v9 nat (lit 30))
-          (let v10 bool (eq v8 v9))
-          (let v11 unit
-            (op assert v10)
-          )
-          (ret v11)
         )
       )
     )
