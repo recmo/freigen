@@ -27,6 +27,17 @@ def map {F : I ⟹ₚ O} {X : I → Type u} {Y : I → Type v}
     (f : (i : I) → X i → Y i) : (i: O) → F X i → F Y i
 | _, ⟨p, g⟩ => ⟨p, fun a => f (F.Elem _ p a) (g a)⟩
 
+theorem map_map {F : I ⟹ₚ O} {X Y Z : I → Type _}
+    (f : (i : I) → X i → Y i) (g : (i : I) → Y i → Z i) (i : O) (x : F X i):
+    map g i (map f i x) = map (fun i x => g i (f i x)) i x := by
+  cases x
+  rfl
+
+theorem map_id {F : I ⟹ₚ O} {X : I → Type _} (i : O) (x : F X i):
+    map (fun _ x => x) i x = x := by
+  cases x
+  rfl
+
 abbrev Endo (I : Type u) := I ⟹ₚ I
 
 /--
@@ -201,6 +212,15 @@ def observe {i} : M F i ≃ F (M F) i where
 
 abbrev IxRel (X Y : I → Type w) := (i : I) → X i → Y i → Prop
 
+def IxRel.diag {X : I → Type _} : IxRel X X := fun _ x y => x = y
+def IxRel.union {X Y : I → Type _} (R S : IxRel X Y) : IxRel X Y :=
+  fun _ x y => R _ x y ∨ S _ x y
+def IxRel.upToEq {X : I → Type _} (R : IxRel X X) : IxRel X X :=
+  IxRel.union IxRel.diag R
+def IxRel.span (Seed : I → Type _) { X Y : I → Type _}
+    (left : (i : I) → Seed i → X i) (right : (i : I) → Seed i → Y i): IxRel X Y :=
+  fun i x y => ∃ s, x = left i s ∧ y = right i s
+
 inductive LiftR {X Y} (F : I ⟹ₚ O) (R : IxRel X Y) : IxRel (F X) (F Y) where
 | mk (o : O) (p : F.Tag o)
     (xs : ∀a, X (F.Elem o p a))
@@ -284,6 +304,9 @@ theorem Bisim.coind { R : IxRel (M F) (M F) }
 theorem observe_corec {X i} {f : (i : I) → X i → F X i} {x : X i}:
     observe (corec f x) = map (fun _ y => corec f y) i (f i x) := by
   rfl
+
+theorem eq_of_observe_eq {i} {x y : M F i} (h : x.observe = y.observe) : x = y :=
+  IxPoly.M.observe.injective h
 
 end M
 
