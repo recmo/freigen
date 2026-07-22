@@ -44,14 +44,13 @@ abbrev Endo (I : Type u) := I ⟹ₚ I
 Initial algebra, i.e. the least fixed point of an endofunctor F : I ⟹ₚ I.
 -/
 inductive W (F : Endo I) : I → Type _ where
-| _mk : (i : I) → (p : F.Tag i) → ((a : F.Field i p) → W F (F.Elem i p a)) → W F i
+| mk : (i : I) → (p : F.Tag i) → ((a : F.Field i p) → W F (F.Elem i p a)) → W F i
 
-def W.unfold {F : Endo I} {i : I}: (W F i) → F (W F) i
-| W._mk i p f => ⟨p, f⟩
+def W.observe {F : Endo I} {i : I}: (W F i) → F (W F) i
+| W.mk i p f => ⟨p, f⟩
 
-@[match_pattern]
-def W.mk {F : Endo I} {i : I}: F (W F) i → W F i
-| o => W._mk i o.1 o.2
+def W.roll {F : Endo I} {i : I}: F (W F) i → W F i
+| o => W.mk i o.1 o.2
 
 namespace M
 

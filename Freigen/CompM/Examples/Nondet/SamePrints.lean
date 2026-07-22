@@ -1,6 +1,7 @@
 import Freigen.CompM.Basic
 import Freigen.CompM.Examples.Nondet.Defs
 import Freigen.ITree.Basic
+import Freigen.Eff
 
 namespace Freigen.CompM.Examples.Nondet.SamePrints
 
@@ -153,14 +154,14 @@ protected theorem ret {α β : Type} {x : α} {y : β} {R : α → β → Prop} 
 
 /-! ### Inverting nondeterministic choice -/
 
-private def isRand {α} : ITree.NodeTag Nondet.Spec α → Bool
+private def isRand {α} : Eff.NodeTag Nondet.Spec α → Bool
   | .op .rand _ => true
   | _ => false
 
 private def isRandHead {α} (t : Nondet α) : Bool :=
   isRand (ITree.observe (t.run pure)).1
 
-private def printValue {α} : ITree.NodeTag Nondet.Spec α → Option ℤ
+private def printValue {α} : Eff.NodeTag Nondet.Spec α → Option ℤ
   | .op .print z => some z
   | _ => none
 
@@ -171,55 +172,55 @@ private def printHead {α} (t : Nondet α) : Option ℤ :=
     isRandHead (Nondet.rand >>= b) = true := by
   change isRand (ITree.observe ((Nondet.rand >>= b).run pure)).1 = true
   rw [show (Nondet.rand >>= b).run pure = Nondet.rand.run (fun z => (b z).run pure) by rfl]
-  simp [Nondet.rand, CompM.op, ITree.Step.op, isRand]
+  simp [Nondet.rand, CompM.op, Eff.Step.op, isRand]
 
 @[simp] private theorem isRandHead_tick {α} (k : Unit → Nondet α) :
     isRandHead (CompM.tick >>= k) = false := by
   change isRand (ITree.observe ((CompM.tick >>= k).run pure)).1 = false
   rw [show (CompM.tick >>= k).run pure = CompM.tick.run (fun z => (k z).run pure) by rfl]
-  simp [CompM.tick, ITree.Step.tau, isRand]
+  simp [CompM.tick, Eff.Step.tau, isRand]
 
 @[simp] private theorem isRandHead_print {α} (z : ℤ) (k : Nondet α) :
     isRandHead (Nondet.print z *> k) = false := by
   change isRand (ITree.observe ((Nondet.print z *> k).run pure)).1 = false
   rw [show (Nondet.print z *> k).run pure = (Nondet.print z).run (fun _ => k.run pure) by rfl]
-  simp [Nondet.print, CompM.op, ITree.Step.op, isRand]
+  simp [Nondet.print, CompM.op, Eff.Step.op, isRand]
 
 @[simp] private theorem isRandHead_ret {α} (x : α) :
     isRandHead (pure x : Nondet α) = false := by
   change isRand (ITree.observe (ITree.ret x)).1 = false
-  simp [ITree.Step.ret, isRand]
+  simp [Eff.Step.ret, isRand]
 
 @[simp] private theorem isRandHead_fail {α} :
     isRandHead (CompM.fail : Nondet α) = false := by
-  simp [isRandHead, CompM.fail, ITree.Step.fail, isRand]
+  simp [isRandHead, CompM.fail, Eff.Step.fail, isRand]
 
 @[simp] private theorem printHead_rand {α} (b : ℤ → Nondet α) :
     printHead (Nondet.rand >>= b) = none := by
   change printValue (ITree.observe ((Nondet.rand >>= b).run pure)).1 = none
   rw [show (Nondet.rand >>= b).run pure = Nondet.rand.run (fun z => (b z).run pure) by rfl]
-  simp [Nondet.rand, CompM.op, ITree.Step.op, printValue]
+  simp [Nondet.rand, CompM.op, Eff.Step.op, printValue]
 
 @[simp] private theorem printHead_tick {α} (k : Unit → Nondet α) :
     printHead (CompM.tick >>= k) = none := by
   change printValue (ITree.observe ((CompM.tick >>= k).run pure)).1 = none
   rw [show (CompM.tick >>= k).run pure = CompM.tick.run (fun z => (k z).run pure) by rfl]
-  simp [CompM.tick, ITree.Step.tau, printValue]
+  simp [CompM.tick, Eff.Step.tau, printValue]
 
 @[simp] private theorem printHead_print {α} (z : ℤ) (k : Nondet α) :
     printHead (Nondet.print z *> k) = some z := by
   change printValue (ITree.observe ((Nondet.print z *> k).run pure)).1 = some z
   rw [show (Nondet.print z *> k).run pure = (Nondet.print z).run (fun _ => k.run pure) by rfl]
-  simp [Nondet.print, CompM.op, ITree.Step.op, printValue]
+  simp [Nondet.print, CompM.op, Eff.Step.op, printValue]
 
 @[simp] private theorem printHead_ret {α} (x : α) :
     printHead (pure x : Nondet α) = none := by
   change printValue (ITree.observe (ITree.ret x)).1 = none
-  simp [ITree.Step.ret, printValue]
+  simp [Eff.Step.ret, printValue]
 
 @[simp] private theorem printHead_fail {α} :
     printHead (CompM.fail : Nondet α) = none := by
-  simp [printHead, CompM.fail, ITree.Step.fail, printValue]
+  simp [printHead, CompM.fail, Eff.Step.fail, printValue]
 
 private theorem Silent.printHead_eq_none {α γ} {t : Nondet α} {k : γ → Nondet α}
     (h : Silent t γ k) : printHead t = none := by
@@ -259,7 +260,7 @@ private theorem rand_bind_injective {α} {b k : ℤ → Nondet α}
   simp at ho
   injection ho with _ hk
   funext z
-  apply (CompM.ExactCodensity.equiv α).injective
+  apply (ExactCodensity.equiv α).injective
   change (b z).run pure = (k z).run pure
   exact congrFun hk (Sum.inl z)
 

@@ -1,5 +1,6 @@
 import Freigen.CompM.Basic
 import Freigen.ITree.Basic
+import Freigen.Eff
 
 namespace Freigen.CompM.Examples.Nondet
 
@@ -7,7 +8,7 @@ inductive Eff : Type
 | rand
 | print
 
-def Spec : ITree.EffSpec where
+def Spec : Eff.Spec where
   tag := Eff
   input
     | .rand => Unit
@@ -30,7 +31,7 @@ def print (z : ℤ) : Nondet Unit := CompM.op (E := Spec) Eff.print z nofun
 
 def approxWith {α} (entropy : ℕ → ℤ) (t : Nondet α) (n: Nat): List ℤ :=
   go (entropy, 0) n ((t.run pure).approx n) where
-  go : (ℕ → ℤ) × ℕ → (n : Nat) → IxPoly.M.Approx (ITree.Step Spec) n α → List ℤ := fun entropy n approx => match n, approx with
+  go : (ℕ → ℤ) × ℕ → (n : Nat) → IxPoly.M.Approx (Eff.Step Spec) n α → List ℤ := fun entropy n approx => match n, approx with
    | 0, IxPoly.M.Approx.zero _ => []
    | n+1, IxPoly.M.Approx._succ _ _ p k => match p with
      | .ret _ => []

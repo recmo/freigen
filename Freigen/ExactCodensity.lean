@@ -1,6 +1,6 @@
 import Mathlib.Logic.Equiv.Defs
 
-namespace Freigen.CompM
+namespace Freigen
 
 structure ExactCodensity (M : Type u → Type v) [Monad M] (α : Type _) where
   run : ∀ {β : Type u}, (α → M β) → M β
@@ -36,4 +36,4 @@ def ExactCodensity.bind_def {M} [Monad M] [LawfulMonad M] {α β : Type _} (x : 
       simp only [ExactCodensity.exact]⟩ := by
   rfl
 
-end Freigen.CompM
+end Freigen
