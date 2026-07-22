@@ -63,14 +63,14 @@ protected theorem roll {α β} {x : Nondet α} {y : Nondet β} {RR : α → β �
   unfold SamePrints at h ⊢
   simpa only [hfix] using h
 
-protected theorem coind {α β} (a b) {RR : α → β → Prop} (R : Nondet α → Nondet β → Prop)
+private theorem coind_raw {α β} (a b) {RR : α → β → Prop} (R : Nondet α → Nondet β → Prop)
     (h_stable : ∀x y, R x y → Step RR R x y)
     (h : R a b) : SamePrints RR a b := OrderHom.le_gfp (SamePrintsA RR) h_stable a b h
 
 protected theorem coind_up_to_fix {α β} (a b) {RR : α → β → Prop} (R : Nondet α → Nondet β → Prop)
     (h_stable : ∀x y, R x y → Step RR (fun x y => SamePrints RR x y ∨ R x y) x y)
     (h : R a b) : SamePrints RR a b := by
-  apply SamePrints.coind (RR := RR) (R := fun x y => SamePrints RR x y ∨ R x y)
+  apply coind_raw (RR := RR) (R := fun x y => SamePrints RR x y ∨ R x y)
   · intro x y hxy
     cases hxy
     · rename_i h
@@ -151,6 +151,222 @@ protected theorem ret {α β : Type} {x : α} {y : β} {R : α → β → Prop} 
   apply SamePrints.roll
   apply Step.ret h
 
+/-! ### Inverting nondeterministic choice -/
+
+private def isRand {α} : ITree.NodeTag Nondet.Spec α → Bool
+  | .op .rand _ => true
+  | _ => false
+
+private def isRandHead {α} (t : Nondet α) : Bool :=
+  isRand (ITree.observe (t.run pure)).1
+
+private def printValue {α} : ITree.NodeTag Nondet.Spec α → Option ℤ
+  | .op .print z => some z
+  | _ => none
+
+private def printHead {α} (t : Nondet α) : Option ℤ :=
+  printValue (ITree.observe (t.run pure)).1
+
+@[simp] private theorem isRandHead_rand {α} (b : ℤ → Nondet α) :
+    isRandHead (Nondet.rand >>= b) = true := by
+  change isRand (ITree.observe ((Nondet.rand >>= b).run pure)).1 = true
+  rw [show (Nondet.rand >>= b).run pure = Nondet.rand.run (fun z => (b z).run pure) by rfl]
+  simp [Nondet.rand, CompM.op, ITree.Step.op, isRand]
+
+@[simp] private theorem isRandHead_tick {α} (k : Unit → Nondet α) :
+    isRandHead (CompM.tick >>= k) = false := by
+  change isRand (ITree.observe ((CompM.tick >>= k).run pure)).1 = false
+  rw [show (CompM.tick >>= k).run pure = CompM.tick.run (fun z => (k z).run pure) by rfl]
+  simp [CompM.tick, ITree.Step.tau, isRand]
+
+@[simp] private theorem isRandHead_print {α} (z : ℤ) (k : Nondet α) :
+    isRandHead (Nondet.print z *> k) = false := by
+  change isRand (ITree.observe ((Nondet.print z *> k).run pure)).1 = false
+  rw [show (Nondet.print z *> k).run pure = (Nondet.print z).run (fun _ => k.run pure) by rfl]
+  simp [Nondet.print, CompM.op, ITree.Step.op, isRand]
+
+@[simp] private theorem isRandHead_ret {α} (x : α) :
+    isRandHead (pure x : Nondet α) = false := by
+  change isRand (ITree.observe (ITree.ret x)).1 = false
+  simp [ITree.Step.ret, isRand]
+
+@[simp] private theorem isRandHead_fail {α} :
+    isRandHead (CompM.fail : Nondet α) = false := by
+  simp [isRandHead, CompM.fail, ITree.Step.fail, isRand]
+
+@[simp] private theorem printHead_rand {α} (b : ℤ → Nondet α) :
+    printHead (Nondet.rand >>= b) = none := by
+  change printValue (ITree.observe ((Nondet.rand >>= b).run pure)).1 = none
+  rw [show (Nondet.rand >>= b).run pure = Nondet.rand.run (fun z => (b z).run pure) by rfl]
+  simp [Nondet.rand, CompM.op, ITree.Step.op, printValue]
+
+@[simp] private theorem printHead_tick {α} (k : Unit → Nondet α) :
+    printHead (CompM.tick >>= k) = none := by
+  change printValue (ITree.observe ((CompM.tick >>= k).run pure)).1 = none
+  rw [show (CompM.tick >>= k).run pure = CompM.tick.run (fun z => (k z).run pure) by rfl]
+  simp [CompM.tick, ITree.Step.tau, printValue]
+
+@[simp] private theorem printHead_print {α} (z : ℤ) (k : Nondet α) :
+    printHead (Nondet.print z *> k) = some z := by
+  change printValue (ITree.observe ((Nondet.print z *> k).run pure)).1 = some z
+  rw [show (Nondet.print z *> k).run pure = (Nondet.print z).run (fun _ => k.run pure) by rfl]
+  simp [Nondet.print, CompM.op, ITree.Step.op, printValue]
+
+@[simp] private theorem printHead_ret {α} (x : α) :
+    printHead (pure x : Nondet α) = none := by
+  change printValue (ITree.observe (ITree.ret x)).1 = none
+  simp [ITree.Step.ret, printValue]
+
+@[simp] private theorem printHead_fail {α} :
+    printHead (CompM.fail : Nondet α) = none := by
+  simp [printHead, CompM.fail, ITree.Step.fail, printValue]
+
+private theorem Silent.printHead_eq_none {α γ} {t : Nondet α} {k : γ → Nondet α}
+    (h : Silent t γ k) : printHead t = none := by
+  cases h <;> simp
+
+private theorem Step.print_head_eq {α β} {RR : α → β → Prop}
+    {R : Nondet α → Nondet β → Prop} {x : Nondet α} {y : Nondet β}
+    {z₁ z₂ : ℤ} (h : Step RR R x y)
+    (hx : printHead x = some z₁) (hy : printHead y = some z₂) : z₁ = z₂ := by
+  cases h with
+  | silent hs₁ hs₂ h =>
+    rw [hs₁.printHead_eq_none] at hx
+    contradiction
+  | print =>
+    simp only [printHead_print, Option.some.injEq] at hx hy
+    exact hx.symm.trans hy
+  | ret =>
+    simp only [printHead_ret] at hx
+    contradiction
+  | fail =>
+    simp only [printHead_fail] at hx
+    contradiction
+  | silentL hs h =>
+    rw [hs.printHead_eq_none] at hx
+    contradiction
+  | silentR hs h =>
+    rw [hs.printHead_eq_none] at hy
+    contradiction
+
+private theorem rand_bind_injective {α} {b k : ℤ → Nondet α}
+    (h : (Nondet.rand >>= b) = (Nondet.rand >>= k)) : b = k := by
+  have hrun := congrArg (fun t : Nondet α => t.run pure) h
+  rw [show (Nondet.rand >>= b).run pure = Nondet.rand.run (fun z => (b z).run pure) by rfl,
+      show (Nondet.rand >>= k).run pure = Nondet.rand.run (fun z => (k z).run pure) by rfl] at hrun
+  simp only [Nondet.rand, CompM.op] at hrun
+  have ho := congrArg ITree.observe hrun
+  simp at ho
+  injection ho with _ hk
+  funext z
+  apply (CompM.ExactCodensity.equiv α).injective
+  change (b z).run pure = (k z).run pure
+  exact congrFun hk (Sum.inl z)
+
+private theorem rand_ne {α} {b : ℤ → Nondet α} {t : Nondet α}
+    (ht : isRandHead t = false) (h : Nondet.rand >>= b = t) : False := by
+  have hh := congrArg isRandHead h
+  simp only [isRandHead_rand, ht] at hh
+  exact Bool.noConfusion hh
+
+private theorem Step.rand_right_inv {α β} {RR : α → β → Prop}
+    {t : Nondet α} {b : ℤ → Nondet β}
+    (h : Step RR (SamePrints RR) t (Nondet.rand >>= b)) :
+    ∀ y, SamePrints RR t (b y) := by
+  generalize heq : (Nondet.rand >>= b) = t₂ at h
+  induction h generalizing b with
+  | silent hs₁ hs₂ hcont =>
+    cases hs₂ with
+    | tick k => exact False.elim (rand_ne (isRandHead_tick k) heq)
+    | rand k =>
+      have hk := rand_bind_injective heq
+      subst k
+      intro y
+      apply SamePrints.roll
+      apply Step.silentL hs₁
+      intro x
+      exact (hcont x y).out
+  | @print z k₁ k₂ h => exact False.elim (rand_ne (isRandHead_print z k₂) heq)
+  | @ret x y h => exact False.elim (rand_ne (isRandHead_ret y) heq)
+  | fail => exact False.elim (rand_ne isRandHead_fail heq)
+  | silentL hs hnext ih =>
+    intro y
+    apply SamePrints.roll
+    apply Step.silentL hs
+    intro x
+    exact (ih x heq y).out
+  | silentR hs hnext ih =>
+    cases hs with
+    | tick k => exact False.elim (rand_ne (isRandHead_tick k) heq)
+    | rand k =>
+      have hk := rand_bind_injective heq
+      subst k
+      intro y
+      exact SamePrints.roll (hnext y)
+
+private theorem Step.rand_left_inv {α β} {RR : α → β → Prop}
+    {b : ℤ → Nondet α} {t : Nondet β}
+    (h : Step RR (SamePrints RR) (Nondet.rand >>= b) t) :
+    ∀ x, SamePrints RR (b x) t := by
+  generalize heq : (Nondet.rand >>= b) = t₁ at h
+  induction h generalizing b with
+  | silent hs₁ hs₂ hcont =>
+    cases hs₁ with
+    | tick k => exact False.elim (rand_ne (isRandHead_tick k) heq)
+    | rand k =>
+      have hk := rand_bind_injective heq
+      subst k
+      intro x
+      apply SamePrints.roll
+      apply Step.silentR hs₂
+      intro y
+      exact (hcont x y).out
+  | @print z k₁ k₂ h => exact False.elim (rand_ne (isRandHead_print z k₁) heq)
+  | @ret x y h => exact False.elim (rand_ne (isRandHead_ret x) heq)
+  | fail => exact False.elim (rand_ne isRandHead_fail heq)
+  | silentL hs hnext ih =>
+    cases hs with
+    | tick k => exact False.elim (rand_ne (isRandHead_tick k) heq)
+    | rand k =>
+      have hk := rand_bind_injective heq
+      subst k
+      intro x
+      exact SamePrints.roll (hnext x)
+  | silentR hs hnext ih =>
+    intro x
+    apply SamePrints.roll
+    apply Step.silentR hs
+    intro y
+    exact (ih y heq x).out
+
+protected theorem rand_inv {α β} {RR : α → β → Prop}
+    {b₁ : ℤ → Nondet α} {b₂ : ℤ → Nondet β}
+    (h : SamePrints RR (Nondet.rand >>= b₁) (Nondet.rand >>= b₂)) :
+    ∀ x y, SamePrints RR (b₁ x) (b₂ y) := by
+  intro x y
+  have hr := Step.rand_right_inv h.out y
+  exact Step.rand_left_inv hr.out x
+
+protected theorem not_rand {α β} {RR : α → β → Prop}
+    {b₁ : ℤ → Nondet α} {b₂ : ℤ → Nondet β}
+    (x y : ℤ) (h : ¬ SamePrints RR (b₁ x) (b₂ y)) :
+    ¬ SamePrints RR (Nondet.rand >>= b₁) (Nondet.rand >>= b₂) := by
+  intro hr
+  exact h (hr.rand_inv x y)
+
+protected theorem print_head_eq {α β} {RR : α → β → Prop}
+    {z₁ z₂ : ℤ} {k₁ : Nondet α} {k₂ : Nondet β}
+    (h : SamePrints RR (Nondet.print z₁ *> k₁) (Nondet.print z₂ *> k₂)) :
+    z₁ = z₂ :=
+  Step.print_head_eq h.out rfl rfl
+
+protected theorem not_print {α β} {RR : α → β → Prop}
+    {z₁ z₂ : ℤ} {k₁ : Nondet α} {k₂ : Nondet β}
+    (h : z₁ ≠ z₂) :
+    ¬ SamePrints RR (Nondet.print z₁ *> k₁) (Nondet.print z₂ *> k₂) := by
+  intro hs
+  exact h hs.print_head_eq
+
 def ForInStep.Rel {α β} (RR : α → β → Prop) (I : α → β → Prop):
     ForInStep α → ForInStep β → Prop
   | .done x, .done y => RR x y
@@ -172,11 +388,228 @@ inductive Steps {α β} (RR : α → β → Prop) (R : Nondet α → Nondet β �
 | step {x y} : Step RR (Steps RR R) x y → Steps RR R x y
 | recur {x y} : R x y → Steps RR R x y
 
+/-! ### Named silent transitions -/
+
+theorem Step.tick_tick {α β} {RR : α → β → Prop} {R : Nondet α → Nondet β → Prop}
+    {k₁ : Unit → Nondet α} {k₂ : Unit → Nondet β}
+    (h : R (k₁ ()) (k₂ ())) :
+    Step RR R (CompM.tick >>= k₁) (CompM.tick >>= k₂) :=
+  Step.silent (Silent.tick k₁) (Silent.tick k₂) fun _ _ => h
+
+theorem Step.tick_rand {α β} {RR : α → β → Prop} {R : Nondet α → Nondet β → Prop}
+    {k₁ : Unit → Nondet α} {k₂ : ℤ → Nondet β}
+    (h : ∀ x₂, R (k₁ ()) (k₂ x₂)) :
+    Step RR R (CompM.tick >>= k₁) (Nondet.rand >>= k₂) :=
+  Step.silent (Silent.tick k₁) (Silent.rand k₂) fun _ x₂ => h x₂
+
+theorem Step.rand_tick {α β} {RR : α → β → Prop} {R : Nondet α → Nondet β → Prop}
+    {k₁ : ℤ → Nondet α} {k₂ : Unit → Nondet β}
+    (h : ∀ x₁, R (k₁ x₁) (k₂ ())) :
+    Step RR R (Nondet.rand >>= k₁) (CompM.tick >>= k₂) :=
+  Step.silent (Silent.rand k₁) (Silent.tick k₂) fun x₁ _ => h x₁
+
+theorem Step.rand_rand {α β} {RR : α → β → Prop} {R : Nondet α → Nondet β → Prop}
+    {k₁ : ℤ → Nondet α} {k₂ : ℤ → Nondet β}
+    (h : ∀ x₁ x₂, R (k₁ x₁) (k₂ x₂)) :
+    Step RR R (Nondet.rand >>= k₁) (Nondet.rand >>= k₂) :=
+  Step.silent (Silent.rand k₁) (Silent.rand k₂) h
+
+theorem Step.tick_left {α β} {RR : α → β → Prop} {R : Nondet α → Nondet β → Prop}
+    {k : Unit → Nondet α} {t : Nondet β}
+    (h : Step RR R (k ()) t) :
+    Step RR R (CompM.tick >>= k) t :=
+  Step.silentL (Silent.tick k) fun _ => h
+
+theorem Step.rand_left {α β} {RR : α → β → Prop} {R : Nondet α → Nondet β → Prop}
+    {k : ℤ → Nondet α} {t : Nondet β}
+    (h : ∀ x, Step RR R (k x) t) :
+    Step RR R (Nondet.rand >>= k) t :=
+  Step.silentL (Silent.rand k) h
+
+theorem Step.tick_right {α β} {RR : α → β → Prop} {R : Nondet α → Nondet β → Prop}
+    {t : Nondet α} {k : Unit → Nondet β}
+    (h : Step RR R t (k ())) :
+    Step RR R t (CompM.tick >>= k) :=
+  Step.silentR (Silent.tick k) fun _ => h
+
+theorem Step.rand_right {α β} {RR : α → β → Prop} {R : Nondet α → Nondet β → Prop}
+    {t : Nondet α} {k : ℤ → Nondet β}
+    (h : ∀ x, Step RR R t (k x)) :
+    Step RR R t (Nondet.rand >>= k) :=
+  Step.silentR (Silent.rand k) h
+
+/-! ### Finite-step constructors -/
+
+theorem Steps.silent {α β} {RR : α → β → Prop} {R : Nondet α → Nondet β → Prop}
+    {t₁ : Nondet α} {t₂ : Nondet β} {γ₁ γ₂} {k₁ : γ₁ → Nondet α} {k₂ : γ₂ → Nondet β}
+    (h₁ : Silent t₁ γ₁ k₁) (h₂ : Silent t₂ γ₂ k₂)
+    (h : ∀ x₁ x₂, Steps RR R (k₁ x₁) (k₂ x₂)) :
+    Steps RR R t₁ t₂ :=
+  Steps.step (Step.silent h₁ h₂ h)
+
+theorem Steps.print {α β} {RR : α → β → Prop} {R : Nondet α → Nondet β → Prop}
+    {z : ℤ} {k₁ : Nondet α} {k₂ : Nondet β}
+    (h : Steps RR R k₁ k₂) :
+    Steps RR R (Nondet.print z *> k₁) (Nondet.print z *> k₂) :=
+  Steps.step (Step.print h)
+
+theorem Steps.ret {α β} {RR : α → β → Prop} {R : Nondet α → Nondet β → Prop}
+    {x : α} {y : β} (h : RR x y) :
+    Steps RR R (pure x) (pure y) :=
+  Steps.step (Step.ret h)
+
+theorem Steps.fail {α β} {RR : α → β → Prop} {R : Nondet α → Nondet β → Prop} :
+    Steps RR R (CompM.fail : Nondet α) (CompM.fail : Nondet β) :=
+  Steps.step Step.fail
+
+theorem Steps.silentL {α β} {RR : α → β → Prop} {R : Nondet α → Nondet β → Prop}
+    {t₁ : Nondet α} {t₂ : Nondet β} {γ} {k : γ → Nondet α}
+    (hs : Silent t₁ γ k) (h : ∀ x, Step RR (Steps RR R) (k x) t₂) :
+    Steps RR R t₁ t₂ :=
+  Steps.step (Step.silentL hs h)
+
+theorem Steps.silentR {α β} {RR : α → β → Prop} {R : Nondet α → Nondet β → Prop}
+    {t₁ : Nondet α} {t₂ : Nondet β} {γ} {k : γ → Nondet β}
+    (hs : Silent t₂ γ k) (h : ∀ x, Step RR (Steps RR R) t₁ (k x)) :
+    Steps RR R t₁ t₂ :=
+  Steps.step (Step.silentR hs h)
+
+theorem Steps.tick_tick {α β} {RR : α → β → Prop} {R : Nondet α → Nondet β → Prop}
+    {k₁ : Unit → Nondet α} {k₂ : Unit → Nondet β}
+    (h : Steps RR R (k₁ ()) (k₂ ())) :
+    Steps RR R (CompM.tick >>= k₁) (CompM.tick >>= k₂) :=
+  Steps.step (Step.tick_tick h)
+
+theorem Steps.tick_rand {α β} {RR : α → β → Prop} {R : Nondet α → Nondet β → Prop}
+    {k₁ : Unit → Nondet α} {k₂ : ℤ → Nondet β}
+    (h : ∀ x₂, Steps RR R (k₁ ()) (k₂ x₂)) :
+    Steps RR R (CompM.tick >>= k₁) (Nondet.rand >>= k₂) :=
+  Steps.step (Step.tick_rand h)
+
+theorem Steps.rand_tick {α β} {RR : α → β → Prop} {R : Nondet α → Nondet β → Prop}
+    {k₁ : ℤ → Nondet α} {k₂ : Unit → Nondet β}
+    (h : ∀ x₁, Steps RR R (k₁ x₁) (k₂ ())) :
+    Steps RR R (Nondet.rand >>= k₁) (CompM.tick >>= k₂) :=
+  Steps.step (Step.rand_tick h)
+
+theorem Steps.rand_rand {α β} {RR : α → β → Prop} {R : Nondet α → Nondet β → Prop}
+    {k₁ : ℤ → Nondet α} {k₂ : ℤ → Nondet β}
+    (h : ∀ x₁ x₂, Steps RR R (k₁ x₁) (k₂ x₂)) :
+    Steps RR R (Nondet.rand >>= k₁) (Nondet.rand >>= k₂) :=
+  Steps.step (Step.rand_rand h)
+
+theorem Steps.tick_left {α β} {RR : α → β → Prop} {R : Nondet α → Nondet β → Prop}
+    {k : Unit → Nondet α} {t : Nondet β}
+    (h : Step RR (Steps RR R) (k ()) t) :
+    Steps RR R (CompM.tick >>= k) t :=
+  Steps.step (Step.tick_left h)
+
+theorem Steps.rand_left {α β} {RR : α → β → Prop} {R : Nondet α → Nondet β → Prop}
+    {k : ℤ → Nondet α} {t : Nondet β}
+    (h : ∀ x, Step RR (Steps RR R) (k x) t) :
+    Steps RR R (Nondet.rand >>= k) t :=
+  Steps.step (Step.rand_left h)
+
+theorem Steps.tick_right {α β} {RR : α → β → Prop} {R : Nondet α → Nondet β → Prop}
+    {t : Nondet α} {k : Unit → Nondet β}
+    (h : Step RR (Steps RR R) t (k ())) :
+    Steps RR R t (CompM.tick >>= k) :=
+  Steps.step (Step.tick_right h)
+
+theorem Steps.rand_right {α β} {RR : α → β → Prop} {R : Nondet α → Nondet β → Prop}
+    {t : Nondet α} {k : ℤ → Nondet β}
+    (h : ∀ x, Step RR (Steps RR R) t (k x)) :
+    Steps RR R t (Nondet.rand >>= k) :=
+  Steps.step (Step.rand_right h)
+
+/-! ### Unfolding loops under relations -/
+
+theorem Step.loop_left {α β} {RR : α → β → Prop} {R : Nondet α → Nondet β → Prop}
+    {body : α → Nondet (ForInStep α)} {s : α} {t : Nondet β}
+    (h : Step RR R
+      (body s >>= fun
+        | .done v => pure v
+        | .yield v => CompM.tick *> CompM.loop body v)
+      t) :
+    Step RR R (CompM.loop body s) t := by
+  exact Eq.mpr (congrArg (fun x => Step RR R x t) (CompM.loop_def body s)) h
+
+theorem Step.loop_right {α β} {RR : α → β → Prop} {R : Nondet α → Nondet β → Prop}
+    {t : Nondet α} {body : β → Nondet (ForInStep β)} {s : β}
+    (h : Step RR R t
+      (body s >>= fun
+        | .done v => pure v
+        | .yield v => CompM.tick *> CompM.loop body v)) :
+    Step RR R t (CompM.loop body s) := by
+  exact Eq.mpr (congrArg (Step RR R t) (CompM.loop_def body s)) h
+
+theorem Step.loop {α β} {RR : α → β → Prop} {R : Nondet α → Nondet β → Prop}
+    {body₁ : α → Nondet (ForInStep α)} {body₂ : β → Nondet (ForInStep β)} {s₁ : α} {s₂ : β}
+    (h : Step RR R
+      (body₁ s₁ >>= fun
+        | .done v => pure v
+        | .yield v => CompM.tick *> CompM.loop body₁ v)
+      (body₂ s₂ >>= fun
+        | .done v => pure v
+        | .yield v => CompM.tick *> CompM.loop body₂ v)) :
+    Step RR R (CompM.loop body₁ s₁) (CompM.loop body₂ s₂) := by
+  exact Eq.mpr
+    (congrArg₂ (Step RR R) (CompM.loop_def body₁ s₁) (CompM.loop_def body₂ s₂)) h
+
+theorem Steps.loop_left {α β} {RR : α → β → Prop} {R : Nondet α → Nondet β → Prop}
+    {body : α → Nondet (ForInStep α)} {s : α} {t : Nondet β}
+    (h : Steps RR R
+      (body s >>= fun
+        | .done v => pure v
+        | .yield v => CompM.tick *> CompM.loop body v)
+      t) :
+    Steps RR R (CompM.loop body s) t := by
+  exact Eq.mpr (congrArg (fun x => Steps RR R x t) (CompM.loop_def body s)) h
+
+theorem Steps.loop_right {α β} {RR : α → β → Prop} {R : Nondet α → Nondet β → Prop}
+    {t : Nondet α} {body : β → Nondet (ForInStep β)} {s : β}
+    (h : Steps RR R t
+      (body s >>= fun
+        | .done v => pure v
+        | .yield v => CompM.tick *> CompM.loop body v)) :
+    Steps RR R t (CompM.loop body s) := by
+  exact Eq.mpr (congrArg (Steps RR R t) (CompM.loop_def body s)) h
+
+theorem Steps.loop {α β} {RR : α → β → Prop} {R : Nondet α → Nondet β → Prop}
+    {body₁ : α → Nondet (ForInStep α)} {body₂ : β → Nondet (ForInStep β)} {s₁ : α} {s₂ : β}
+    (h : Steps RR R
+      (body₁ s₁ >>= fun
+        | .done v => pure v
+        | .yield v => CompM.tick *> CompM.loop body₁ v)
+      (body₂ s₂ >>= fun
+        | .done v => pure v
+        | .yield v => CompM.tick *> CompM.loop body₂ v)) :
+    Steps RR R (CompM.loop body₁ s₁) (CompM.loop body₂ s₂) := by
+  exact Eq.mpr
+    (congrArg₂ (Steps RR R) (CompM.loop_def body₁ s₁) (CompM.loop_def body₂ s₂)) h
+
 theorem Step.strengthen {α β} {RR : α → β → Prop} {R R' : Nondet α → Nondet β → Prop}
     (h : R ≤ R') {x y} (hstep : Step RR R x y):
     Step RR R' x y := by
   apply (SamePrintsA RR).monotone h
   exact hstep
+
+protected theorem coind {α β} (a b) {RR : α → β → Prop}
+    (R : Nondet α → Nondet β → Prop)
+    (h_stable : ∀ x y, R x y → Step RR (Steps RR R) x y)
+    (h : R a b) : SamePrints RR a b := by
+  apply coind_raw (R := Steps RR R)
+  · intro x y hxy
+    cases hxy with
+    | done h =>
+      apply Step.strengthen (hstep := h.out)
+      intro x y hxy
+      exact Steps.done hxy
+    | step h =>
+      exact h
+    | recur h =>
+      exact h_stable x y h
+  · exact Steps.recur h
 
 protected theorem loop_coind {α₁ α₂}
     {b₁ : α₁ → Nondet (ForInStep α₁)} {b₂ : α₂ → Nondet (ForInStep α₂)}
@@ -187,19 +620,9 @@ protected theorem loop_coind {α₁ α₂}
       Step RR (Steps RR (LoopPair b₁ b₂ I))
       (loop b₁ s₁) (loop b₂ s₂)):
     SamePrints RR (loop b₁ i₁) (loop b₂ i₂) := by
-  apply SamePrints.coind (R := Steps RR (LoopPair b₁ b₂ I))
-  · rintro x y hxy
-    cases hxy with
-    | done h =>
-      have := h.out
-      apply Step.strengthen (hstep := this)
-      intro x y hxy
-      apply Steps.done hxy
-    | step h => assumption
-    | recur h =>
-      rcases h with ⟨s₁, s₂, hI, rfl, rfl⟩
-      apply hstep _ _ hI
-  · apply Steps.recur
-    exists i₁, i₂
+  apply SamePrints.coind (R := LoopPair b₁ b₂ I)
+  · rintro _ _ ⟨s₁, s₂, hI, rfl, rfl⟩
+    exact hstep s₁ s₂ hI
+  · exact ⟨i₁, i₂, hinit, rfl, rfl⟩
 
 end Freigen.CompM.Examples.Nondet.SamePrints
