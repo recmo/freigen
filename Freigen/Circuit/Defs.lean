@@ -1,5 +1,6 @@
 import Freigen.CompM.Basic
 import Freigen.Eff
+import Freigen.Free
 
 namespace Freigen.Circuit
 
@@ -36,14 +37,14 @@ instance : Freigen.Eff.Spec Eff where
 
 end Circuit
 
-def Circuit : Type → Type _ := CompM (Eff.Tau ⊕ Circuit.Eff)
+def Circuit : Type → Type _ := Free Circuit.Eff
 
 namespace Circuit
 
 def assert (b : Bool) : Circuit Unit :=
-  CompM.op (E := Eff.Tau ⊕ Circuit.Eff) (.inr Eff.assert) b nofun
+  Free.op (E := Circuit.Eff) Eff.assert b nofun
 
 def hint {α : Type} : Circuit α → Circuit α := fun hint =>
-  CompM.op (E := Eff.Tau ⊕ Circuit.Eff) (.inr (Eff.hint α)) () fun _ _ => hint
+  Free.op (E := Circuit.Eff) (Eff.hint α) () fun _ _ => hint
 
 end Freigen.Circuit

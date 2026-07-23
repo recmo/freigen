@@ -41,7 +41,7 @@ theorem loop_def [Eff.Has Eff.Tau E]
     body s >>= fun
       | .done v  => pure v
       | .yield v => CompM.tick *> CompM.loop body v := by
-  apply (ExactCodensity.equiv β).injective
+  apply ExactCodensity.equiv.injective
   change (CompM.loop body s).run pure =
     ((body s >>= fun
       | .done v => pure v

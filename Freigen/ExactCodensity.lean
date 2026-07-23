@@ -22,7 +22,7 @@ instance {M} [Monad M] [LawfulMonad M] : LawfulMonad (ExactCodensity M) := Lawfu
   (by intros; rfl)
   (by intros; rfl)
 
-protected def ExactCodensity.equiv {M} [Monad M] [LawfulMonad M] (α : Type u) : ExactCodensity M α ≃ M α where
+protected def ExactCodensity.equiv {M} [Monad M] [LawfulMonad M] {α : Type u} : ExactCodensity M α ≃ M α where
   toFun x := x.run pure
   invFun x := ⟨fun f => x >>= f, by simp⟩
   left_inv x := by simp only [ExactCodensity.exact]

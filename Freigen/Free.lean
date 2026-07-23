@@ -6,7 +6,7 @@ namespace Freigen
 
 variable {E : Type u} [eS: Eff.Spec E] {α β : Type}
 
-def wBind {α β} (a : IxPoly.W (Eff.Step E) α) (f : α → IxPoly.W (Eff.Step E) β): IxPoly.W (Eff.Step E) β := match a with
+private def wBind {α β} (a : IxPoly.W (Eff.Step E) α) (f : α → IxPoly.W (Eff.Step E) β): IxPoly.W (Eff.Step E) β := match a with
   | IxPoly.W.mk i p g => match p with
     | .ret a => f a
     | .op e inp => IxPoly.W.mk (F := Eff.Step E) _ (Eff.NodeTag.op e inp) (fun
@@ -53,6 +53,18 @@ instance : LawfulMonad (IxPoly.W (Eff.Step E)) := LawfulMonad.mk' _
 
 def Free (E : Type u) [Eff.Spec E] (α : Type) : Type _ :=
     ExactCodensity (IxPoly.W (Eff.Step E)) α
+
+private def wOp (e : E) (inp : eS.input e)
+    (blocks : (t : eS.blockTag e) → eS.blockInputs e t → IxPoly.W (Eff.Step E) (eS.blockOutputs e t)):
+    IxPoly.W (Eff.Step E) (eS.output e) :=
+  IxPoly.W.mk (F := Eff.Step E) _ (Eff.NodeTag.op e inp) fun
+    | .inl a => pure a
+    | .inr ⟨b, i⟩ => blocks b i
+
+def Free.op (e : E) (inp : eS.input e)
+    (blocks : (t : eS.blockTag e) → eS.blockInputs e t → Free E (eS.blockOutputs e t)):
+    Free E (eS.output e) :=
+  ExactCodensity.equiv.symm $ wOp e inp (fun t i => ExactCodensity.equiv (blocks t i))
 
 instance : Monad (Free E) :=
   inferInstanceAs (Monad (ExactCodensity (IxPoly.W (Eff.Step E))))
