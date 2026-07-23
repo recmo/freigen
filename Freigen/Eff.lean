@@ -29,6 +29,14 @@ def NodeTag.elem {E : Spec} {α : Type _} : (t : NodeTag E α) → (p : t.fields
 | op _ _, Sum.inl _ => α
 | op e _, Sum.inr ⟨o, _⟩ => E.blockOutputs e o
 
+def Empty : Spec where
+  tag := PEmpty
+  input := nofun
+  output := nofun
+  blockTag := nofun
+  blockInputs := nofun
+  blockOutputs := nofun
+
 def Step (E : Spec) : IxPoly.Endo (Type _) where
   Tag := fun α => NodeTag E α
   Field := fun _=> NodeTag.fields

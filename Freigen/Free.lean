@@ -68,7 +68,9 @@ instance {E} : LawfulMonad (IxPoly.W (Eff.Step E)) := LawfulMonad.mk' _
 
 def Free (E : Eff.Spec) (α : Type) : Type _ := ExactCodensity (IxPoly.W (Eff.Step E)) α
 
-instance {E} : Monad (Free E) := inferInstanceAs (Monad (ExactCodensity (IxPoly.W (Eff.Step E))))
-instance {E} : LawfulMonad (Free E) := inferInstanceAs (LawfulMonad (ExactCodensity (IxPoly.W (Eff.Step E))))
+instance {E} : Monad (Free E) :=
+  inferInstanceAs (Monad (ExactCodensity (IxPoly.W (Eff.Step E))))
+instance {E} : LawfulMonad (Free E) :=
+  inferInstanceAs (LawfulMonad (ExactCodensity (IxPoly.W (Eff.Step E))))
 
 end Freigen
