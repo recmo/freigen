@@ -20,7 +20,7 @@ def scaryLoopDet : Nondet Unit := do
     let x ← Nondet.rand
     Nondet.print (x - x)
 
-#eval approxWith Int.ofNat scaryLoop 1000
+#eval approxWith Int.ofNat scaryLoop 100
 example : approxWith Int.ofNat scaryLoop 20 = [0, 1, 4, 9, 16, 25, 36] := by rfl
 example : approxWith Int.ofNat scaryLoopDet 20 = [0, 0, 0, 0, 0, 0, 0] := by rfl
 

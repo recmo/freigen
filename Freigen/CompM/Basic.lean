@@ -4,15 +4,15 @@ import Freigen.Eff
 
 namespace Freigen
 
-def CompM (E : Eff.Spec.{u, 0}) (α : Type) : Type _ :=
+def CompM (E : Type u) [Eff.Spec E] (α : Type) : Type _ :=
   ExactCodensity (ITree E) α
 
-instance {E} : Monad (CompM E) := inferInstanceAs (Monad (ExactCodensity (ITree E)))
-instance {E} : LawfulMonad (CompM E) := inferInstanceAs (LawfulMonad (ExactCodensity (ITree E)))
+variable {E : Type u} [eS: Eff.Spec E] {α β : Type}
+
+instance {E : Type u} [Eff.Spec E] : Monad (CompM E) := inferInstanceAs (Monad (ExactCodensity (ITree E)))
+instance {E : Type u} [Eff.Spec E] : LawfulMonad (CompM E) := inferInstanceAs (LawfulMonad (ExactCodensity (ITree E)))
 
 namespace CompM
-
-variable {E : Eff.Spec.{u, 0}} {α β : Type}
 
 private theorem bind_def {α β : Type _} (x : CompM E α) (f : α → CompM E β) :
     x >>= f = ⟨fun g => x.run fun a => (f a).run g, by
@@ -22,24 +22,19 @@ private theorem bind_def {α β : Type _} (x : CompM E α) (f : α → CompM E �
       simp only [ExactCodensity.exact]⟩ := by
   rfl
 
-def tick : CompM E Unit := ⟨fun f => ITree.tau (f ()), by simp⟩
-def op (e : E.tag) (inp : E.input e)
-    (blocks : (t : E.blockTag e) → E.blockInputs e t → ITree E (E.blockOutputs e t)): CompM E (E.output e) :=
-  ⟨fun f => ITree.op e inp blocks f, by simp⟩
-def fail : CompM E α := ⟨fun _ => ITree.fail, by simp⟩
+def tick [Eff.Has Eff.Tau E] : CompM E Unit := ⟨fun f => ITree.tau (f ()), by simp⟩
+def op (e : E) (inp : eS.input e)
+    (blocks : (t : eS.blockTag e) → eS.blockInputs e t → CompM E (eS.blockOutputs e t)): CompM E (eS.output e) :=
+  ⟨fun f => ITree.op e inp (fun t i => (blocks t i).run pure) f, by simp⟩
 
-@[simp]
-theorem fail_bind (f : α → CompM E β) : fail >>= f = fail := by
-  simp [fail, bind_def]
-
-def loop (body : α → CompM E (ForInStep α)) (init : α): CompM E α := {
+def loop [Eff.Has Eff.Tau E] (body : α → CompM E (ForInStep α)) (init : α): CompM E α := {
   run := fun f => ITree.loop (fun a => (body a).run pure) init f
   exact := by
     intros
     apply ITree.loop_bind
 }
 
-theorem loop_def
+theorem loop_def [Eff.Has Eff.Tau E]
   (body : β → CompM E (ForInStep β))
   (s : β) :
   CompM.loop body s =
@@ -58,7 +53,7 @@ theorem loop_def
   funext x
   cases x <;> rfl
 
-instance : ForIn (CompM E) Lean.Loop Unit where
+instance [Eff.Has Eff.Tau E] : ForIn (CompM E) Lean.Loop Unit where
   forIn _ init body := loop (fun a => body () a) init
 
 end Freigen.CompM

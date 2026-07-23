@@ -21,7 +21,6 @@ inductive Step {α β} (RR : α → β → Prop) (R : Nondet α → Nondet β �
 -- * fails relate if they align
 | print {z k1 k2} : R k1 k2 → Step RR R (Nondet.print z *> k1) (Nondet.print z *> k2)
 | ret {k₁ k₂} : RR k₁ k₂ → Step RR R (pure k₁) (pure k₂)
-| fail : Step RR R CompM.fail CompM.fail
 -- skipping silent steps on one side – recursing through SamePrintsF, to avoid consuming an
 -- infinite number of them (preserve termination)
 | silentL : ∀ {t1 t2 β k}, Silent t1 β k → (∀ i, Step RR R (k i) t2) → Step RR R t1 t2
@@ -35,7 +34,6 @@ def SamePrintsA {α β} (RR : α → β → Prop): (Nondet α → Nondet β → 
     · apply Step.silent <;> solve_by_elim
     · apply Step.print ; solve_by_elim
     · apply Step.ret ; solve_by_elim
-    · apply Step.fail
     · apply Step.silentL <;> solve_by_elim
     · apply Step.silentR <;> solve_by_elim
 
@@ -110,9 +108,6 @@ protected theorem bind {α₁ α₂ β₁ β₂ : Type} {a₁ : Nondet α₁} {a
       apply (SamePrintsA _).monotone (fun _ _ h => Or.inl h)
       apply SamePrints.out
       solve_by_elim
-    | fail =>
-      simp only [CompM.fail_bind]
-      apply Step.fail
     | silentL =>
       apply Step.silentL
       · apply Silent.bind; assumption
@@ -154,15 +149,15 @@ protected theorem ret {α β : Type} {x : α} {y : β} {R : α → β → Prop} 
 
 /-! ### Inverting nondeterministic choice -/
 
-private def isRand {α} : Eff.NodeTag Nondet.Spec α → Bool
-  | .op .rand _ => true
+private def isRand {α} : Eff.NodeTag (Eff.Tau ⊕ Nondet.Eff) α → Bool
+  | .op (.inr .rand) _ => true
   | _ => false
 
 private def isRandHead {α} (t : Nondet α) : Bool :=
   isRand (ITree.observe (t.run pure)).1
 
-private def printValue {α} : Eff.NodeTag Nondet.Spec α → Option ℤ
-  | .op .print z => some z
+private def printValue {α} : Eff.NodeTag (Eff.Tau ⊕ Nondet.Eff) α → Option ℤ
+  | .op (.inr .print) z => some z
   | _ => none
 
 private def printHead {α} (t : Nondet α) : Option ℤ :=
@@ -172,55 +167,47 @@ private def printHead {α} (t : Nondet α) : Option ℤ :=
     isRandHead (Nondet.rand >>= b) = true := by
   change isRand (ITree.observe ((Nondet.rand >>= b).run pure)).1 = true
   rw [show (Nondet.rand >>= b).run pure = Nondet.rand.run (fun z => (b z).run pure) by rfl]
-  simp [Nondet.rand, CompM.op, Eff.Step.op, isRand]
+  rfl
 
 @[simp] private theorem isRandHead_tick {α} (k : Unit → Nondet α) :
     isRandHead (CompM.tick >>= k) = false := by
   change isRand (ITree.observe ((CompM.tick >>= k).run pure)).1 = false
   rw [show (CompM.tick >>= k).run pure = CompM.tick.run (fun z => (k z).run pure) by rfl]
-  simp [CompM.tick, Eff.Step.tau, isRand]
+  rfl
 
 @[simp] private theorem isRandHead_print {α} (z : ℤ) (k : Nondet α) :
     isRandHead (Nondet.print z *> k) = false := by
   change isRand (ITree.observe ((Nondet.print z *> k).run pure)).1 = false
   rw [show (Nondet.print z *> k).run pure = (Nondet.print z).run (fun _ => k.run pure) by rfl]
-  simp [Nondet.print, CompM.op, Eff.Step.op, isRand]
+  rfl
 
 @[simp] private theorem isRandHead_ret {α} (x : α) :
     isRandHead (pure x : Nondet α) = false := by
   change isRand (ITree.observe (ITree.ret x)).1 = false
   simp [Eff.Step.ret, isRand]
 
-@[simp] private theorem isRandHead_fail {α} :
-    isRandHead (CompM.fail : Nondet α) = false := by
-  simp [isRandHead, CompM.fail, Eff.Step.fail, isRand]
-
 @[simp] private theorem printHead_rand {α} (b : ℤ → Nondet α) :
     printHead (Nondet.rand >>= b) = none := by
   change printValue (ITree.observe ((Nondet.rand >>= b).run pure)).1 = none
   rw [show (Nondet.rand >>= b).run pure = Nondet.rand.run (fun z => (b z).run pure) by rfl]
-  simp [Nondet.rand, CompM.op, Eff.Step.op, printValue]
+  rfl
 
 @[simp] private theorem printHead_tick {α} (k : Unit → Nondet α) :
     printHead (CompM.tick >>= k) = none := by
   change printValue (ITree.observe ((CompM.tick >>= k).run pure)).1 = none
   rw [show (CompM.tick >>= k).run pure = CompM.tick.run (fun z => (k z).run pure) by rfl]
-  simp [CompM.tick, Eff.Step.tau, printValue]
+  rfl
 
 @[simp] private theorem printHead_print {α} (z : ℤ) (k : Nondet α) :
     printHead (Nondet.print z *> k) = some z := by
   change printValue (ITree.observe ((Nondet.print z *> k).run pure)).1 = some z
   rw [show (Nondet.print z *> k).run pure = (Nondet.print z).run (fun _ => k.run pure) by rfl]
-  simp [Nondet.print, CompM.op, Eff.Step.op, printValue]
+  rfl
 
 @[simp] private theorem printHead_ret {α} (x : α) :
     printHead (pure x : Nondet α) = none := by
   change printValue (ITree.observe (ITree.ret x)).1 = none
-  simp [Eff.Step.ret, printValue]
-
-@[simp] private theorem printHead_fail {α} :
-    printHead (CompM.fail : Nondet α) = none := by
-  simp [printHead, CompM.fail, Eff.Step.fail, printValue]
+  rfl
 
 private theorem Silent.printHead_eq_none {α γ} {t : Nondet α} {k : γ → Nondet α}
     (h : Silent t γ k) : printHead t = none := by
@@ -239,9 +226,6 @@ private theorem Step.print_head_eq {α β} {RR : α → β → Prop}
     exact hx.symm.trans hy
   | ret =>
     simp only [printHead_ret] at hx
-    contradiction
-  | fail =>
-    simp only [printHead_fail] at hx
     contradiction
   | silentL hs h =>
     rw [hs.printHead_eq_none] at hx
@@ -289,7 +273,6 @@ private theorem Step.rand_right_inv {α β} {RR : α → β → Prop}
       exact (hcont x y).out
   | @print z k₁ k₂ h => exact False.elim (rand_ne (isRandHead_print z k₂) heq)
   | @ret x y h => exact False.elim (rand_ne (isRandHead_ret y) heq)
-  | fail => exact False.elim (rand_ne isRandHead_fail heq)
   | silentL hs hnext ih =>
     intro y
     apply SamePrints.roll
@@ -324,7 +307,6 @@ private theorem Step.rand_left_inv {α β} {RR : α → β → Prop}
       exact (hcont x y).out
   | @print z k₁ k₂ h => exact False.elim (rand_ne (isRandHead_print z k₁) heq)
   | @ret x y h => exact False.elim (rand_ne (isRandHead_ret x) heq)
-  | fail => exact False.elim (rand_ne isRandHead_fail heq)
   | silentL hs hnext ih =>
     cases hs with
     | tick k => exact False.elim (rand_ne (isRandHead_tick k) heq)
@@ -458,10 +440,6 @@ theorem Steps.ret {α β} {RR : α → β → Prop} {R : Nondet α → Nondet β
     {x : α} {y : β} (h : RR x y) :
     Steps RR R (pure x) (pure y) :=
   Steps.step (Step.ret h)
-
-theorem Steps.fail {α β} {RR : α → β → Prop} {R : Nondet α → Nondet β → Prop} :
-    Steps RR R (CompM.fail : Nondet α) (CompM.fail : Nondet β) :=
-  Steps.step Step.fail
 
 theorem Steps.silentL {α β} {RR : α → β → Prop} {R : Nondet α → Nondet β → Prop}
     {t₁ : Nondet α} {t₂ : Nondet β} {γ} {k : γ → Nondet α}
