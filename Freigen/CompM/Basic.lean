@@ -4,14 +4,15 @@ import Freigen.Eff
 
 namespace Freigen
 
-def CompM (E : Eff.Spec) (α : Type) : Type _ := ExactCodensity (ITree E) α
+def CompM (E : Eff.Spec.{u, 0}) (α : Type) : Type _ :=
+  ExactCodensity (ITree E) α
 
 instance {E} : Monad (CompM E) := inferInstanceAs (Monad (ExactCodensity (ITree E)))
 instance {E} : LawfulMonad (CompM E) := inferInstanceAs (LawfulMonad (ExactCodensity (ITree E)))
 
 namespace CompM
 
-variable { E : Eff.Spec } { α β : Type }
+variable {E : Eff.Spec.{u, 0}} {α β : Type}
 
 private theorem bind_def {α β : Type _} (x : CompM E α) (f : α → CompM E β) :
     x >>= f = ⟨fun g => x.run fun a => (f a).run g, by

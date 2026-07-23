@@ -22,10 +22,11 @@ def NodeTag.fields {i} {E : Spec}: NodeTag E i → Type _
 | fail => PEmpty
 | op e _ => E.output e ⊕ ((t : E.blockTag e) × E.blockInputs e t)
 
-def NodeTag.elem {E : Spec} {α : Type _} : (t : NodeTag E α) → (p : t.fields) → Type _
+def NodeTag.elem {E : Spec.{u, v}} {α : Type v} :
+    (t : NodeTag E α) → (p : t.fields) → Type v
 | ret _, x => nomatch x
 | fail, x => nomatch x
-| tau, () => α
+| tau, PUnit.unit => α
 | op _ _, Sum.inl _ => α
 | op e _, Sum.inr ⟨o, _⟩ => E.blockOutputs e o
 
@@ -37,7 +38,7 @@ def Empty : Spec where
   blockInputs := nofun
   blockOutputs := nofun
 
-def Step (E : Spec) : IxPoly.Endo (Type _) where
+def Step (E : Spec.{u, v}) : IxPoly.Endo (Type v) where
   Tag := fun α => NodeTag E α
   Field := fun _=> NodeTag.fields
   Elem := fun _ => NodeTag.elem
@@ -45,7 +46,9 @@ def Step (E : Spec) : IxPoly.Endo (Type _) where
 namespace Step
 
 def ret {E α Y} (x : α) : Step E Y α := ⟨.ret x, fun a => PEmpty.elim a⟩
-def tau {E α Y} (x : Y α) : Step E Y α := ⟨.tau, fun () => x⟩
+def tau {E α Y} (x : Y α) : Step E Y α :=
+  ⟨.tau, fun
+    | PUnit.unit => x⟩
 def fail {E α Y} : Step E Y α := ⟨.fail, fun a => PEmpty.elim a⟩
 def op {E α Y} (e : E.tag) (inp : E.input e)
     (blocks : (t : E.blockTag e) → E.blockInputs e t → Y (E.blockOutputs e t))
@@ -69,7 +72,7 @@ protected def casesOn {E Y} { motive : (α : Type _) → Step E Y α → Sort* }
     congr 2
     ext a; cases a
   | tau =>
-    convert tau (fields ())
+    convert tau (fields PUnit.unit)
     · rfl
     · simp only [Step.tau]
       congr

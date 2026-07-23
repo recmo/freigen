@@ -141,10 +141,12 @@ theorem bisim₂_up_to_eq {E α} {Seed : Type _ → Type _}
   exists seed
 
 def BindCarrier E α R := (ITree E α × (α → ITree E R)) ⊕ ITree E R
-def bindCo {E α} R : BindCarrier E α R → Eff.Step E (BindCarrier E α) R
+def bindCo {E : Eff.Spec.{u, 0}} {α : Type} (R : Type) :
+    BindCarrier E α R → Eff.Step E (BindCarrier E α) R
 | .inl (e, f) => match e.observe with
   | ⟨.ret x, _⟩ => IxPoly.map (fun _ => .inr) _ (f x).observe
-  | ⟨.tau, cont⟩ => ⟨.tau, fun () => .inl (cont (), f)⟩
+  | ⟨.tau, cont⟩ => ⟨.tau, fun
+      | PUnit.unit => .inl (cont PUnit.unit, f)⟩
   | ⟨.fail, _⟩ => ⟨.fail, fun x => PEmpty.elim x⟩
   | ⟨.op e x, cont⟩ => ⟨.op e x, fun
     | .inl o => .inl (cont $ .inl o, f)
@@ -152,7 +154,8 @@ def bindCo {E α} R : BindCarrier E α R → Eff.Step E (BindCarrier E α) R
   ⟩
 | .inr e => IxPoly.map (fun _ => .inr) _ e.observe
 
-theorem bindCo_copy {E β} {x : ITree E β} : corec (bindCo (α := α)) (.inr x) = x := by
+theorem bindCo_copy {E : Eff.Spec.{u, 0}} {α β : Type} {x : ITree E β} :
+    corec (bindCo (α := α)) (.inr x) = x := by
   apply bisim (R := fun _ x y => x = corec (bindCo (α := α)) (.inr y))
   intro _ x y hxy
   cases hxy
@@ -162,24 +165,27 @@ theorem bindCo_copy {E β} {x : ITree E β} : corec (bindCo (α := α)) (.inr x)
     }
   · rfl
 
-instance {E} : Monad (ITree E) where
+instance {E : Eff.Spec.{u, 0}} : Monad (ITree E) where
   pure := fun x => ret x
   bind {α β} (a : ITree E α) (f : α → ITree E β) := corec bindCo (.inl (a, f))
 
 @[simp]
-theorem ret_bind {E β} {α} {x : α} {f : α → ITree E β} : ret x >>= f = f x := by
+theorem ret_bind {E : Eff.Spec.{u, 0}} {α β : Type} {x : α}
+    {f : α → ITree E β} : ret x >>= f = f x := by
   apply observe.injective
   simp only [Bind.bind, observe_corec, bindCo, ret,
     observe_roll, IxPoly.map_map, Eff.Step.ret, bindCo_copy, IxPoly.map_id]
 
 @[simp]
-theorem tau_bind {E β} {α} {x : ITree E α} {f : α → ITree E β} : tau x >>= f = tau (x >>= f) := by
+theorem tau_bind {E : Eff.Spec.{u, 0}} {α β : Type} {x : ITree E α}
+    {f : α → ITree E β} : tau x >>= f = tau (x >>= f) := by
   apply observe.injective
   simp only [Bind.bind, observe_corec, bindCo, tau, observe_roll, Eff.Step.tau, IxPoly.map]
   congr
 
 @[simp]
-theorem fail_bind {E β} {α} {f : α → ITree E β} : fail >>= f = fail := by
+theorem fail_bind {E : Eff.Spec.{u, 0}} {α β : Type}
+    {f : α → ITree E β} : fail >>= f = fail := by
   apply observe.injective
   simp only [Bind.bind, observe_corec, bindCo, fail, observe_roll, Eff.Step.fail, IxPoly.map]
   congr
@@ -187,7 +193,7 @@ theorem fail_bind {E β} {α} {f : α → ITree E β} : fail >>= f = fail := by
   cases a
 
 @[simp]
-theorem op_bind {E β} {α} {e : E.tag} {inp : E.input e}
+theorem op_bind {E : Eff.Spec.{u, 0}} {α β : Type} {e : E.tag} {inp : E.input e}
     {blocks : (t : E.blockTag e) → E.blockInputs e t → ITree E (E.blockOutputs e t)}
     {k : (o : E.output e) → ITree E α}
     {f : α → ITree E β}:
@@ -203,11 +209,13 @@ theorem op_bind {E β} {α} {e : E.tag} {inp : E.input e}
   · rfl
   · simp [bindCo_copy]
 
-inductive BindPureRel {E} : (α: Type _) → ITree E α → ITree E α → Prop where
+inductive BindPureRel {E : Eff.Spec.{u, 0}} :
+    (α : Type) → ITree E α → ITree E α → Prop where
 | root {α} (m : ITree E α) : BindPureRel α (m >>= pure) m
 | refl {α} (m : ITree E α) : BindPureRel α m m
 
-theorem bind_pure {E α} (a : ITree E α) : a >>= pure = a := by
+theorem bind_pure {E : Eff.Spec.{u, 0}} {α : Type} (a : ITree E α) :
+    a >>= pure = a := by
   apply bisim₂_up_to_eq (Seed := ITree E) (left := fun _ x => x >>= pure) (right := fun _ x => x)
   intro _ m
   cases m using ITree.casesOn with
@@ -226,7 +234,8 @@ theorem bind_pure {E α} (a : ITree E α) : a >>= pure = a := by
       apply And.intro <;> rfl
     · intros; left; rfl
 
-theorem bind_assoc {E α β γ} {a : ITree E α} {f : α → ITree E β} {g : β → ITree E γ}:
+theorem bind_assoc {E : Eff.Spec.{u, 0}} {α β γ : Type}
+    {a : ITree E α} {f : α → ITree E β} {g : β → ITree E γ}:
     (a >>= f) >>= g = a >>= fun x => f x >>= g := by
   apply bisim₂_up_to_eq (Seed := fun γ => ITree E α × (α → ITree E β) × (β → ITree E γ))
     (left := fun _ ⟨x, f, g⟩ => (x >>= f) >>= g)
@@ -249,27 +258,29 @@ theorem bind_assoc {E α β γ} {a : ITree E α} {f : α → ITree E β} {g : β
       exists ⟨k o, f, g⟩
     · intros; left; rfl
 
-instance {E} : LawfulMonad (ITree E) := LawfulMonad.mk' _
+instance {E : Eff.Spec.{u, 0}} : LawfulMonad (ITree E) := LawfulMonad.mk' _
   bind_pure
   (fun _ _ => ret_bind)
   (fun _ _ _ => bind_assoc)
 
-private def LoopCarrier (E : Eff.Spec) (β : Type _) (α : Type _) : Type _ :=
+private def LoopCarrier (E : Eff.Spec.{u, 0}) (β α : Type) : Type _ :=
     (ITree E (ForInStep β) × (β → ITree E α)) ⊕ ITree E α
 
-private def loopCo {E : Eff.Spec} {β : Type _} (body : β → ITree E (ForInStep β)) (α : Type _):
+private def loopCo {E : Eff.Spec.{u, 0}} {β : Type}
+    (body : β → ITree E (ForInStep β)) (α : Type):
   LoopCarrier E β α → Eff.Step E (LoopCarrier E β) α
 | .inl (m, f) => match m.observe with
   | ⟨.ret (.done v), _⟩ => IxPoly.map (fun _ => .inr) _ (f v).observe
   | ⟨.ret (.yield v), _⟩ => Eff.Step.tau (.inl (body v, f))
-  | ⟨.tau, k⟩ => Eff.Step.tau (.inl (k (), f))
+  | ⟨.tau, k⟩ => Eff.Step.tau (.inl (k PUnit.unit, f))
   | ⟨.fail, _⟩ => Eff.Step.fail
   | ⟨.op e inp, k⟩ => Eff.Step.op e inp
       (fun t i => .inr (k $ .inr ⟨t, i⟩))
       (fun o => .inl (k $ .inl o, f))
 | .inr m => IxPoly.map (fun _ => .inr) _ m.observe
 
-private theorem loopCo_copy {E β} {body : β → ITree E (ForInStep β)} {x : ITree E α} :
+private theorem loopCo_copy {E : Eff.Spec.{u, 0}} {α β : Type}
+    {body : β → ITree E (ForInStep β)} {x : ITree E α} :
     corec (loopCo body) (.inr x) = x := by
   apply bisim (R := fun _ x y => x = corec (loopCo body) (.inr y))
   intro _ x y hxy
@@ -280,11 +291,12 @@ private theorem loopCo_copy {E β} {body : β → ITree E (ForInStep β)} {x : I
     }
   · rfl
 
-def loop {E β α} (body : β → ITree E (ForInStep β))
+def loop {E : Eff.Spec.{u, 0}} {α β : Type} (body : β → ITree E (ForInStep β))
     (initial : β) (k : β → ITree E α) : ITree E α :=
   corec (loopCo body) (.inl (body initial, k))
 
-theorem loop_def {E β α} {body : β → ITree E (ForInStep β)}
+theorem loop_def {E : Eff.Spec.{u, 0}} {α β : Type}
+    {body : β → ITree E (ForInStep β)}
     {initial : β} {k : β → ITree E α} :
     loop body initial k =
       (body initial >>= fun x => match x with
@@ -361,7 +373,7 @@ theorem loop_def {E β α} {body : β → ITree E (ForInStep β)}
         left
         exact loopCo_copy
 
-private theorem loopCo_bind {E β α}
+private theorem loopCo_bind {E : Eff.Spec.{u, 0}} {α β : Type}
     (body : β → ITree E (ForInStep β))
     (m : ITree E (ForInStep β)) (k : β → ITree E α) :
     corec (loopCo body) (.inl (m, pure)) >>= k =
@@ -460,7 +472,8 @@ private theorem loopCo_bind {E β α}
       left
       rfl
 
-theorem loop_bind {E β α} (body : β → ITree E (ForInStep β))
+theorem loop_bind {E : Eff.Spec.{u, 0}} {α β : Type}
+    (body : β → ITree E (ForInStep β))
     (initial : β) (k : β → ITree E α) :
     loop body initial pure >>= k = loop body initial k :=
   loopCo_bind body (body initial) k
