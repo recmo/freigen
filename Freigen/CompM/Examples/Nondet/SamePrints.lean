@@ -356,10 +356,10 @@ def ForInStep.Rel {α β} (RR : α → β → Prop) (I : α → β → Prop):
   | .yield x, .yield y => I x y
   | _, _ => False
 
-def LoopPair {α β}
-  (b₁ : α → Nondet (ForInStep α))
-  (b₂ : β → Nondet (ForInStep β))
-  (I : α → β → Prop) : Nondet α → Nondet β → Prop :=
+def LoopPair {α₁ β₁ α₂ β₂}
+  (b₁ : α₁ → Nondet (α₁ ⊕ β₁))
+  (b₂ : α₂ → Nondet (α₂ ⊕ β₂))
+  (I : α₁ → α₂ → Prop) : Nondet β₁ → Nondet β₂ → Prop :=
   fun x y =>
     ∃ s₁ s₂,
       I s₁ s₂ ∧
@@ -503,66 +503,66 @@ theorem Steps.rand_right {α β} {RR : α → β → Prop} {R : Nondet α → No
 
 /-! ### Unfolding loops under relations -/
 
-theorem Step.loop_left {α β} {RR : α → β → Prop} {R : Nondet α → Nondet β → Prop}
-    {body : α → Nondet (ForInStep α)} {s : α} {t : Nondet β}
+theorem Step.loop_left {α₁ β₁ β₂} {RR : β₁ → β₂ → Prop} {R : Nondet β₁ → Nondet β₂ → Prop}
+    {body : α₁ → Nondet (α₁ ⊕ β₁)} {s : α₁} {t : Nondet β₂}
     (h : Step RR R
       (body s >>= fun
-        | .done v => pure v
-        | .yield v => CompM.tick *> CompM.loop body v)
+        | .inr v => pure v
+        | .inl v => CompM.tick *> CompM.loop body v)
       t) :
     Step RR R (CompM.loop body s) t := by
   exact Eq.mpr (congrArg (fun x => Step RR R x t) (CompM.loop_def body s)) h
 
-theorem Step.loop_right {α β} {RR : α → β → Prop} {R : Nondet α → Nondet β → Prop}
-    {t : Nondet α} {body : β → Nondet (ForInStep β)} {s : β}
+theorem Step.loop_right {α₂ β₁ β₂} {RR : β₁ → β₂ → Prop} {R : Nondet β₁ → Nondet β₂ → Prop}
+    {t : Nondet β₁} {body : α₂ → Nondet (α₂ ⊕ β₂)} {s : α₂}
     (h : Step RR R t
       (body s >>= fun
-        | .done v => pure v
-        | .yield v => CompM.tick *> CompM.loop body v)) :
+        | .inr v => pure v
+        | .inl v => CompM.tick *> CompM.loop body v)) :
     Step RR R t (CompM.loop body s) := by
   exact Eq.mpr (congrArg (Step RR R t) (CompM.loop_def body s)) h
 
-theorem Step.loop {α β} {RR : α → β → Prop} {R : Nondet α → Nondet β → Prop}
-    {body₁ : α → Nondet (ForInStep α)} {body₂ : β → Nondet (ForInStep β)} {s₁ : α} {s₂ : β}
+theorem Step.loop {α₁ α₂ β₁ β₂} {RR : β₁ → β₂ → Prop} {R : Nondet β₁ → Nondet β₂ → Prop}
+    {body₁ : α₁ → Nondet (α₁ ⊕ β₁)} {body₂ : α₂ → Nondet (α₂ ⊕ β₂)} {s₁ : α₁} {s₂ : α₂}
     (h : Step RR R
       (body₁ s₁ >>= fun
-        | .done v => pure v
-        | .yield v => CompM.tick *> CompM.loop body₁ v)
+        | .inr v => pure v
+        | .inl v => CompM.tick *> CompM.loop body₁ v)
       (body₂ s₂ >>= fun
-        | .done v => pure v
-        | .yield v => CompM.tick *> CompM.loop body₂ v)) :
+        | .inr v => pure v
+        | .inl v => CompM.tick *> CompM.loop body₂ v)) :
     Step RR R (CompM.loop body₁ s₁) (CompM.loop body₂ s₂) := by
   exact Eq.mpr
     (congrArg₂ (Step RR R) (CompM.loop_def body₁ s₁) (CompM.loop_def body₂ s₂)) h
 
-theorem Steps.loop_left {α β} {RR : α → β → Prop} {R : Nondet α → Nondet β → Prop}
-    {body : α → Nondet (ForInStep α)} {s : α} {t : Nondet β}
+theorem Steps.loop_left {α₁ β₁ β₂} {RR : β₁ → β₂ → Prop} {R : Nondet β₁ → Nondet β₂ → Prop}
+    {body : α₁ → Nondet (α₁ ⊕ β₁)} {s : α₁} {t : Nondet β₂}
     (h : Steps RR R
       (body s >>= fun
-        | .done v => pure v
-        | .yield v => CompM.tick *> CompM.loop body v)
+        | .inr v => pure v
+        | .inl v => CompM.tick *> CompM.loop body v)
       t) :
     Steps RR R (CompM.loop body s) t := by
   exact Eq.mpr (congrArg (fun x => Steps RR R x t) (CompM.loop_def body s)) h
 
-theorem Steps.loop_right {α β} {RR : α → β → Prop} {R : Nondet α → Nondet β → Prop}
-    {t : Nondet α} {body : β → Nondet (ForInStep β)} {s : β}
+theorem Steps.loop_right {α₂ β₁ β₂} {RR : β₁ → β₂ → Prop} {R : Nondet β₁ → Nondet β₂ → Prop}
+    {t : Nondet β₁} {body : α₂ → Nondet (α₂ ⊕ β₂)} {s : α₂}
     (h : Steps RR R t
       (body s >>= fun
-        | .done v => pure v
-        | .yield v => CompM.tick *> CompM.loop body v)) :
+        | .inr v => pure v
+        | .inl v => CompM.tick *> CompM.loop body v)) :
     Steps RR R t (CompM.loop body s) := by
   exact Eq.mpr (congrArg (Steps RR R t) (CompM.loop_def body s)) h
 
-theorem Steps.loop {α β} {RR : α → β → Prop} {R : Nondet α → Nondet β → Prop}
-    {body₁ : α → Nondet (ForInStep α)} {body₂ : β → Nondet (ForInStep β)} {s₁ : α} {s₂ : β}
+theorem Steps.loop {α₁ α₂ β₁ β₂} {RR : β₁ → β₂ → Prop} {R : Nondet β₁ → Nondet β₂ → Prop}
+    {body₁ : α₁ → Nondet (α₁ ⊕ β₁)} {body₂ : α₂ → Nondet (α₂ ⊕ β₂)} {s₁ : α₁} {s₂ : α₂}
     (h : Steps RR R
       (body₁ s₁ >>= fun
-        | .done v => pure v
-        | .yield v => CompM.tick *> CompM.loop body₁ v)
+        | .inr v => pure v
+        | .inl v => CompM.tick *> CompM.loop body₁ v)
       (body₂ s₂ >>= fun
-        | .done v => pure v
-        | .yield v => CompM.tick *> CompM.loop body₂ v)) :
+        | .inr v => pure v
+        | .inl v => CompM.tick *> CompM.loop body₂ v)) :
     Steps RR R (CompM.loop body₁ s₁) (CompM.loop body₂ s₂) := by
   exact Eq.mpr
     (congrArg₂ (Steps RR R) (CompM.loop_def body₁ s₁) (CompM.loop_def body₂ s₂)) h
@@ -590,9 +590,9 @@ protected theorem coind {α β} (a b) {RR : α → β → Prop}
       exact h_stable x y h
   · exact Steps.recur h
 
-protected theorem loop_coind {α₁ α₂}
-    {b₁ : α₁ → Nondet (ForInStep α₁)} {b₂ : α₂ → Nondet (ForInStep α₂)}
-    {i₁ : α₁} {i₂ : α₂} {RR : α₁ → α₂ → Prop}
+protected theorem loop_coind {α₁ α₂ β₁ β₂}
+    {b₁ : α₁ → Nondet (α₁ ⊕ β₁)} {b₂ : α₂ → Nondet (α₂ ⊕ β₂)}
+    {i₁ : α₁} {i₂ : α₂} {RR : β₁ → β₂ → Prop}
     (I : α₁ → α₂ → Prop)
     (hinit : I i₁ i₂)
     (hstep : ∀ s₁ s₂, I s₁ s₂ →

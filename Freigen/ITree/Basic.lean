@@ -255,22 +255,22 @@ theorem tau_bind {α β : Type} {x : ITree E α}
   apply observe.injective
   simp only [tau, Eff.Step.tau, hasOp_bind]
 
-private def LoopCarrier (β α : Type) : Type _ :=
-    (ITree E (ForInStep β) × (β → ITree E α)) ⊕ ITree E α
+private def LoopCarrier (E : Type u) [Eff.Spec E] (α β γ : Type) : Type _ :=
+    (ITree E (α ⊕ β) × (β → ITree E γ)) ⊕ ITree E γ
 
-private def loopCo {β : Type}
-    (body : β → ITree E (ForInStep β)) (α : Type):
-  LoopCarrier (E:=E) β α → Eff.Step E (LoopCarrier (E:=E) β) α
+private def loopCo {α β : Type}
+    (body : α → ITree E (α ⊕ β)) (γ : Type):
+  LoopCarrier E α β γ → Eff.Step E (LoopCarrier E α β) γ
 | .inl (m, f) => match m.observe with
-  | ⟨.ret (.done v), _⟩ => IxPoly.map (fun _ => .inr) _ (f v).observe
-  | ⟨.ret (.yield v), _⟩ => Eff.Step.tau (.inl (body v, f))
+  | ⟨.ret (.inr v), _⟩ => IxPoly.map (fun _ => .inr) _ (f v).observe
+  | ⟨.ret (.inl v), _⟩ => Eff.Step.tau (.inl (body v, f))
   | ⟨.op e inp, k⟩ => Eff.Step.op e inp
       (fun t i => .inr (k $ .inr ⟨t, i⟩))
       (fun o => .inl (k $ .inl o, f))
 | .inr m => IxPoly.map (fun _ => .inr) _ m.observe
 
-private theorem loopCo_copy {α β : Type}
-    {body : β → ITree E (ForInStep β)} {x : ITree E α} :
+private theorem loopCo_copy {α β γ : Type}
+    {body : α → ITree E (α ⊕ β)} {x : ITree E γ} :
     corec (loopCo body) (.inr x) = x := by
   apply bisim (R := fun _ x y => x = corec (loopCo body) (.inr y))
   intro _ x y hxy
@@ -281,26 +281,26 @@ private theorem loopCo_copy {α β : Type}
     }
   · rfl
 
-def loop {α β : Type} (body : β → ITree E (ForInStep β))
-    (initial : β) (k : β → ITree E α) : ITree E α :=
+def loop {α β γ : Type} (body : α → ITree E (α ⊕ β))
+    (initial : α) (k : β → ITree E γ) : ITree E γ :=
   corec (loopCo body) (.inl (body initial, k))
 
-theorem loop_def {α β : Type}
-    {body : β → ITree E (ForInStep β)}
-    {initial : β} {k : β → ITree E α} :
+theorem loop_def {α β γ : Type}
+    {body : α → ITree E (α ⊕ β)}
+    {initial : α} {k : β → ITree E γ} :
     loop body initial k =
       (body initial >>= fun x => match x with
-        | .done v => k v
-        | .yield v => tau (loop body v k)) := by
+        | .inr v => k v
+        | .inl v => tau (loop body v k)) := by
   unfold loop
   apply bisim₂_up_to_eq
-    (Seed := LoopCarrier (E:=E) β)
+    (Seed := LoopCarrier E α β)
     (left := fun _ x => corec (loopCo body) x)
     (right := fun _ x => match x with
       | .inr t => t
       | .inl (m, f) => m >>= fun x => match x with
-        | .done v => f v
-        | .yield v => tau $ corec (loopCo body) (.inl (body v, f)))
+        | .inr v => f v
+        | .inl v => tau $ corec (loopCo body) (.inl (body v, f)))
     (seed := .inl (body initial, k))
   intro i x
   cases x with
@@ -326,10 +326,10 @@ theorem loop_def {α β : Type}
     | ret x =>
       simp only [roll_ret, ret_bind]
       cases x with
-      | done v =>
+      | inr v =>
         simp only [observe_corec, loopCo, observe_ret, Eff.Step.ret, map_map, loopCo_copy, IxPoly.map_id]
         apply BisimRelF.refl_upToEq
-      | yield v =>
+      | inl v =>
         simp only [observe_tau, observe_corec, loopCo, observe_ret, Eff.Step.ret, Eff.Step.map_tau]
         apply BisimRelF.op
         · intro
@@ -349,18 +349,18 @@ theorem loop_def {α β : Type}
         left
         exact loopCo_copy
 
-private theorem loopCo_bind {α β : Type}
-    (body : β → ITree E (ForInStep β))
-    (m : ITree E (ForInStep β)) (k : β → ITree E α) :
+private theorem loopCo_bind {α β γ : Type}
+    (body : α → ITree E (α ⊕ β))
+    (m : ITree E (α ⊕ β)) (k : β → ITree E γ) :
     corec (loopCo body) (.inl (m, pure)) >>= k =
       corec (loopCo body) (.inl (m, k)) := by
   symm
   apply bisim₂_up_to_eq
-    (Seed := fun α => ITree E (ForInStep β) × (β → ITree E α))
+    (Seed := fun γ => ITree E (α ⊕ β) × (β → ITree E γ))
     (left := fun i ⟨m, k⟩ =>
-      corec (loopCo body) ((.inl (m, k)) : LoopCarrier (E:=E) β i))
+      corec (loopCo body) ((.inl (m, k)) : LoopCarrier (E:=E) α β i))
     (right := fun _ ⟨m, k⟩ =>
-      corec (loopCo body) ((.inl (m, pure)) : LoopCarrier (E:=E) β β) >>= k)
+      corec (loopCo body) ((.inl (m, pure)) : LoopCarrier (E:=E) α β β) >>= k)
     (seed := ⟨m, k⟩)
   intro i seed
   rcases seed with ⟨m, k⟩
@@ -369,9 +369,9 @@ private theorem loopCo_bind {α β : Type}
   cases observe m using Eff.Step.casesOn with
   | ret x =>
     cases x with
-    | done v =>
+    | inr v =>
       have unfold : ∀ {j : Type} (f : β → ITree E j),
-          corec (loopCo body) (.inl (ret (.done v), f)) = f v := by
+          corec (loopCo body) (.inl (ret (.inr v), f)) = f v := by
         intro j f
         apply observe.injective
         simp only [observe_corec, loopCo, observe_ret, Eff.Step.ret, IxPoly.map_map,
@@ -380,9 +380,9 @@ private theorem loopCo_bind {α β : Type}
       rw [unfold k, unfold pure]
       simp only [pure, ret_bind]
       apply BisimRelF.refl_upToEq
-    | yield v =>
+    | inl v =>
       have unfold : ∀ {j : Type} (f : β → ITree E j),
-          corec (loopCo body) (.inl (ret (.yield v), f)) =
+          corec (loopCo body) (.inl (ret (.inl v), f)) =
             tau (corec (loopCo body) (.inl (body v, f))) := by
         intro j f
         apply observe.injective
@@ -405,7 +405,7 @@ private theorem loopCo_bind {α β : Type}
       have hco :
           loopCo body j (.inl (op e inp blocks next, f)) =
             Eff.Step.op e inp
-              (fun t x => (.inr (blocks t x) : LoopCarrier (E:=E) β (eS.blockOutputs e t)))
+              (fun t x => (.inr (blocks t x) : LoopCarrier (E:=E) α β (eS.blockOutputs e t)))
               (fun o => .inl (next o, f)) := by
         simp only [loopCo, observe_op, Eff.Step.op]
       rw [observe_corec, observe_op, hco, Eff.Step.map_op]
@@ -423,9 +423,9 @@ private theorem loopCo_bind {α β : Type}
       left
       rfl
 
-theorem loop_bind {α β : Type}
-    (body : β → ITree E (ForInStep β))
-    (initial : β) (k : β → ITree E α) :
+theorem loop_bind {α β γ : Type}
+    (body : α → ITree E (α ⊕ β))
+    (initial : α) (k : β → ITree E γ) :
     loop body initial pure >>= k = loop body initial k :=
   loopCo_bind body (body initial) k
 

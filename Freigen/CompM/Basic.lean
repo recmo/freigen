@@ -27,7 +27,7 @@ def op (e : E) (inp : eS.input e)
     (blocks : (t : eS.blockTag e) → eS.blockInputs e t → CompM E (eS.blockOutputs e t)): CompM E (eS.output e) :=
   ⟨fun f => ITree.op e inp (fun t i => (blocks t i).run pure) f, by simp⟩
 
-def loop [Eff.Has Eff.Tau E] (body : α → CompM E (ForInStep α)) (init : α): CompM E α := {
+def loop [Eff.Has Eff.Tau E] (body : α → CompM E (α ⊕ β)) (init : α): CompM E β := {
   run := fun f => ITree.loop (fun a => (body a).run pure) init f
   exact := by
     intros
@@ -35,17 +35,17 @@ def loop [Eff.Has Eff.Tau E] (body : α → CompM E (ForInStep α)) (init : α):
 }
 
 theorem loop_def [Eff.Has Eff.Tau E]
-  (body : β → CompM E (ForInStep β))
-  (s : β) :
+  (body : α → CompM E (α ⊕ β))
+  (s : α) :
   CompM.loop body s =
     body s >>= fun
-      | .done v  => pure v
-      | .yield v => CompM.tick *> CompM.loop body v := by
+      | .inr v  => pure v
+      | .inl v => CompM.tick *> CompM.loop body v := by
   apply ExactCodensity.equiv.injective
   change (CompM.loop body s).run pure =
     ((body s >>= fun
-      | .done v => pure v
-      | .yield v => CompM.tick *> CompM.loop body v) : CompM E β).run pure
+      | .inr v => pure v
+      | .inl v => CompM.tick *> CompM.loop body v) : CompM E β).run pure
   simp only [loop, bind_def]
   rw [ITree.loop_def]
   rw [ExactCodensity.exact]
@@ -53,7 +53,11 @@ theorem loop_def [Eff.Has Eff.Tau E]
   funext x
   cases x <;> rfl
 
+abbrev forInStepToSum : ForInStep α → α ⊕ α
+  | .yield x => .inl x
+  | .done x => .inr x
+
 instance [Eff.Has Eff.Tau E] : ForIn (CompM E) Lean.Loop Unit where
-  forIn _ init body := loop (fun a => body () a) init
+  forIn _ init body := loop (fun a => forInStepToSum <$> (body () a)) init
 
 end Freigen.CompM
