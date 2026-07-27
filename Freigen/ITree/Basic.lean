@@ -48,26 +48,26 @@ theorem observe_corec
 def ret {γ : Γ} {α : Type v} (x : α) : ITree E γ α :=
   roll <| Eff.Step.ret x
 
-def op {γ : Γ} {α : Type v} (e : E γ) (inp : eS.input γ e)
+def op {γ : Γ} {α : Type v} (e : E γ)
     (blocks :
       (t : eS.blockTag γ e) →
       eS.blockInputs γ e t →
       ITree E (eS.blockCtx γ e t) (eS.blockOutputs γ e t))
     (k : eS.output γ e → ITree E γ α) :
     ITree E γ α :=
-  roll $ Eff.Step.op e inp blocks k
+  roll $ Eff.Step.op e blocks k
 
 theorem roll_ret {γ : Γ} {α : Type v} (x : α) :
     roll (E := E) (Eff.Step.ret (γ := γ) x) = ret (γ := γ) x :=
   rfl
 
-theorem roll_op {γ : Γ} {α : Type v} (e : E γ) (inp : eS.input γ e)
+theorem roll_op {γ : Γ} {α : Type v} (e : E γ)
     (blocks :
       (t : eS.blockTag γ e) →
       eS.blockInputs γ e t →
       ITree E (eS.blockCtx γ e t) (eS.blockOutputs γ e t))
     (k : eS.output γ e → ITree E γ α) :
-    roll (E := E) (Eff.Step.op e inp blocks k) = op e inp blocks k :=
+    roll (E := E) (Eff.Step.op e blocks k) = op e blocks k :=
   rfl
 
 @[simp]
@@ -76,21 +76,21 @@ theorem observe_ret {γ : Γ} {α : Type v} (x : α) :
   rfl
 
 @[simp]
-theorem observe_op {γ : Γ} {α : Type v} (e : E γ) (inp : eS.input γ e)
+theorem observe_op {γ : Γ} {α : Type v} (e : E γ)
     (blocks :
       (t : eS.blockTag γ e) →
       eS.blockInputs γ e t →
       ITree E (eS.blockCtx γ e t) (eS.blockOutputs γ e t))
     (k : eS.output γ e → ITree E γ α) :
-    observe (op e inp blocks k (E := E)) = Eff.Step.op e inp blocks k :=
+    observe (op e blocks k (E := E)) = Eff.Step.op e blocks k :=
   rfl
 
 protected def casesOn
     {motive : (i : Γ × Type v) → ITree E i.1 i.2 → Sort w}
     {γ : Γ} {α : Type v} (x : ITree E γ α)
     (ret : ∀ {γ : Γ} {α : Type v} x, motive (γ, α) (ret x))
-    (op : ∀ {γ : Γ} {α : Type v} e inp blocks k,
-      motive (γ, α) (op e inp blocks k)) :
+    (op : ∀ {γ : Γ} {α : Type v} e blocks k,
+      motive (γ, α) (op e blocks k)) :
     motive (γ, α) x := by
   have : x = roll (observe x) := (observe.symm_apply_apply _).symm
   rw [this]
@@ -103,7 +103,7 @@ inductive BisimRelF
     Eff.Step Γ E (fun i => ITree E i.1 i.2) i → Prop where
 | ret {γ : Γ} {α : Type v} (x : α) :
     BisimRelF R (γ, α) (Eff.Step.ret x) (Eff.Step.ret x)
-| op {γ : Γ} {α : Type v} (e : E γ) (inp : eS.input γ e)
+| op {γ : Γ} {α : Type v} (e : E γ)
     (k1 k2 : eS.output γ e → ITree E γ α)
     (blocks1 blocks2 :
       (t : eS.blockTag γ e) →
@@ -114,8 +114,8 @@ inductive BisimRelF
       R (eS.blockCtx γ e t, eS.blockOutputs γ e t)
         (blocks1 t i) (blocks2 t i)) :
     BisimRelF R (γ, α)
-      (Eff.Step.op e inp blocks1 k1)
-      (Eff.Step.op e inp blocks2 k2)
+      (Eff.Step.op e blocks1 k1)
+      (Eff.Step.op e blocks2 k2)
 
 theorem BisimRelF.toLiftR
     {R : (i : Γ × Type v) → ITree E i.1 i.2 → ITree E i.1 i.2 → Prop} :
@@ -210,7 +210,7 @@ def bindCo {α : Type v} (i : Γ × Type v) :
     BindCarrier E α i → Eff.Step Γ E (BindCarrier E α) i
 | .inl (e, f) => match e.observe with
   | ⟨.ret x, _⟩ => IxPoly.map (fun _ => .inr) _ (f x).observe
-  | ⟨.op e x, cont⟩ => ⟨.op e x, fun
+  | ⟨.op e, cont⟩ => ⟨.op e, fun
     | .inl o => .inl (cont $ .inl o, f)
     | .inr b => .inr (cont $ .inr b)
   ⟩
@@ -264,22 +264,22 @@ theorem ret_bind
 @[simp]
 theorem op_bind
     {γ : Γ} {α β : Type v}
-    {e : E γ} {inp : eS.input γ e}
+    {e : E γ}
     {blocks :
       (t : eS.blockTag γ e) →
       eS.blockInputs γ e t →
       ITree E (eS.blockCtx γ e t) (eS.blockOutputs γ e t)}
     {k : eS.output γ e → ITree E γ α}
     {f : α → ITree E γ β} :
-    (op e inp blocks k) >>= f =
-      op e inp
+    (op e blocks k) >>= f =
+      op e
         blocks
         (fun o => k o >>= f) := by
   apply observe.injective
   change observe
       (corec bindCo
-        ((.inl (op e inp blocks k, f)) : BindCarrier E α (γ, β))) =
-    observe (op e inp blocks (fun o => k o >>= f))
+        ((.inl (op e blocks k, f)) : BindCarrier E α (γ, β))) =
+    observe (op e blocks (fun o => k o >>= f))
   rw [observe_corec]
   simp only [bindCo, observe_op, IxPoly.map]
   simp only [Eff.Step.op]
@@ -292,16 +292,16 @@ theorem op_bind
 theorem hasOp_bind
     {F : Γ → Type u} {γ : Γ} {α β : Type v}
     [Eff.Spec F] [Eff.Has F E]
-    {e : F γ} {inp : Eff.Spec.input γ e}
+    {e : F γ}
     {blocks :
       (t : Eff.Spec.blockTag γ e) →
       Eff.Spec.blockInputs γ e t →
       ITree E (Eff.Spec.blockCtx γ e t) (Eff.Spec.blockOutputs γ e t)}
     {k : Eff.Spec.output γ e → ITree E γ α}
     {f : α → ITree E γ β} :
-    (roll (Eff.Step.Has.op e inp blocks k) >>= f) =
+    (roll (Eff.Step.Has.op e blocks k) >>= f) =
       roll
-        (Eff.Step.Has.op e inp blocks
+        (Eff.Step.Has.op e blocks
           (fun o => k o >>= f)) := by
   simp only [Eff.Step.Has.op, roll_op, op_bind]
 
@@ -325,7 +325,7 @@ theorem bind_pure {γ : Γ} {α : Type v} (a : ITree E γ α) :
   cases observe m using Eff.Step.casesOn with
   | ret =>
     simp [roll_ret, ret_bind, pure, BisimRelF.refl_upToEq]
-  | op e inp blocks k =>
+  | op e blocks k =>
     simp only [roll_op, op_bind, observe_op]
     apply BisimRelF.op
     · intro
@@ -357,7 +357,7 @@ theorem bind_assoc
   cases observe x using Eff.Step.casesOn with
   | ret =>
     simp [roll_ret, ret_bind, BisimRelF.refl_upToEq]
-  | op e inp blocks k =>
+  | op e blocks k =>
     simp only [roll_op, op_bind, observe_op]
     apply BisimRelF.op
     · intro o
@@ -402,7 +402,7 @@ private def loopCo {α β : Type v} (i : Γ × Type v) :
 | .inl (body, m, f) => match m.observe with
   | ⟨.ret (.inr v), _⟩ => IxPoly.map (fun _ => .inr) _ (f v).observe
   | ⟨.ret (.inl v), _⟩ => Eff.Step.tau (.inl (body, body v, f))
-  | ⟨.op e inp, k⟩ => Eff.Step.op e inp
+  | ⟨.op e, k⟩ => Eff.Step.op e
       (fun t i => .inr (k $ .inr ⟨t, i⟩))
       (fun o => .inl (body, k (.inl o), f))
 | .inr m => IxPoly.map (fun _ => .inr) _ m.observe
@@ -419,7 +419,7 @@ private theorem observe_loopCo
 private theorem loopCo_op
     {α β δ : Type v} {γ : Γ}
     (body : α → ITree E γ (α ⊕ β))
-    (e : E γ) (inp : eS.input γ e)
+    (e : E γ)
     (blocks :
       (t : eS.blockTag γ e) →
       eS.blockInputs γ e t →
@@ -427,9 +427,9 @@ private theorem loopCo_op
     (next : eS.output γ e → ITree E γ (α ⊕ β))
     (k : β → ITree E γ δ) :
     loopCo (γ, δ)
-        ((.inl (body, op e inp blocks next, k)) :
+        ((.inl (body, op e blocks next, k)) :
           LoopCarrier E α β (γ, δ)) =
-      Eff.Step.op e inp
+      Eff.Step.op e
         (fun t i => .inr (blocks t i))
         (fun o => .inl (body, next o, k)) := by
   simp only [loopCo, observe_op, Eff.Step.op]
@@ -495,7 +495,7 @@ theorem loop_def
     | ret =>
       simp only [Eff.Step.map_ret]
       apply BisimRelF.refl_upToEq
-    | op e inp blocks k =>
+    | op e blocks k =>
       simp only [Eff.Step.map_op]
       apply BisimRelF.op
       · intro o
@@ -536,11 +536,11 @@ theorem loop_def
           rfl
         · intro t
           exact (nomatch Eff.Step.Has.lowerBlockTag t)
-    | op e inp blocks k =>
+    | op e blocks k =>
       simp only [roll_op, op_bind]
       rw [observe_loopCo
         (E := E) (α := α) (β := β)
-        ((.inl (body, op e inp blocks k, f)) :
+        ((.inl (body, op e blocks k, f)) :
           LoopCarrier E α β (ε, A))]
       rw [loopCo_op, Eff.Step.map_op]
       simp only [observe_op]
@@ -620,12 +620,12 @@ private theorem loopCo_bind
         exists ⟨body, body v, k⟩
       · intro t
         exact (nomatch Eff.Step.Has.lowerBlockTag t)
-  | op e inp blocks next =>
+  | op e blocks next =>
     have unfold : ∀ {j : Type v} (f : β → ITree E ε j),
         corec loopCo
-            ((.inl (body, op e inp blocks next, f)) :
+            ((.inl (body, op e blocks next, f)) :
               LoopCarrier E α β (ε, j)) =
-          op (E := E) (α := j) e inp blocks
+          op (E := E) (α := j) e blocks
             (fun o =>
               corec loopCo
                 ((.inl (body, next o, f)) :
@@ -633,8 +633,8 @@ private theorem loopCo_bind
       intro j f
       apply observe.injective
       have hco :
-          loopCo (ε, j) (.inl (body, op e inp blocks next, f)) =
-            Eff.Step.op e inp
+          loopCo (ε, j) (.inl (body, op e blocks next, f)) =
+            Eff.Step.op e
               (fun t x =>
                 (.inr (blocks t x) :
                   LoopCarrier E α β

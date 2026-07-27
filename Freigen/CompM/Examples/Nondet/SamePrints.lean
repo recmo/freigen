@@ -151,7 +151,7 @@ protected theorem ret {α β : Type} {x : α} {y : β} {R : α → β → Prop} 
 
 private def isRand {α} :
     Eff.NodeTag Unit Nondet.Stack () α → Bool
-  | .op (.inr .rand) _ => true
+  | .op (.inr .rand) => true
   | _ => false
 
 private def isRandHead {α} (t : Nondet α) : Bool :=
@@ -159,7 +159,7 @@ private def isRandHead {α} (t : Nondet α) : Bool :=
 
 private def printValue {α} :
     Eff.NodeTag Unit Nondet.Stack () α → Option ℤ
-  | .op (.inr .print) z => some z
+  | .op (.inr (.print z)) => some z
   | _ => none
 
 private def printHead {α} (t : Nondet α) : Option ℤ :=

@@ -16,8 +16,8 @@ private def wBind
   | IxPoly.W.mk _ p g =>
     match p with
     | .ret a => f a
-    | .op e inp =>
-      IxPoly.W.mk (F := Eff.Step Γ E) _ (Eff.NodeTag.op e inp) fun
+    | .op e =>
+      IxPoly.W.mk (F := Eff.Step Γ E) _ (Eff.NodeTag.op e) fun
         | .inl a =>
           wBind (i := (i.1, i.2))
             (show IxPoly.W (Eff.Step Γ E) (i.1, i.2) from g (.inl a)) f
@@ -78,27 +78,27 @@ def Free
   ExactCodensity (fun α : Type v => IxPoly.W (Eff.Step Γ E) (γ, α)) α
 
 private def wOp
-    (e : E γ) (inp : eS.input γ e)
+    (e : E γ)
     (blocks :
       (t : eS.blockTag γ e) →
       eS.blockInputs γ e t →
       IxPoly.W (Eff.Step Γ E)
         (eS.blockCtx γ e t, eS.blockOutputs γ e t)) :
     IxPoly.W (Eff.Step Γ E) (γ, eS.output γ e) :=
-  IxPoly.W.mk (F := Eff.Step Γ E) _ (Eff.NodeTag.op e inp) fun
+  IxPoly.W.mk (F := Eff.Step Γ E) _ (Eff.NodeTag.op e) fun
     | .inl a =>
       IxPoly.W.roll (F := Eff.Step Γ E) (Eff.Step.ret (γ := γ) a)
     | .inr ⟨b, i⟩ => blocks b i
 
 def Free.op
-    (e : E γ) (inp : eS.input γ e)
+    (e : E γ)
     (blocks :
       (t : eS.blockTag γ e) →
       eS.blockInputs γ e t →
       Free E (eS.blockCtx γ e t) (eS.blockOutputs γ e t)) :
     Free E γ (eS.output γ e) :=
   ExactCodensity.equiv.symm <|
-    wOp e inp (fun t i => ExactCodensity.equiv (blocks t i))
+    wOp e (fun t i => ExactCodensity.equiv (blocks t i))
 
 instance : Monad (Free E γ) :=
   inferInstanceAs

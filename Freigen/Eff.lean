@@ -3,7 +3,6 @@ import Freigen.IxPoly.Basic
 namespace Freigen.Eff
 
 class Spec {Γ : Type u} (tag : Γ → Type u) where
-  input : (γ : Γ) → tag γ → Type v
   output : (γ : Γ) → tag γ → Type v
   blockTag : (γ : Γ) → tag γ → Type u
   blockCtx : (γ : Γ) → (t : tag γ) → blockTag γ t → Γ
@@ -13,24 +12,23 @@ class Spec {Γ : Type u} (tag : Γ → Type u) where
 inductive NodeTag (Γ : Type u) (T : Γ → Type u) [s : Spec.{u, v} T]
     (γ : Γ) (R : Type v) : Type (max u v) where
 | ret : R → NodeTag Γ T γ R
-| op (t : T γ) : s.input γ t → NodeTag Γ T γ R
+| op (t : T γ) : NodeTag Γ T γ R
 
 abbrev NodeTag.fields {Γ : Type u} {T : Γ → Type u} {γ} [s : Spec T]
     {R : Type v} : NodeTag Γ T γ R → Type (max u v)
 | ret _ => PEmpty
-| op e _ => s.output γ e ⊕ ((t : s.blockTag γ e) × s.blockInputs γ e t)
+| op e => s.output γ e ⊕ ((t : s.blockTag γ e) × s.blockInputs γ e t)
 
 def NodeTag.elem {Γ : Type u} {T : Γ → Type u} {γ} [s : Spec T] {α : Type v} :
     (t : NodeTag Γ T γ α) → (p : t.fields) → Γ × Type v
 | ret _ => nofun
-| op e _ => fun
+| op e => fun
   | Sum.inl _ => (γ, α)
   | Sum.inr ⟨o, _⟩ => (s.blockCtx γ e o, s.blockOutputs γ e o)
 
 def NoEff {Γ : Type u} : Γ → Type u := fun _ => PEmpty
 
 instance {Γ : Type u} : Spec (@NoEff Γ) where
-  input := nofun
   output := nofun
   blockTag := nofun
   blockCtx := nofun
@@ -43,9 +41,6 @@ infix:65 " ⊕ₑ " => Sum
 
 instance sumInst {Γ : Type u} {T₁ T₂ : Γ → Type u}
     [Spec T₁] [Spec T₂] : Spec (T₁ ⊕ₑ T₂) where
-  input := fun
-    | γ, Sum.inl t => Spec.input γ t
-    | γ, Sum.inr t => Spec.input γ t
   output := fun
     | γ, Sum.inl t => Spec.output γ t
     | γ, Sum.inr t => Spec.output γ t
@@ -103,7 +98,6 @@ structure TauCarrier : Type v
 def Tau {Γ : Type u} : Γ → Type v := fun _ => TauCarrier
 
 instance tauSpec {Γ : Type u} : Spec (Tau (Γ := Γ)) where
-  input := fun _ _ => PUnit
   output := fun _ _ => PUnit
   blockTag := fun _ _ => PEmpty
   blockCtx := nofun
@@ -114,7 +108,6 @@ structure FailCarrier : Type v
 def Fail {Γ : Type u} : Γ → Type v := fun _ => FailCarrier
 
 instance failSpec {Γ : Type u} : Spec (Fail (Γ := Γ)) where
-  input := fun _ _ => PUnit
   output := fun _ _ => PEmpty
   blockTag := fun _ _ => PEmpty
   blockCtx := nofun
@@ -124,23 +117,13 @@ instance failSpec {Γ : Type u} : Spec (Fail (Γ := Γ)) where
 namespace Step
 
 def ret {Γ E α Y} {γ : Γ} [Spec E] (x : α) : Step Γ E Y (γ, α) := ⟨.ret x, fun a => PEmpty.elim a⟩
-def op {Γ E α Y} {γ : Γ} [s: Spec E] (e : E γ) (inp : s.input γ e)
+def op {Γ E α Y} {γ : Γ} [s: Spec E] (e : E γ)
     (blocks : (t : s.blockTag γ e) → s.blockInputs γ e t → Y (s.blockCtx γ e t, s.blockOutputs γ e t))
     (k : (o : s.output γ e) → Y (γ, α)) : Step Γ E Y (γ, α) :=
-  ⟨.op e inp, fun
+  ⟨.op e, fun
     | Sum.inl o => k o
     | Sum.inr ⟨t, i⟩ => blocks t i
   ⟩
-
-def Has.liftInput
-    {Γ : Type u} {E F : Γ → Type u} {γ : Γ}
-    [s : Spec E] [s' : Spec F]
-    (h : Has F E) (e : F γ) (inp : s'.input γ e) :
-    s.input γ (Has.mk (r := h) e) :=
-  match h with
-  | Has.here => inp
-  | Has.inl r => liftInput r e inp
-  | Has.inr r => liftInput r e inp
 
 def Has.lowerBlockTag
     {Γ : Type u} {E F : Γ → Type u} {γ : Γ}
@@ -191,7 +174,7 @@ def Has.op
     {Γ : Type u} {E F : Γ → Type u} {γ : Γ} {α : Type v}
     {Y : Γ × Type v → Type w}
     [s : Spec E] [s' : Spec F] [h : Has F E]
-    (e : F γ) (inp : s'.input γ e)
+    (e : F γ)
     (blocks :
       (t : s'.blockTag γ e) →
       s'.blockInputs γ e t →
@@ -199,7 +182,6 @@ def Has.op
     (k : s'.output γ e → Y (γ, α)) :
     Step Γ E Y (γ, α) :=
   Step.op (Has.mk e)
-     (Has.liftInput h e inp)
      (fun t i => Has.liftBlockOutput t $ blocks (Has.lowerBlockTag t) (Has.lowerBlockInput t i))
      (fun o => k (Has.lowerOutput o))
 
@@ -224,7 +206,7 @@ def tau
     [Spec E] [Has Tau E]
     (x : Y (γ, α)) :
     Step Γ E Y (γ, α) :=
-  Has.op (F := Tau) TauCarrier.mk PUnit.unit nofun
+  Has.op (F := Tau) TauCarrier.mk nofun
     (fun _ => x)
 
 def fail
@@ -232,7 +214,7 @@ def fail
     {Y : Γ × Type v → Type w}
     [Spec E] [Has Fail E] :
     Step Γ E Y (γ, α) :=
-  Has.op (F := Fail) FailCarrier.mk PUnit.unit nofun nofun
+  Has.op (F := Fail) FailCarrier.mk nofun nofun
 
 protected def casesOn
     {Γ : Type u} {E : Γ → Type u}
@@ -240,8 +222,8 @@ protected def casesOn
     {motive : (i : Γ × Type v) → Step Γ E Y i → Sort z}
     {i : Γ × Type v} (x : Step Γ E Y i)
     (ret : ∀ {γ : Γ} {α : Type v} x, motive (γ, α) (ret x))
-    (op : ∀ {γ : Γ} {α : Type v} e inp blocks k,
-      motive (γ, α) (op e inp blocks k)) :
+    (op : ∀ {γ : Γ} {α : Type v} e blocks k,
+      motive (γ, α) (op e blocks k)) :
     motive i x := by
   rcases x with ⟨tag, fields⟩
   cases tag with
@@ -250,8 +232,8 @@ protected def casesOn
     simp only [Step.ret]
     congr 2
     ext a; cases a
-  | op e inp =>
-    convert op e inp (fun t i => fields (.inr ⟨t, i⟩)) (fun o => fields (.inl o))
+  | op e =>
+    convert op e (fun t i => fields (.inr ⟨t, i⟩)) (fun o => fields (.inl o))
     simp only [Step.op]
     congr 2
     ext a; cases a <;> rfl
@@ -282,14 +264,14 @@ theorem map_op
     {Y : Γ × Type v → Type w} {Z : Γ × Type v → Type z}
     {f : (i : Γ × Type v) → Y i → Z i}
     {γ : Γ} {α : Type v}
-    {e : E γ} {inp : h.input γ e}
+    {e : E γ}
     {blocks :
       (t : h.blockTag γ e) →
       h.blockInputs γ e t →
       Y (h.blockCtx γ e t, h.blockOutputs γ e t)}
     {k : h.output γ e → Y (γ, α)} :
-    IxPoly.map (F := Step Γ E) f (γ, α) (Step.op e inp blocks k) =
-      Step.op e inp (fun t i => f _ (blocks t i)) (fun o => f _ (k o)) := by
+    IxPoly.map (F := Step Γ E) f (γ, α) (Step.op e blocks k) =
+      Step.op e (fun t i => f _ (blocks t i)) (fun o => f _ (k o)) := by
   simp only [IxPoly.map, op]
   congr 1
   ext a; cases a <;> rfl
@@ -301,14 +283,14 @@ theorem map_hasOp
       {Y : Γ × Type v → Type w} {Z : Γ × Type v → Type z}
       (f : (i : Γ × Type v) → Y i → Z i)
       {γ : Γ} {α : Type v}
-      (e : F γ) (inp : Spec.input γ e)
+      (e : F γ)
       (blocks :
         (t : Spec.blockTag γ e) →
         Spec.blockInputs γ e t →
         Y (Spec.blockCtx γ e t, Spec.blockOutputs γ e t))
       (k : Spec.output γ e → Y (γ, α)) :
-      IxPoly.map (F := Step Γ E) f (γ, α) (Has.op e inp blocks k) =
-        Has.op e inp
+      IxPoly.map (F := Step Γ E) f (γ, α) (Has.op e blocks k) =
+        Has.op e
           (fun t i => f _ (blocks t i))
           (fun o => f _ (k o)) := by
     unfold Has.op

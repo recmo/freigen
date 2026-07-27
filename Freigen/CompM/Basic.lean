@@ -39,13 +39,13 @@ def fail {γ : Γ} [Eff.Has Eff.Fail E] :
     CompM E γ α :=
   ⟨fun _ => ITree.fail, by simp⟩
 
-def op {γ : Γ} (e : E γ) (inp : eS.input γ e)
+def op {γ : Γ} (e : E γ)
     (blocks :
       (t : eS.blockTag γ e) →
       eS.blockInputs γ e t →
       CompM E (eS.blockCtx γ e t) (eS.blockOutputs γ e t)) :
     CompM E γ (eS.output γ e) :=
-  ⟨fun f => ITree.op e inp (fun t i => (blocks t i).run pure) f, by simp⟩
+  ⟨fun f => ITree.op e (fun t i => (blocks t i).run pure) f, by simp⟩
 
 def loop
     {γ : Γ} [Eff.Has Eff.Tau E]

@@ -354,11 +354,6 @@ structure EffPullback
 
   forget : Et → Es
 
-  inputIso :
-    ∀ et,
-      Eff.Spec.input et ≃
-      Eff.Spec.input (forget et)
-
   outputIso :
     ∀ et,
       Eff.Spec.output et ≃
@@ -379,6 +374,9 @@ structure EffPullback
       Eff.Spec.blockOutputs et bt ≃
       Eff.Spec.blockOutputs (forget et) (blockIso et bt)
 ```
+
+`Es` and `Et` contain fully applied operation requests, including their
+operands, so `forget` transports the entire request.
 
 The target-to-source map is total. Compilation in the other direction is
 partial:
@@ -554,7 +552,6 @@ The constructor shapes are:
 
 | op
     (et : Et)
-    (targetInput : Eff.Spec.input et)
     (sourceBlocks :
       (st : Eff.Spec.blockTag (P.forget et)) →
       Eff.Spec.blockInputs (P.forget et) st →
@@ -574,14 +571,12 @@ The constructor shapes are:
       source.observe =
         Eff.Step.op
           (P.forget et)
-          (P.inputIso et targetInput)
           sourceBlocks
           sourceK)
     (htarget :
       evalCo _ target =
         Eff.Step.op
           et
-          targetInput
           targetBlocks
           targetK)
     (continuations :
