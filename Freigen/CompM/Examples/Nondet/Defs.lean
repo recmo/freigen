@@ -8,29 +8,38 @@ inductive Eff : Type
 | rand
 | print
 
-instance : Eff.Spec Eff where
+abbrev Effects : Unit → Type := fun _ => Eff
+abbrev Stack := Eff.Tau ⊕ₑ Effects
+
+instance : Eff.Spec Effects where
   input
-    | .rand => Unit
-    | .print => ℤ
+    | _, .rand => Unit
+    | _, .print => ℤ
   output
-    | .rand => ℤ
-    | .print => Unit
-  blockTag := fun _ => Empty
+    | _, .rand => ℤ
+    | _, .print => Unit
+  blockTag := fun _ _ => Empty
+  blockCtx := nofun
   blockInputs := nofun
   blockOutputs := nofun
 
 end Nondet
 
-abbrev Nondet α := CompM (Eff.Tau ⊕ Nondet.Eff) α
+abbrev Nondet α := CompM Nondet.Stack () α
 
 namespace Nondet
 
-def rand : Nondet ℤ := CompM.op (E := Eff.Tau ⊕ Eff) (Sum.inr Eff.rand) () nofun
-def print (z : ℤ) : Nondet Unit := CompM.op (E := Eff.Tau ⊕ Eff) (Sum.inr Eff.print) z nofun
+def rand : Nondet ℤ :=
+  CompM.op (E := Stack) (Sum.inr Eff.rand) () nofun
+
+def print (z : ℤ) : Nondet Unit :=
+  CompM.op (E := Stack) (Sum.inr Eff.print) z nofun
 
 def approxWith {α} (entropy : ℕ → ℤ) (t : Nondet α) (n: Nat): List ℤ :=
   go (entropy, 0) n ((t.run pure).approx n) where
-  go : (ℕ → ℤ) × ℕ → (n : Nat) → IxPoly.M.Approx (Eff.Step $ Eff.Tau ⊕ Eff) n α → List ℤ := fun entropy n approx => match n, approx with
+  go : (ℕ → ℤ) × ℕ → (n : Nat) →
+      IxPoly.M.Approx (Eff.Step Unit Stack) n ((), α) →
+      List ℤ := fun entropy n approx => match n, approx with
    | 0, IxPoly.M.Approx.zero _ => []
    | n+1, IxPoly.M.Approx._succ _ _ p k => match p with
      | .ret _ => []

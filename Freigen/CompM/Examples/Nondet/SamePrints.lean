@@ -149,14 +149,16 @@ protected theorem ret {α β : Type} {x : α} {y : β} {R : α → β → Prop} 
 
 /-! ### Inverting nondeterministic choice -/
 
-private def isRand {α} : Eff.NodeTag (Eff.Tau ⊕ Nondet.Eff) α → Bool
+private def isRand {α} :
+    Eff.NodeTag Unit Nondet.Stack () α → Bool
   | .op (.inr .rand) _ => true
   | _ => false
 
 private def isRandHead {α} (t : Nondet α) : Bool :=
   isRand (ITree.observe (t.run pure)).1
 
-private def printValue {α} : Eff.NodeTag (Eff.Tau ⊕ Nondet.Eff) α → Option ℤ
+private def printValue {α} :
+    Eff.NodeTag Unit Nondet.Stack () α → Option ℤ
   | .op (.inr .print) z => some z
   | _ => none
 
