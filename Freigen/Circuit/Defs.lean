@@ -92,10 +92,14 @@ def assert_spread {F W} (n : Nat) (a b : W) : Circuit F W Unit :=
 def one {F W} : Circuit F W W :=
   Free.op (E := Circuit.Eff W F) (γ := .constraint) .one PUnit.unit nofun
 
-def hint {F W α} (n : Nat) (args : Vector W n) (h : Hint F W α) : Circuit F W α :=
-  Free.op (E := Circuit.Eff W F) (γ := .constraint) (.hint n α) args fun _ _ => h
+def hint {F W α} (n : Nat) (args : Vector W n)
+    (h : Vector F n → Hint F W α) : Circuit F W α :=
+  Free.op (E := Circuit.Eff W F) (γ := .constraint) (.hint n α) args
+    (fun _ inputs => h inputs)
 
 def write_witness {F W} (a : F) : Hint F W W :=
   Free.op (E := Circuit.Eff W F) (γ := .hint) .write_witness a nofun
+
+-- def runWithHints {F} (c : Circuit F F α) : Option α :=
 
 end Freigen.Circuit
