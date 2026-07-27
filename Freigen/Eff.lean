@@ -83,6 +83,14 @@ instance : Spec Tau where
   blockInputs := fun _ => nofun
   blockOutputs := fun _ => nofun
 
+structure Fail : Type u
+instance : Spec Fail where
+  input := fun _ => PUnit
+  output := fun _ => PEmpty
+  blockTag := fun _ => PEmpty
+  blockInputs := fun _ => nofun
+  blockOutputs := fun _ => nofun
+
 namespace Step
 
 def ret {E α Y} [Spec E] (x : α) : Step E Y α := ⟨.ret x, fun a => PEmpty.elim a⟩
@@ -155,6 +163,7 @@ def Has.op {E F α Y} [s: Spec E] [s': Spec F] [h: Has F E] (e : F) (inp : s'.in
 
 def tau {E α Y} [Spec E] [Has Tau E] (x : Y α) : Step E Y α := Has.op Tau.mk () nofun (fun () => x)
 
+def fail {E α Y} [Spec E] [Has Fail E] : Step E Y α := Has.op Fail.mk () nofun nofun
 
 protected def casesOn {E Y} [Spec E] { motive : (α : Type _) → Step E Y α → Sort* } {α} (x : Step E Y α)
     (ret : ∀ {α} x, motive α (ret x))

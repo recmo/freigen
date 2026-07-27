@@ -431,4 +431,19 @@ theorem loop_bind {α β γ : Type}
 
 end Loops
 
+section Fail
+
+variable [Eff.Has Eff.Fail E]
+def fail {α} : ITree E α := roll $ Eff.Step.fail
+
+@[simp]
+theorem fail_bind {α β : Type} {f : α → ITree E β} : fail >>= f = fail := by
+  apply observe.injective
+  simp only [fail, Eff.Step.fail, hasOp_bind, observe_roll]
+  congr
+  ext o
+  cases o
+
+end Fail
+
 end Freigen.ITree

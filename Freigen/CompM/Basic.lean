@@ -23,6 +23,9 @@ private theorem bind_def {α β : Type _} (x : CompM E α) (f : α → CompM E �
   rfl
 
 def tick [Eff.Has Eff.Tau E] : CompM E Unit := ⟨fun f => ITree.tau (f ()), by simp⟩
+
+def fail [Eff.Has Eff.Fail E] : CompM E α := ⟨fun f => ITree.fail, by simp⟩
+
 def op (e : E) (inp : eS.input e)
     (blocks : (t : eS.blockTag e) → eS.blockInputs e t → CompM E (eS.blockOutputs e t)): CompM E (eS.output e) :=
   ⟨fun f => ITree.op e inp (fun t i => (blocks t i).run pure) f, by simp⟩
