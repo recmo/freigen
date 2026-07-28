@@ -110,4 +110,165 @@ instance : LawfulMonad (Free E γ) :=
     (LawfulMonad (ExactCodensity
       (fun α : Type v => IxPoly.W (Eff.Step Γ E) (γ, α))))
 
+private def wInterp
+    {M : Γ → Type v → Type w}
+    (monadM : (γ : Γ) → Monad (M γ))
+    (handler : Eff.Handler E M) :
+    {i : Γ × Type v} →
+    IxPoly.W (Eff.Step Γ E) i →
+    M i.1 i.2
+  | (γ, _), .mk _ p children =>
+    match p with
+    | .ret x =>
+      letI := monadM γ
+      pure x
+    | .op e =>
+      letI := monadM γ
+      handler e
+        (fun t input =>
+          wInterp monadM handler (children (.inr ⟨t, input⟩))) >>=
+        fun output =>
+          wInterp monadM handler (children (.inl output))
+
+private theorem wInterp_wBind
+    {M : Γ → Type v → Type w}
+    (monadM : (γ : Γ) → Monad (M γ))
+    (lawfulM : (γ : Γ) → @LawfulMonad (M γ) (monadM γ))
+    (handler : Eff.Handler E M)
+    {i : Γ × Type v} {β : Type v}
+    (x : IxPoly.W (Eff.Step Γ E) i)
+    (f : i.2 → IxPoly.W (Eff.Step Γ E) (i.1, β)) :
+    wInterp monadM handler (wBind x f) =
+      @Bind.bind (M i.1) (monadM i.1).toBind _ _
+        (wInterp monadM handler x)
+        (fun a =>
+          wInterp (i := (i.1, β)) monadM handler (f a)) := by
+  induction x with
+  | mk i p children ih =>
+    rcases i with ⟨γ, α⟩
+    cases p with
+    | ret x =>
+      simp only [wBind, wInterp]
+      letI := monadM γ
+      letI := lawfulM γ
+      simp
+    | op e =>
+      rw [wBind]
+      simp only [wInterp]
+      letI := monadM γ
+      letI := lawfulM γ
+      rw [bind_assoc]
+      congr 1
+      funext output
+      exact ih (.inl output) f
+
+private theorem wInterp_wOp
+    {M : Γ → Type v → Type w}
+    (monadM : (γ : Γ) → Monad (M γ))
+    (lawfulM : (γ : Γ) → @LawfulMonad (M γ) (monadM γ))
+    (handler : Eff.Handler E M)
+    {γ : Γ}
+    (e : E γ)
+    (blocks :
+      (t : eS.blockTag γ e) →
+      eS.blockInputs γ e t →
+      IxPoly.W (Eff.Step Γ E)
+        (eS.blockCtx γ e t, eS.blockOutputs γ e t)) :
+    wInterp monadM handler (wOp e blocks) =
+      handler e (fun t input =>
+        wInterp monadM handler (blocks t input)) := by
+  letI := monadM γ
+  letI := lawfulM γ
+  change
+    (handler e (fun t input =>
+      wInterp monadM handler (blocks t input)) >>= pure) =
+    handler e (fun t input =>
+      wInterp monadM handler (blocks t input))
+  rw [bind_pure]
+
+def Free.interp
+    {M : Γ → Type v → Type w}
+    [monadM : (γ : Γ) → Monad (M γ)]
+    (handler : Eff.Handler E M)
+    (x : Free E γ α) :
+    M γ α :=
+  wInterp monadM handler (ExactCodensity.equiv x)
+
+@[simp]
+theorem Free.interp_pure
+    {M : Γ → Type v → Type w}
+    [monadM : (γ : Γ) → Monad (M γ)]
+    (handler : Eff.Handler E M)
+    (x : α) :
+    Free.interp handler (pure x : Free E γ α) =
+      @pure (M γ) (monadM γ).toApplicative.toPure α x :=
+  rfl
+
+@[simp]
+theorem Free.interp_bind
+    {M : Γ → Type v → Type w}
+    [monadM : (γ : Γ) → Monad (M γ)]
+    [lawfulM : (γ : Γ) → @LawfulMonad (M γ) (monadM γ)]
+    (handler : Eff.Handler E M)
+    (x : Free E γ α)
+    (f : α → Free E γ β) :
+    Free.interp handler (x >>= f) =
+      @Bind.bind (M γ) (monadM γ).toBind _ _
+        (Free.interp handler x)
+        (fun a => Free.interp handler (f a)) := by
+  let lower {δ : Type v} (y : Free E γ δ) :
+      IxPoly.W (Eff.Step Γ E) (γ, δ) :=
+    ExactCodensity.equiv y
+  have hExact :
+      x.run (fun a => lower (f a)) =
+        wBind (lower x) (fun a => lower (f a)) :=
+    (x.exact _).symm
+  calc
+    Free.interp handler (x >>= f) =
+        wInterp monadM handler
+          (x.run fun a => lower (f a)) := rfl
+    _ = wInterp monadM handler
+          (wBind (lower x) (fun a => lower (f a))) :=
+      congrArg (wInterp monadM handler) hExact
+    _ = @Bind.bind (M γ) (monadM γ).toBind _ _
+          (Free.interp handler x)
+          (fun a => Free.interp handler (f a)) :=
+      wInterp_wBind monadM lawfulM handler
+        (lower x)
+        (fun a => lower (f a))
+
+@[simp]
+theorem Free.interp_op
+    {M : Γ → Type v → Type w}
+    [monadM : (γ : Γ) → Monad (M γ)]
+    [lawfulM : (γ : Γ) → @LawfulMonad (M γ) (monadM γ)]
+    (handler : Eff.Handler E M)
+    (e : E γ)
+    (blocks :
+      (t : eS.blockTag γ e) →
+      eS.blockInputs γ e t →
+      Free E (eS.blockCtx γ e t) (eS.blockOutputs γ e t)) :
+    Free.interp handler (Free.op e blocks) =
+      handler e (fun t input =>
+        Free.interp handler (blocks t input)) := by
+  have hOp :
+      ExactCodensity.equiv (Free.op e blocks) =
+        wOp e (fun t input =>
+          ExactCodensity.equiv (blocks t input)) :=
+    ExactCodensity.equiv.apply_symm_apply _
+  letI := monadM γ
+  letI := lawfulM γ
+  calc
+    Free.interp handler (Free.op e blocks) =
+        wInterp monadM handler
+          (ExactCodensity.equiv (Free.op e blocks)) := rfl
+    _ = wInterp monadM handler
+          (wOp e (fun t input =>
+            ExactCodensity.equiv (blocks t input))) :=
+      congrArg (wInterp monadM handler) hOp
+    _ = handler e (fun t input =>
+          Free.interp handler (blocks t input)) :=
+      wInterp_wOp monadM lawfulM handler e
+        (fun t input => ExactCodensity.equiv (blocks t input))
+
 end Freigen

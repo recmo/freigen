@@ -9,6 +9,17 @@ class Spec {Γ : Type u} (tag : Γ → Type u) where
   blockInputs : (γ : Γ) → (t : tag γ) → blockTag γ t → Type v
   blockOutputs : (γ : Γ) → (t : tag γ) → blockTag γ t → Type v
 
+abbrev Handler
+    {Γ : Type u}
+    (E : Γ → Type u) [s : Spec.{u, v} E]
+    (M : Γ → Type v → Type w) :=
+  {γ : Γ} →
+  (e : E γ) →
+  ((t : s.blockTag γ e) →
+    s.blockInputs γ e t →
+    M (s.blockCtx γ e t) (s.blockOutputs γ e t)) →
+  M γ (s.output γ e)
+
 inductive NodeTag (Γ : Type u) (T : Γ → Type u) [s : Spec.{u, v} T]
     (γ : Γ) (R : Type v) : Type (max u v) where
 | ret : R → NodeTag Γ T γ R
