@@ -1,4 +1,5 @@
 import Freigen.CompM.Basic
+import Freigen.Circuit.Context
 import Freigen.Eff
 import Freigen.Free
 
@@ -8,91 +9,100 @@ inductive Scope : Type u where
 | constraint
 | hint
 
-inductive ConstraintEff (W : Type) where
-| assert_r1c (a b c : W)
-| rangecheck (n : Nat) (a : W)
-| assert_spread (n : Nat) (a b : W)
-| one
-| hint (n : Nat) (α : Type) (args : Vector W n)
+inductive ConstraintEff (F : Type) (ctx : Context F) where
+| assertR1C (a b c : ctx.W)
+| rangeCheck (n : Nat) (a : ctx.W)
+| assertSpread (n : Nat) (a b : ctx.W)
+| hint (n : Nat) (α : Type) (args : Vector ctx.W n)
 
-inductive HintEff (F : Type) : Type u where
-| write_witness (a : F)
+inductive HintEff (F : Type) (ctx : Context F) : Type u where
+| writeWitness (a : F)
 
-def Eff (W F : Type) : Scope → Type _
-| .constraint => ConstraintEff W
-| .hint => HintEff F
+def Eff (F : Type) (ctx : Context F) : Scope → Type _
+| .constraint => ConstraintEff F ctx
+| .hint => HintEff F ctx
 
-instance {W F} : Freigen.Eff.Spec (Γ := Scope) (Eff W F) where
+instance {F : Type} [ctx : Context F] :
+    Freigen.Eff.Spec (Γ := Scope) (Eff F ctx) where
   output := fun
-  | .constraint, .assert_r1c _ _ _ => Unit
-  | .constraint, .rangecheck _ _ => Unit
-  | .constraint, .assert_spread _ _ _ => Unit
-  | .constraint, .one => W
+  | .constraint, .assertR1C a b c => Cert (R1CSAssertion a b c)
+  | .constraint, .rangeCheck n a => Cert (RangeAssertion n a)
+  | .constraint, .assertSpread n a b => Cert (SpreadAssertion n a b)
   | .constraint, .hint _ α _ => α
-  | .hint, .write_witness _ => W
+  | .hint, .writeWitness _ => ctx.W
   blockTag := fun
-  | .constraint, .assert_r1c _ _ _ => PEmpty
-  | .constraint, .rangecheck _ _ => PEmpty
-  | .constraint, .assert_spread _ _ _ => PEmpty
-  | .constraint, .one => PEmpty
+  | .constraint, .assertR1C _ _ _ => PEmpty
+  | .constraint, .rangeCheck _ _ => PEmpty
+  | .constraint, .assertSpread _ _ _ => PEmpty
   | .constraint, .hint _ _ _ => PUnit
-  | .hint, .write_witness _ => PEmpty
+  | .hint, .writeWitness _ => PEmpty
   blockCtx := fun
-  | .constraint, .assert_r1c _ _ _ => nofun
-  | .constraint, .rangecheck _ _ => nofun
-  | .constraint, .assert_spread _ _ _ => nofun
-  | .constraint, .one => nofun
+  | .constraint, .assertR1C _ _ _ => nofun
+  | .constraint, .rangeCheck _ _ => nofun
+  | .constraint, .assertSpread _ _ _ => nofun
   | .constraint, .hint _ _ _ => fun _ => .hint
-  | .hint, .write_witness _ => nofun
+  | .hint, .writeWitness _ => nofun
   blockInputs := fun
-  | .constraint, .assert_r1c _ _ _ => nofun
-  | .constraint, .rangecheck _ _ => nofun
-  | .constraint, .assert_spread _ _ _ => nofun
-  | .constraint, .one => nofun
+  | .constraint, .assertR1C _ _ _ => nofun
+  | .constraint, .rangeCheck _ _ => nofun
+  | .constraint, .assertSpread _ _ _ => nofun
   | .constraint, .hint n _ _ => fun _ => Vector F n
-  | .hint, .write_witness _ => nofun
+  | .hint, .writeWitness _ => nofun
   blockOutputs := fun
-  | .constraint, .assert_r1c _ _ _ => nofun
-  | .constraint, .rangecheck _ _ => nofun
-  | .constraint, .assert_spread _ _ _ => nofun
-  | .constraint, .one => nofun
+  | .constraint, .assertR1C _ _ _ => nofun
+  | .constraint, .rangeCheck _ _ => nofun
+  | .constraint, .assertSpread _ _ _ => nofun
   | .constraint, .hint _ α _ => fun _ => α
-  | .hint, .write_witness _ => nofun
+  | .hint, .writeWitness _ => nofun
 
 end Circuit
 
-def Circuit (F : Type) (W : Type) : Type → Type _ := Free (Circuit.Eff W F) .constraint
+def Circuit (F : Type) [ctx : Circuit.Context F] : Type → Type _ :=
+  Free (Circuit.Eff F ctx) .constraint
 
-instance {F W} : Monad (Circuit F W) := inferInstanceAs (Monad (Free (Circuit.Eff W F) .constraint))
-instance {F W} : LawfulMonad (Circuit F W) := inferInstanceAs (LawfulMonad (Free (Circuit.Eff W F) .constraint))
+instance {F : Type} [ctx : Circuit.Context F] : Monad (Circuit F) :=
+  inferInstanceAs (Monad (Free (Circuit.Eff F ctx) .constraint))
+
+instance {F : Type} [ctx : Circuit.Context F] : LawfulMonad (Circuit F) :=
+  inferInstanceAs (LawfulMonad (Free (Circuit.Eff F ctx) .constraint))
 
 namespace Circuit
 
-def Hint (F : Type) (W : Type) : Type → Type _ := Free (Circuit.Eff W F) .hint
+variable {F : Type} [ctx : Context F]
 
-instance {F W} : Monad (Hint F W) := inferInstanceAs (Monad (Free (Circuit.Eff W F) .hint))
-instance {F W} : LawfulMonad (Hint F W) := inferInstanceAs (LawfulMonad (Free (Circuit.Eff W F) .hint))
+def Hint (F : Type) [ctx : Context F] : Type → Type _ :=
+  Free (Circuit.Eff F ctx) .hint
 
-def assert_r1c {F W} (a b c : W) : Circuit F W Unit :=
-  Free.op (E := Circuit.Eff W F) (γ := .constraint) (.assert_r1c a b c) nofun
+instance : Monad (Hint F) :=
+  inferInstanceAs (Monad (Free (Circuit.Eff F ctx) .hint))
 
-def rangecheck {F W} (n : Nat) (a : W) : Circuit F W Unit :=
-  Free.op (E := Circuit.Eff W F) (γ := .constraint) (.rangecheck n a) nofun
+instance : LawfulMonad (Hint F) :=
+  inferInstanceAs (LawfulMonad (Free (Circuit.Eff F ctx) .hint))
 
-def assert_spread {F W} (n : Nat) (a b : W) : Circuit F W Unit :=
-  Free.op (E := Circuit.Eff W F) (γ := .constraint) (.assert_spread n a b) nofun
+def assertR1C (a b c : ctx.W) :
+    Circuit F (Cert (R1CSAssertion a b c)) :=
+  Free.op (E := Circuit.Eff F ctx) (γ := .constraint)
+    (.assertR1C a b c) nofun
 
-def one {F W} : Circuit F W W :=
-  Free.op (E := Circuit.Eff W F) (γ := .constraint) .one nofun
+def rangeCheck (n : Nat) (a : ctx.W) : Circuit F (WUInt F n) := do
+  let cert ←
+    Free.op (E := Circuit.Eff F ctx) (γ := .constraint)
+      (.rangeCheck n a) nofun
+  pure ⟨a, cert⟩
 
-def hint {F W α} (n : Nat) (args : Vector W n)
-    (h : Vector F n → Hint F W α) : Circuit F W α :=
-  Free.op (E := Circuit.Eff W F) (γ := .constraint) (.hint n α args)
+def assertSpread (n : Nat) (a b : ctx.W) :
+    Circuit F (Cert (SpreadAssertion n a b)) :=
+  Free.op (E := Circuit.Eff F ctx) (γ := .constraint)
+    (.assertSpread n a b) nofun
+
+def hint {α} (n : Nat) (args : Vector ctx.W n)
+    (h : Vector F n → Hint F α) : Circuit F α :=
+  Free.op (E := Circuit.Eff F ctx) (γ := .constraint) (.hint n α args)
     (fun _ inputs => h inputs)
 
-def write_witness {F W} (a : F) : Hint F W W :=
-  Free.op (E := Circuit.Eff W F) (γ := .hint) (.write_witness a) nofun
+def writeWitness (a : F) : Hint F ctx.W :=
+  Free.op (E := Circuit.Eff F ctx) (γ := .hint) (.writeWitness a) nofun
 
--- def runWithHints {F} (c : Circuit F F α) : Option α :=
+-- def runWithHints (c : Circuit F α) : Option α :=
 
 end Freigen.Circuit
