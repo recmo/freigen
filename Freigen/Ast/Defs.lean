@@ -1,172 +1,241 @@
--- import Freigen.Eff
--- import Freigen.CompM.Basic
+import Freigen.Eff
+import Freigen.Free
+import Freigen.CompM.Basic
 
--- namespace Freigen.Ast
+namespace Freigen.Ast
 
--- inductive Tp
--- | uInt32
--- | int32
--- | bool
--- | array (tp : Tp)
--- | unit
--- | prod (fst : Tp) (snd : Tp)
--- | fn (inp : Tp) (out : Tp)
--- deriving BEq, ReflBEq, LawfulBEq, DecidableEq
+/-- Object-language types. -/
+inductive Tp
+| uInt32
+| int32
+| bool
+| array (tp : Tp)
+| unit
+| prod (fst : Tp) (snd : Tp)
+| fn (inp : Tp) (out : Tp)
+deriving BEq, ReflBEq, LawfulBEq, DecidableEq
 
--- def FnRef : Type := Nat
+def FnRef : Type := Nat
 
--- abbrev Tp.denote : Tp → Type
--- | .uInt32 => UInt32
--- | .int32 => Int32
--- | .bool => Bool
--- | .array tp => Array (Tp.denote tp)
--- | .unit => Unit
--- | .prod l r => l.denote × r.denote
--- | .fn _ _ => Nat
+abbrev Tp.denote : Tp → Type
+| .uInt32 => UInt32
+| .int32 => Int32
+| .bool => Bool
+| .array tp => Array (Tp.denote tp)
+| .unit => Unit
+| .prod l r => l.denote × r.denote
+| .fn _ _ => FnRef
 
--- def Tp.listProd : List Tp → Tp
--- | [] => .unit
--- | tp :: tps => .prod tp (Tp.listProd tps)
+def Tp.listProd : List Tp → Tp
+| [] => .unit
+| tp :: tps => .prod tp (Tp.listProd tps)
 
--- inductive IsAbiTp : Tp → Prop
--- | uInt32 : IsAbiTp Tp.uInt32
--- | int32 : IsAbiTp Tp.int32
--- | bool : IsAbiTp Tp.bool
--- | array {tp} : IsAbiTp tp → IsAbiTp (Tp.array tp)
--- | prod {fst snd} : IsAbiTp fst → IsAbiTp snd → IsAbiTp (Tp.prod fst snd)
+inductive IsAbiTp : Tp → Prop
+| uInt32 : IsAbiTp .uInt32
+| int32 : IsAbiTp .int32
+| bool : IsAbiTp .bool
+| array {tp} : IsAbiTp tp → IsAbiTp (Tp.array tp)
+| prod {fst snd} : IsAbiTp fst → IsAbiTp snd → IsAbiTp (Tp.prod fst snd)
 
--- abbrev AbiTp := {tp : Tp // IsAbiTp tp}
+abbrev AbiTp := {tp : Tp // IsAbiTp tp}
 
--- abbrev AbiTp.uInt32 : AbiTp := ⟨.uInt32, .uInt32⟩
--- abbrev AbiTp.int32 : AbiTp := ⟨.int32, .int32⟩
--- abbrev AbiTp.bool : AbiTp := ⟨.bool, .bool⟩
--- abbrev AbiTp.array (tp : AbiTp) : AbiTp := ⟨.array tp.val, .array tp.property⟩
--- abbrev AbiTp.prod (fst snd : AbiTp) : AbiTp := ⟨.prod fst.val snd.val, .prod fst.property snd.property⟩
+abbrev AbiTp.uInt32 : AbiTp := ⟨.uInt32, .uInt32⟩
+abbrev AbiTp.int32 : AbiTp := ⟨.int32, .int32⟩
+abbrev AbiTp.bool : AbiTp := ⟨.bool, .bool⟩
+abbrev AbiTp.array (tp : AbiTp) : AbiTp :=
+  ⟨.array tp.val, .array tp.property⟩
+abbrev AbiTp.prod (fst snd : AbiTp) : AbiTp :=
+  ⟨.prod fst.val snd.val, .prod fst.property snd.property⟩
 
--- structure EffSig where
---   tag : Type u
---   input : tag → AbiTp
---   output : tag → AbiTp
---   blockTag : tag → Type u
---   blockInputs : (t : tag) → blockTag t → AbiTp
---   blockOutputs : (t : tag) → blockTag t → AbiTp
+structure EffSig where
+  Ctx : Type u
+  [decidableEqCtx : DecidableEq Ctx]
+  tag : Ctx → Type u
+  input : (γ : Ctx) → tag γ → AbiTp
+  output : (γ : Ctx) → tag γ → AbiTp
+  blockTag : (γ : Ctx) → tag γ → Type u
+  blockCtx : (γ : Ctx) → (e : tag γ) → blockTag γ e → Ctx
+  blockInputs : (γ : Ctx) → (e : tag γ) → blockTag γ e → AbiTp
+  blockOutputs : (γ : Ctx) → (e : tag γ) → blockTag γ e → AbiTp
 
--- instance EffSig.denote (s : EffSig) : Eff.Spec s.tag where
---   input := fun t => (s.input t).val.denote
---   output := fun t => (s.output t).val.denote
---   blockTag := s.blockTag
---   blockInputs := fun t b => (s.blockInputs t b).val.denote
---   blockOutputs := fun t b => (s.blockOutputs t b).val.denote
+attribute [instance] EffSig.decidableEqCtx
 
--- inductive Builtin : List Tp → Tp → Type
--- | uAdd : Builtin [.uInt32, .uInt32] .uInt32
--- | uSub : Builtin [.uInt32, .uInt32] .uInt32
--- | uMul : Builtin [.uInt32, .uInt32] .uInt32
--- | uDiv : Builtin [.uInt32, .uInt32] .uInt32
+/-- Pull the syntactic signature back along `Tp.denote`; inputs live in tags. -/
+def EffSig.denote (s : EffSig) : s.Ctx → Type u :=
+  fun γ => Σ e : s.tag γ, (s.input γ e).val.denote
 
--- | uEq : Builtin [.uInt32, .uInt32] .bool
--- | uLt : Builtin [.uInt32, .uInt32] .bool
+instance EffSig.denoteSpec (s : EffSig) : Eff.Spec s.denote where
+  output := fun γ ⟨e, _⟩ => (s.output γ e).val.denote
+  blockTag := fun γ ⟨e, _⟩ => s.blockTag γ e
+  blockCtx := fun γ ⟨e, _⟩ => s.blockCtx γ e
+  blockInputs := fun γ ⟨e, _⟩ b => (s.blockInputs γ e b).val.denote
+  blockOutputs := fun γ ⟨e, _⟩ b => (s.blockOutputs γ e b).val.denote
 
--- inductive Expr (eff : EffSig) (Var : Tp → Type) : Tp → Type where
--- | ret {tp} : Var tp → Expr eff Var tp
--- | lit {outK} : (tp : AbiTp) → (v : tp.val.denote) →
---     (Var tp → Expr eff Var outK) → Expr eff Var outK
--- | builtin {inp out outK} : (b : Builtin inp out) → Var (Tp.listProd inp) →
---     (Var out → Expr eff Var outK) → Expr eff Var outK
--- | lam {inp out outK} : (Var inp → Expr eff Var out) →
---     (Var (.fn inp out) → Expr eff Var outK) → Expr eff Var outK
--- | app {inp out outK} : (f : Var (.fn inp out)) → (x : Var inp) →
---     (Var out → Expr eff Var outK) → Expr eff Var outK
--- | ite {outK} : (c : Var Tp.bool) → (t e : Expr eff Var outK) →
---     (Var outK → Expr eff Var outK) → Expr eff Var outK
--- | loop {c outK} : (body : Var c → Expr eff Var (Tp.prod c Tp.bool)) →
---     (init : Var c) →
---     (Var c → Expr eff Var outK) → Expr eff Var outK
--- | op {outK} : (e : eff.tag) → (inp : Var (eff.input e)) →
---     (blocks : (b : eff.blockTag e) → Var (eff.blockInputs e b) → Expr eff Var (eff.blockOutputs e b)) →
---     (Var (eff.output e) → Expr eff Var outK) → Expr eff Var outK
+abbrev SourceM (eff : EffSig) (γ : eff.Ctx) (α : Type) :=
+  Free eff.denote γ α
 
--- inductive Program (eff : EffSig) (mainInput : AbiTp) (mainOutput : AbiTp) (Var : Tp → Type) : Type where
--- | define {inp out} : (Var (.fn inp out) → Var inp → Expr eff Var out) →
---     (Var (.fn inp out) → Program eff mainInput mainOutput Var) → Program eff mainInput mainOutput Var
--- | main : (Var mainInput.val → Expr eff Var mainOutput.val) → Program eff mainInput mainOutput Var
+abbrev EvalEff (eff : EffSig) : eff.Ctx → Type u :=
+  Eff.Tau ⊕ₑ (Eff.Fail ⊕ₑ eff.denote)
 
--- structure ProgramState (eff : EffSig) where
---   next : Nat
---   env : Std.HashMap Nat (Σ i o, Tp.denote i → Expr eff Tp.denote o)
+abbrev EvalM (eff : EffSig) (γ : eff.Ctx) (α : Type) :=
+  CompM (EvalEff eff) γ α
 
--- def ProgramState.empty (eff : EffSig) : ProgramState eff where
---   next := 0
---   env := default
+inductive Builtin : List Tp → Tp → Type
+| uAdd : Builtin [.uInt32, .uInt32] .uInt32
+| uSub : Builtin [.uInt32, .uInt32] .uInt32
+| uMul : Builtin [.uInt32, .uInt32] .uInt32
+| uDiv : Builtin [.uInt32, .uInt32] .uInt32
 
--- def ProgramState.alloc {eff : EffSig} {i o : Tp} (s : ProgramState eff)
---     (f : Tp.denote (.fn i o) → Tp.denote i → Expr eff Tp.denote o) : (ProgramState eff × Nat) :=
---   let id := s.next
---   let s' : ProgramState eff := { s with next := id + 1, env := s.env.insert id ⟨i, o, f id⟩ }
---   (s', id)
+| uEq : Builtin [.uInt32, .uInt32] .bool
+| uLt : Builtin [.uInt32, .uInt32] .bool
 
--- def ProgramState.lookup {E : Type u} [Eff.Spec E] [Eff.Has Eff.Fail E] {eff : EffSig} {i o : Tp} (s : ProgramState eff):
---     Tp.denote (.fn i o) → CompM E (Tp.denote i → Expr eff Tp.denote o) := fun f => match s.env.get? f with
---   | none => CompM.fail
---   | some ⟨i', o', f⟩ => if h: i = i' ∧ o = o' then pure $ h.1 ▸ h.2 ▸ f else CompM.fail
+inductive Expr
+    (eff : EffSig) (Var : Tp → Type) :
+    (γ : eff.Ctx) → Tp → Type where
+| ret {γ tp} : Var tp → Expr eff Var γ tp
+| lit {γ outK} : (tp : AbiTp) → (v : tp.val.denote) →
+    (Var tp → Expr eff Var γ outK) → Expr eff Var γ outK
+| builtin {γ inp out outK} :
+    (b : Builtin inp out) → Var (Tp.listProd inp) →
+    (Var out → Expr eff Var γ outK) → Expr eff Var γ outK
+| lam {γ inp out outK} : (Var inp → Expr eff Var γ out) →
+    (Var (.fn inp out) → Expr eff Var γ outK) → Expr eff Var γ outK
+| app {γ inp out outK} : (f : Var (.fn inp out)) → (x : Var inp) →
+    (Var out → Expr eff Var γ outK) → Expr eff Var γ outK
+| ite {γ out outK} : (c : Var .bool) → (t e : Expr eff Var γ out) →
+    (Var out → Expr eff Var γ outK) → Expr eff Var γ outK
+| loop {γ c outK} :
+    (body : Var c → Expr eff Var γ (Tp.prod c .bool)) →
+    (init : Var c) →
+    (Var c → Expr eff Var γ outK) → Expr eff Var γ outK
+| op {γ outK} : (e : eff.tag γ) → (inp : Var (eff.input γ e)) →
+    (blocks :
+      (b : eff.blockTag γ e) →
+      Var (eff.blockInputs γ e b) →
+      Expr eff Var (eff.blockCtx γ e b) (eff.blockOutputs γ e b)) →
+    (Var (eff.output γ e) → Expr eff Var γ outK) →
+    Expr eff Var γ outK
 
--- inductive ExprCont (eff : EffSig) : Tp → Tp → Type where
--- | pure : (i.denote → Expr eff Tp.denote o) → ExprCont eff i o
--- | bind : (i.denote → Expr eff Tp.denote o') → ExprCont eff o' o → ExprCont eff i o
+inductive Program
+    (eff : EffSig)
+    (mainCtx : eff.Ctx)
+    (mainInput mainOutput : AbiTp)
+    (Var : Tp → Type) : Type where
+| define {γ inp out} :
+    (Var (.fn inp out) → Var inp → Expr eff Var γ out) →
+    (Var (.fn inp out) →
+      Program eff mainCtx mainInput mainOutput Var) →
+    Program eff mainCtx mainInput mainOutput Var
+| main :
+    (Var mainInput.val → Expr eff Var mainCtx mainOutput.val) →
+    Program eff mainCtx mainInput mainOutput Var
 
--- abbrev EvalState (eff : EffSig) (o : Tp) := ProgramState eff × (Σ i, Tp.denote i × (Tp.denote i → Expr eff Tp.denote o))
+structure ProgramState (eff : EffSig) where
+  next : Nat
+  env :
+    Std.HashMap Nat
+      (Σ γ : eff.Ctx,
+        Σ i : Tp,
+        Σ o : Tp,
+          Tp.denote i → Expr eff Tp.denote γ o)
 
--- def Builtin.denote {i o} {eff : EffSig}: Builtin i o → Tp.denote (Tp.listProd i) → CompM (Eff.Tau ⊕ Eff.Fail ⊕ eff.tag) (Tp.denote o)
--- | uAdd, ⟨x, y, ()⟩ => pure (x + y)
--- | uSub, ⟨x, y, ()⟩ => pure (x - y)
--- | uMul, ⟨x, y, ()⟩ => pure (x * y)
--- | uDiv, ⟨x, y, ()⟩ => if y = 0 then pure 0 else pure (x / y)
--- | uEq, ⟨x, y, ()⟩ => pure (x = y)
--- | uLt, ⟨x, y, ()⟩ => pure (x < y)
+def ProgramState.empty (eff : EffSig) : ProgramState eff where
+  next := 0
+  env := default
 
--- mutual
+def ProgramState.alloc
+    {eff : EffSig} {γ : eff.Ctx} {i o : Tp}
+    (s : ProgramState eff)
+    (f :
+      Tp.denote (.fn i o) →
+      Tp.denote i →
+      Expr eff Tp.denote γ o) :
+    ProgramState eff × FnRef :=
+  let id := s.next
+  let s' : ProgramState eff := {
+    s with
+    next := id + 1
+    env := s.env.insert id ⟨γ, i, o, f id⟩
+  }
+  (s', id)
 
--- def Expr.denote {o} {eff : EffSig}: EvalState eff o →
---     CompM (Eff.Tau ⊕ Eff.Fail ⊕ eff.tag) (Tp.denote o) :=
---   CompM.loop (fun (heap, ⟨iT, inp, k⟩) => do
---     Expr.denoteUntilTau heap (k inp)
---   )
+def ProgramState.lookup
+    {eff : EffSig} {γ : eff.Ctx} {i o : Tp}
+    (s : ProgramState eff) :
+    Tp.denote (.fn i o) →
+    Option (Tp.denote i → Expr eff Tp.denote γ o) := fun x => do
+  let x ← s.env.get? x
+  match x with
+  | ⟨γ', i', o', body⟩ =>
+    if h : γ = γ' ∧ i = i' ∧ o = o' then
+      pure $ h.1 ▸ h.2.1 ▸ h.2.2 ▸ body
+    else
+      none
 
--- def Expr.denoteUntilTau {tp} {eff : EffSig}: ProgramState eff → Expr eff Tp.denote tp →
---     CompM (Eff.Tau ⊕ Eff.Fail ⊕ eff.tag) (EvalState eff tp ⊕ tp.denote)
--- | s, ret v => pure (.inr v)
--- | s, lit tp v k => Expr.denoteUntilTau s (k v)
--- | s, builtin b args k => b.denote args >>= fun v => Expr.denoteUntilTau s (k v)
--- | s, lam f k =>
---   let (s, l) := s.alloc (fun id x => f x)
---   Expr.denoteUntilTau s (k l)
--- | s, app f x k => do
---   let f ← s.lookup f
---   pure $ .inl ⟨s, ⟨_, x, fun r => ⟩⟩
--- | s, ite c t e k => if c then Expr.denoteUntilTau s t else Expr.denoteUntilTau s e
--- | s, loop body init k => do sorry
+inductive ExprCont
+    (eff : EffSig) (γ : eff.Ctx) :
+    Tp → Tp → Type where
+| pure :
+    (i.denote → Expr eff Tp.denote γ o) →
+    ExprCont eff γ i o
+| bind :
+    (i.denote → Expr eff Tp.denote γ o') →
+    ExprCont eff γ o' o →
+    ExprCont eff γ i o
 
+-- abbrev EvalState
+--     (eff : EffSig) (γ : eff.Ctx) (o : Tp) :=
+--   ProgramState eff ×
+--     (Σ i : Tp, Tp.denote i ×
+--       (Tp.denote i → Expr eff Tp.denote γ o))
 
--- end
+inductive EvalState (eff : EffSig): eff.Ctx × Type → Type _ where
+| done {γ} {R}: R → EvalState eff (γ, R)
+| cont {γ} {R} {i : Tp}: ProgramState eff → Expr eff Tp.denote γ i →
+    (ProgramState eff → Tp.denote i → EvalState eff (γ, R)) → EvalState eff (γ, R)
 
---   -- let
+def Expr.denoteCo {eff} (i : eff.Ctx × Type) : EvalState eff i → Eff.Step eff.Ctx (Eff.Fail ⊕ₑ Eff.Tau ⊕ₑ eff.denote) (EvalState eff) i
+| .done v => Eff.Step.ret v
+| .cont s e k => match e with
+  | .ret v => Eff.Step.tau (k s v)
+  | .lit _ v k' => Eff.Step.tau (EvalState.cont s (k' v) k)
+  | .builtin b i k' => match b, i with
+    | .uAdd, ⟨x, y, ()⟩ => Eff.Step.tau (EvalState.cont s (k' (x + y)) k)
+    | .uSub, ⟨x, y, ()⟩ => Eff.Step.tau (EvalState.cont s (k' (x - y)) k)
+    | .uMul, ⟨x, y, ()⟩ => Eff.Step.tau (EvalState.cont s (k' (x * y)) k)
+    | .uDiv, ⟨x, y, ()⟩ => Eff.Step.tau (EvalState.cont s (k' (x / y)) k)
+    | .uEq, ⟨x, y, ()⟩ => Eff.Step.tau (EvalState.cont s (k' (x = y)) k)
+    | .uLt, ⟨x, y, ()⟩ => Eff.Step.tau (EvalState.cont s (k' (x < y)) k)
+  | .lam b k' =>
+    let (s', l) := s.alloc (fun _ x => b x)
+    Eff.Step.tau (EvalState.cont s' (k' l) k)
+  | .app f x k' => match s.lookup f with
+    | none => Eff.Step.fail
+    | some f => Eff.Step.tau (EvalState.cont s (f x) fun s' r => EvalState.cont s' (k' r) k)
+  | .ite c t e k' => Eff.Step.tau (EvalState.cont s (if c then t else e) fun s' r => EvalState.cont s' (k' r) k)
+  | .loop body init k' =>
+    -- `true` means "keep going"
+    Eff.Step.tau (EvalState.cont s (body init) fun s' r => match r with
+      | (next, true) => EvalState.cont s' (Expr.loop body next k') k
+      | (next, false) => EvalState.cont s' (k' next) k
+    )
+  | .op e inp blocks k' =>
+    Eff.Step.op (.inr $ .inr ⟨e, inp⟩) (fun tag inp =>
+      EvalState.cont s (blocks tag inp) fun _ r => EvalState.done r
+    ) fun o => EvalState.cont s (k' o) k
 
+def Expr.denote {eff} {γ : eff.Ctx} {o : Tp} (state : ProgramState eff) (expr : Expr eff Tp.denote γ o) :
+    CompM (Eff.Fail ⊕ₑ Eff.Tau ⊕ₑ eff.denote) γ (ProgramState eff × o.denote) :=
+  CompM.corec denoteCo (EvalState.cont state expr fun s r => EvalState.done (s, r))
 
--- def Program.denote {eff : EffSig} {i o : AbiTp} (state := ProgramState.empty eff) (p : Program eff i o Tp.denote) :
---     Tp.denote i → CompM (Eff.Tau ⊕ Eff.Fail ⊕ eff.tag) (Tp.denote o) := match p with
---   | .define f k =>
---     let (state', id) := state.alloc f
---     Program.denote state' (k id)
---   | .main f =>
---     fun x => do
---       let initialState : EvalState eff := (state, ⟨i, o, x, f⟩)
---       CompM.loop (fun (heap, ⟨iT, oT, inp, k⟩) => do
---         match k inp with
---         | .lit tp v k => pure $ .inl $ ⟨heap, ⟨tp, oT, v, k⟩⟩
+def Program.denote {eff} {γ} {iT oT} (p: Program eff γ iT oT Tp.denote) (i: iT.val.denote):
+    CompM (Eff.Fail ⊕ₑ Eff.Tau ⊕ₑ eff.denote) γ (ProgramState eff × oT.val.denote) :=
+  go (ProgramState.empty _) p where
+  go : ProgramState eff → Program eff γ iT oT Tp.denote →
+    CompM (Eff.Fail ⊕ₑ Eff.Tau ⊕ₑ eff.denote) γ (ProgramState eff × oT.val.denote) := fun s => fun
+  | .define body k =>
+    let (s', f) := s.alloc (fun f x => body f x)
+    go s' (k f)
+  | .main body => Expr.denote s (body i)
 
---       ) initialState
-
-
-
-
--- end Freigen.Ast
+end Freigen.Ast

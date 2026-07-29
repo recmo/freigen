@@ -4,87 +4,116 @@
 
 This document specifies the intended correctness interface between:
 
-1. a terminating source program in `Free`;
-2. the AST using the `Tp`-pulled-back effect signature;
-3. the corecursive AST evaluator, whose result is represented by `CompE`/`ITree`;
-4. a macro-generated correctness and termination certificate.
+1. a terminating source program in context-indexed `Free`;
+2. the context-indexed AST using an `EffSig`;
+3. the single corecursive AST evaluator into `CompM`;
+4. macro-generated correctness and termination certificates.
 
 The source and target deliberately use different recursion disciplines:
 
-- the source is an inductive `W` tree, wrapped in exact codensity as `Free`;
-- source structural or well-founded recursion carries a termination proof;
-- the compiler drops that recursor/proof structure;
-- the target evaluator is one productive corecursor into `ITree`;
-- the generated certificate recovers both semantic equivalence and target
+- the source is an inductive `W` tree wrapped in exact codensity as `Free`;
+- source structural or well-founded recursion carries termination evidence;
+- reflection drops that recursor or well-foundedness evidence;
+- the target evaluator is one productive corecursor exposed through `CompM`;
+- the generated certificate recovers semantic equivalence and target
   termination.
 
-There is no source `CompM`, no logical CPS computation type, and no
+There is no source `CompM`, no second logical CPS language, and no
 coinductive assumption for recursive source calls.
 
-## Executive summary
-
-```text
-source : Free Es A
-          │ Free.lower
-          ▼
-source : W (Eff.Step Es) A
-          │
-          │ inductive FreeEval certificate
-          ▼
-target evaluator state ────────────────► target ITree
-          │                                  │
-          ├── target is well-founded         │
-          │                                  │
-          └── heterogeneous Eutt ◄───────────┘
-                against Free.toITree source
-```
-
-The central judgment is therefore not a coinductive relation between two
-arbitrary `ITree`s. It is an inductive relation between:
-
-- the well-founded source `W` tree; and
-- a target evaluator state.
-
-That judgment may consume finitely many silent target steps before matching a
-source node. Its induction principle is exactly the resource needed to prove
-that the erased target has no infinite execution path.
-
-The main components are:
-
-- `Free.lower` and `W.toITree`;
-- `EffPullback`, relating the natural and pulled-back effects;
-- `HeapExtends` and heap-indexed `ValueRel`;
-- `FreeEval`, the inductive source-to-machine certificate;
-- `ExprCert.*`, syntax-directed construction rules;
-- `DefCert.structural` and `DefCert.wf`, which reuse source recursion proofs;
-- `ProgramCert.define/main`, which assemble a whole program;
-- public Eutt and termination consequences.
-
-The macro never unfolds the evaluator, heap implementation, Eutt, or the
-definition of `FreeEval`.
+This document uses signatures close to Lean, but suppresses universe
+parameters and routine implicit arguments.
 
 ---
 
-## 1. Source computations
+## 1. Indices and notation
+
+Effects are families over an explicit context type:
+
+```lean
+Γ  : Type
+Es : Γ → Type       -- natural source effects
+eff : EffSig        -- reflected target effects
+```
+
+The source and target use the same context type:
+
+```lean
+Γ := eff.Ctx
+```
+
+This is intentional. Pulling an effect signature back through `Tp.denote`
+changes operation payload representations, not the set of effect contexts.
+
+The important current types are:
+
+```lean
+Free  Es γ A
+CompM E  γ A
+
+Expr eff Var γ t
+Program eff mainCtx inputTp outputTp Var
+```
+
+`γ` is an effect context. It is not part of the object-language type:
+
+```lean
+Tp
+AbiTp
+Tp.denote : Tp → Type
+```
+
+The polynomial underlying `Free` and `CompM` is indexed by pairs:
+
+```lean
+Γ × Type
+```
+
+The first component is the current effect context. The second is the current
+semantic result type. An operation continuation stays in the enclosing
+context; an operation block may move to `blockCtx`.
+
+The target evaluator uses:
+
+```lean
+abbrev EvalEff (eff : EffSig) :=
+  Eff.Tau ⊕ₑ (Eff.Fail ⊕ₑ eff.denote)
+```
+
+`Tau` represents administrative target steps. `Fail` represents malformed
+target states such as an invalid function reference. A successful
+correctness certificate proves that the latter is unreachable.
+
+---
+
+## 2. Source computations
 
 The existing source type is:
 
 ```lean
-def Free (E : Type u) [Eff.Spec E] (A : Type) : Type _ :=
-  ExactCodensity (IxPoly.W (Eff.Step E)) A
+def Free
+    {Γ : Type}
+    (E : Γ → Type) [Eff.Spec E]
+    (γ : Γ) (A : Type) : Type :=
+  ExactCodensity
+    (fun A => IxPoly.W (Eff.Step Γ E) (γ, A))
+    A
 ```
 
-Expose the underlying inductive tree:
+Expose the underlying inductive tree at a particular context:
 
 ```lean
-abbrev RawFree (E : Type u) [Eff.Spec E] (A : Type) :=
-  IxPoly.W (Eff.Step E) A
+abbrev RawFree
+    {Γ : Type}
+    (E : Γ → Type) [Eff.Spec E]
+    (γ : Γ) (A : Type) :=
+  IxPoly.W (Eff.Step Γ E) (γ, A)
 
-def Free.lower (x : Free E A) : RawFree E A :=
+def Free.lower (x : Free E γ A) : RawFree E γ A :=
   ExactCodensity.equiv x
 ```
 
-The exact-codensity law gives:
+The proving layer needs opaque laws:
 
 ```lean
 Free.lower_pure
@@ -92,166 +121,321 @@ Free.lower_bind
 Free.lower_op
 ```
 
-These are the only facts about `ExactCodensity` needed by the proving layer.
-Generated proofs should rewrite through these opaque API theorems, not unfold
-the codensity representation.
-
-### 1.1 Embedding a terminating tree into `ITree`
-
-Define the canonical structural embedding:
+The operation law must preserve both kinds of context:
 
 ```lean
-def RawFree.toITree :
-    RawFree E A →
-    ITree E A
+Free.op
+    (e : E γ)
+    (blocks :
+      (b : Eff.Spec.blockTag γ e) →
+      Eff.Spec.blockInputs γ e b →
+      Free E
+        (Eff.Spec.blockCtx γ e b)
+        (Eff.Spec.blockOutputs γ e b)) :
+    Free E γ (Eff.Spec.output γ e)
 ```
 
-It maps one `W` node to the corresponding `ITree` node and recursively embeds
-every continuation and block child. Then:
+Generated proofs rewrite through these laws. They do not unfold
+`ExactCodensity`.
+
+### 2.1 Embedding terminating source trees into `CompM`
+
+Define the structural embedding:
 
 ```lean
-def Free.toITree (x : Free E A) : ITree E A :=
-  x.lower.toITree
+def RawFree.toCompM :
+    RawFree E γ A →
+    CompM E γ A
+
+def Free.toCompM (x : Free E γ A) : CompM E γ A :=
+  x.lower.toCompM
 ```
 
-Required laws include:
+At an operation node it recursively embeds:
+
+- continuations at `(γ, A)`;
+- each block at
+  `(blockCtx γ e b, blockOutputs γ e b)`.
+
+Required laws are:
 
 ```lean
-Free.toITree_pure
-Free.toITree_bind
-Free.toITree_op
+Free.toCompM_pure
+Free.toCompM_bind
+Free.toCompM_op
 ```
 
-`RawFree.toITree` is used only to state the public extensional theorem. The
-macro-facing proof works directly with `Free.lower x`, preserving the source
-tree's induction principle.
+`RawFree.toCompM` is used to state the public behavioral theorem. The
+macro-facing certificate works directly with `Free.lower`, retaining the
+source tree's induction principle.
 
 ---
 
-## 2. What “termination” means
+## 3. The target evaluator
 
-A `RawFree E A` is a well-founded effect tree. It can:
+### 3.1 The corecursor carrier
 
-- return;
-- fail;
-- perform an operation and continue;
-- expose infinitely many possible children at one operation.
-
-It cannot contain an infinite path. Thus “termination” here means
-well-foundedness of every continuation and block path, not “returns
-successfully”. It is also termination of the computation structure relative
-to atomic effects; a separately supplied effect interpreter may itself
-diverge.
-
-Operation blocks may have result types different from the enclosing
-computation, so first pack a state with its result index:
+`Eff.Step` is indexed by `eff.Ctx × Type`, so the evaluator carrier must have
+the same index:
 
 ```lean
-universe v
-
-structure PackedEvalState (eff : EffSig) where
-  Result : Type v
-  state : EvalState eff Result
+EvalState (eff : EffSig) : eff.Ctx × Type → Type
 ```
 
-Define the immediate-child relation:
+It must not instead have the stale shape:
+
+```lean
+-- Wrong:
+EvalState eff : Tp → Type
+```
+
+There is no inverse from an arbitrary semantic `Type` to `Tp`. States created
+from syntax retain their syntactic type witness through indexed constructors:
+
+```lean
+inductive EvalState (eff : EffSig) :
+    eff.Ctx × Type → Type where
+
+| expr {γ : eff.Ctx} {i o : Tp} :
+    ProgramState eff →
+    i.denote →
+    (i.denote → Expr eff Tp.denote γ o) →
+    EvalState eff (γ, o.denote)
+
+-- Further constructors may represent return modes, continuation frames,
+-- loops, calls, and copying. They obey the same `(context, result type)`
+-- index.
+```
+
+This is an internal representation. Generated certificates never construct
+or inspect raw evaluator-state constructors.
+
+### 3.2 Public entry states
+
+Expose smart constructors for the states used by certificates.
+
+The main-expression and function-call modes retain the final heap:
+
+```lean
+EvalState.mainExpr :
+  ProgramState eff →
+  Expr eff Tp.denote γ t →
+  EvalState eff (γ, ProgramState eff × t.denote)
+
+EvalState.mainCall :
+  ProgramState eff →
+  FnRef →
+  a.denote →
+  EvalState eff (γ, ProgramState eff × b.denote)
+```
+
+The context `γ` on `mainCall` is the context in which the referenced
+definition executes. The heap lookup checks it against the context stored
+with the definition.
+
+Effect blocks return exactly their intrinsic flat result:
+
+```lean
+EvalState.blockExpr :
+  ProgramState eff →
+  Expr eff Tp.denote γ t →
+  IsAbiTp t →
+  EvalState eff (γ, t.denote)
+```
+
+These are modes of the same carrier, not separate evaluators.
+
+### 3.3 The one coalgebra
+
+There is one evaluator step function:
+
+```lean
+def Expr.denoteCo :
+    (i : eff.Ctx × Type) →
+    EvalState eff i →
+    Eff.Step eff.Ctx (EvalEff eff) (EvalState eff) i
+```
+
+The target tree is:
+
+```lean
+def EvalState.denote
+    (state : EvalState eff (γ, R)) :
+    CompM (EvalEff eff) γ R :=
+  CompM.corec Expr.denoteCo state
+```
+
+The proof interface stays entirely at `CompM`:
+
+```lean
+CompM.observe :
+  CompM E γ R ≃
+    Eff.Step Γ E (fun i => CompM E i.1 i.2) (γ, R)
+
+CompM.roll :
+  Eff.Step Γ E (fun i => CompM E i.1 i.2) (γ, R) →
+  CompM E γ R
+
+CompM.observe_corec
+CompM.observe_roll
+CompM.roll_observe
+```
+
+The `ITree` representation and exact-codensity equivalence are implementation
+details of `CompM`. Proofs do not lower a `CompM` to another representation.
+There is no second evaluator and no side-channel `EvalView`.
+
+### 3.4 Context-changing blocks
+
+For an operation `e : eff.denote γ`, the coalgebra produces:
+
+```lean
+Eff.Step.op e blocks k
+```
+
+where:
+
+```lean
+k :
+  Eff.Spec.output γ e →
+  EvalState eff (γ, R)
+
+blocks :
+  (b : Eff.Spec.blockTag γ e) →
+  Eff.Spec.blockInputs γ e b →
+  EvalState eff
+    (Eff.Spec.blockCtx γ e b,
+     Eff.Spec.blockOutputs γ e b)
+```
+
+This is the central reason every logical relation over computations must be
+context-indexed. A proof can enter a block in a different context and then
+return to the enclosing continuation context.
+
+### 3.5 Why block states do not return their heaps
+
+An effect block must return exactly:
+
+```lean
+Eff.Spec.blockOutputs γ e b
+```
+
+not a heap pair. The AST requires all operation and block boundary values to
+be `AbiTp`, and `AbiTp` excludes functions transitively. Consequently:
+
+- a block cannot return a newly allocated `FnRef`;
+- an operation cannot hide one in another ABI value;
+- block-local closure allocation cannot become observable after the block;
+- persistent closure-heap updates do not need to be merged into the
+  enclosing continuation.
+
+The block state still carries its heap while it executes. Only the final
+block-local heap is discarded at the intrinsic block boundary.
+
+---
+
+## 4. Target termination
+
+A `RawFree E γ A` is a well-founded effect tree. It may return, fail, or
+perform an operation with arbitrarily many children, but it has no infinite
+path.
+
+Target evaluator states have heterogeneous contexts and result types, so pack
+both indices:
+
+```lean
+structure PackedEvalState (eff : EffSig) where
+  context : eff.Ctx
+  result : Type
+  state : EvalState eff (context, result)
+```
+
+Define the immediate-child relation from one `denoteCo` observation:
 
 ```lean
 inductive EvalChild :
     PackedEvalState eff →
     PackedEvalState eff →
-    Prop where
+    Prop
 
-  | continuation
-      {R}
-      {parent : EvalState eff R}
-      {e : Et}
-      {input blocks k}
-      (hstep :
-        evalCo R parent =
-          Eff.Step.op e input blocks k)
-      (output : Eff.Spec.output e) :
-      EvalChild
-        ⟨R, k output⟩
-        ⟨R, parent⟩
+| continuation
+    {γ R}
+    {parent : EvalState eff (γ, R)}
+    {e blocks k}
+    (h :
+      Expr.denoteCo (γ, R) parent =
+        Eff.Step.op e blocks k)
+    (output : Eff.Spec.output γ e) :
+    EvalChild
+      ⟨γ, R, k output⟩
+      ⟨γ, R, parent⟩
 
-  | block
-      {R}
-      {parent : EvalState eff R}
-      {e : Et}
-      {input blocks k}
-      (hstep :
-        evalCo R parent =
-          Eff.Step.op e input blocks k)
-      (tag : Eff.Spec.blockTag e)
-      (blockInput : Eff.Spec.blockInputs e tag) :
-      EvalChild
-        ⟨Eff.Spec.blockOutputs e tag,
-          blocks tag blockInput⟩
-        ⟨R, parent⟩
+| block
+    {γ R}
+    {parent : EvalState eff (γ, R)}
+    {e blocks k}
+    (h :
+      Expr.denoteCo (γ, R) parent =
+        Eff.Step.op e blocks k)
+    (b : Eff.Spec.blockTag γ e)
+    (input : Eff.Spec.blockInputs γ e b) :
+    EvalChild
+      ⟨Eff.Spec.blockCtx γ e b,
+       Eff.Spec.blockOutputs γ e b,
+       blocks b input⟩
+      ⟨γ, R, parent⟩
 ```
 
-`EvalChild child parent` means that `child` is one of the ordinary
-continuation or block states exposed by one `evalCo` step. Then define:
+Then:
 
 ```lean
 def EvalState.WellFounded
-    (state : EvalState eff R) : Prop :=
-  Acc EvalChild ⟨R, state⟩
+    (state : EvalState eff (γ, R)) : Prop :=
+  Acc EvalChild ⟨γ, R, state⟩
 ```
 
-The child relation sees:
+`Tau` is represented as an ordinary effect node with one continuation child,
+so the relation sees it automatically. `Fail` has no children.
 
-- no children under a return or terminal failure;
-- one child under a silent step;
-- every ordinary continuation and block child under an operation.
-
-An analogous public predicate may be exposed for `ITree`:
+Expose the analogous computation predicate and the corecursor preservation
+theorem:
 
 ```lean
-def ITree.WellFounded (t : ITree E A) : Prop := ...
-```
+CompM.WellFounded :
+  CompM E γ A → Prop
 
-with:
-
-```lean
-EvalState.wellFounded_evalTree :
+EvalState.wellFounded_denote :
   state.WellFounded →
-  (evalTree state).WellFounded
+  (EvalState.denote state).WellFounded
 ```
 
-Do not define termination merely as “is Eutt to some `Free` tree” unless the
-chosen Eutt is already proved divergence-reflecting in the required direction.
-The inductive `FreeEval` certificate below proves well-foundedness directly.
+Do not define termination merely as Eutt to some `Free` tree unless the
+chosen Eutt is already proved divergence-reflecting in the needed direction.
+The central certificate below proves accessibility directly.
 
-### 2.1 Proof versus reconstructible data
+### 4.1 Reifying a terminating target
 
-`FreeEval`, `EvalState.WellFounded`, and Eutt live in `Prop`, so their proofs
-are erased. `Acc` is nevertheless specifically designed to justify
-well-founded definitions, including definitions returning data. Consequently
-the library can define:
+Because `Acc` supports recursion into `Type`, the library can define:
 
 ```lean
 EvalState.reify :
-  (state : EvalState eff R) →
+  (state : EvalState eff (γ, R)) →
   state.WellFounded →
-  RawFree Et R
+  RawFree (EvalEff eff) γ R
 ```
 
-by accessibility recursion, and prove that `reify` denotes the same effect
-tree as `evalTree state`.
+and prove that `reify.toCompM` is Eutt to the same target `CompM`.
 
-The proof is erased; computing `reify` observes the evaluator state again. If
-a consumer instead needs a materialized target `RawFree` without replaying the
-evaluator, compilation must retain that data or a `Type`-valued certificate.
-For ordinary verification, the erased accessibility theorem is the intended
-result.
+The accessibility proof is erased. Computing `reify` observes the evaluator
+again. A consumer that requires a materialized target `RawFree` without
+replay must retain it as data; ordinary verification only needs the erased
+theorem.
 
 ---
 
-## 3. Source and target values
+## 5. Values and closure heaps
 
-Target values use the AST representation:
+Target values are:
 
 ```lean
 abbrev TgtVal : Tp → Type := Tp.denote
@@ -263,19 +447,19 @@ In particular:
 TgtVal (.fn a b) = FnRef
 ```
 
-There is no global source denotation of `Tp`. Each proof carries the actual
-source Lean type and its relation to the reflected target type:
+There is no global source interpretation of `Tp`. Each reflected value proof
+names the actual Lean source type:
 
 ```lean
 structure ValueRel
     (eff : EffSig)
-    (A : Type ua)
+    (A : Type)
     (t : Tp) where
 
   holds :
     ProgramState eff →
     A →
-    TgtVal t →
+    t.denote →
     Prop
 
   mono :
@@ -296,27 +480,19 @@ ValueRel.array
 ValueRel.fn
 ```
 
-The macro may register additional relations without extending `Tp` or defining
-a recursive source value universe.
+`Tp` remains context-free. Computation certificates, not value types, carry
+the context in which a value-producing computation runs.
 
----
+### 5.1 Kripke heap worlds
 
-## 4. Closure heaps are Kripke worlds
-
-The concrete heap representation must not occur in generated proof terms.
-Expose:
+Generated terms must not inspect the concrete hash-map representation. Expose:
 
 ```lean
-def HeapExtends
-    (old new : ProgramState eff) : Prop
-```
+HeapExtends :
+  ProgramState eff →
+  ProgramState eff →
+  Prop
 
-meaning that every closure valid in `old` remains valid, with the same
-signature and body, in `new`.
-
-Required laws:
-
-```lean
 HeapExtends.refl
 HeapExtends.trans
 
@@ -326,57 +502,99 @@ ProgramState.alloc_extends :
 
 ProgramState.lookup_of_extends :
   HeapExtends h h' →
-  -- Successful old lookups remain identical.
+  -- Every successful lookup in h remains the same lookup in h'.
   ...
 ```
 
-`ValueRel.holds h source target` is called Kripke because `h` is a world and
-the relation remains true in every future world:
-
-```lean
-V.mono : HeapExtends h h' → V.holds h x y → V.holds h' x y
-```
-
-This makes definition composition linear. Installing a definition does not
-rebuild the correctness proof for every older closure.
+`ValueRel` is Kripke because the heap is a world and `mono` says the relation
+survives every future allocation. This keeps definition composition linear:
+allocating a definition does not rebuild every older function proof.
 
 ---
 
-## 5. Pulled-back effects
+## 6. Context-preserving effect transport
 
-The source uses its natural signature, while the target uses the `Tp`-encoded
-signature. Relate them by:
+The source uses a natural effect family:
+
+```lean
+Es : eff.Ctx → Type
+```
+
+The reflected AST uses:
+
+```lean
+eff.denote : eff.Ctx → Type
+```
+
+Both families have the same root contexts, but corresponding block tags can
+select contexts only propositionally equal. The transport must record this.
 
 ```lean
 structure EffPullback
-    (Es : Type us) [Eff.Spec Es]
-    (Et : Type ut) [Eff.Spec Et] where
+    (Es Et : Γ → Type)
+    [Eff.Spec Es] [Eff.Spec Et] where
 
-  forget : Et → Es
+  forget :
+    {γ : Γ} →
+    Et γ →
+    Es γ
 
   outputIso :
-    ∀ et,
-      Eff.Spec.output et ≃
-      Eff.Spec.output (forget et)
+    ∀ {γ} (et : Et γ),
+      Eff.Spec.output γ et ≃
+      Eff.Spec.output γ (forget et)
 
   blockIso :
-    ∀ et,
-      Eff.Spec.blockTag et ≃
-      Eff.Spec.blockTag (forget et)
+    ∀ {γ} (et : Et γ),
+      Eff.Spec.blockTag γ et ≃
+      Eff.Spec.blockTag γ (forget et)
+
+  blockCtx_eq :
+    ∀ {γ} (et : Et γ) (bt : Eff.Spec.blockTag γ et),
+      Eff.Spec.blockCtx γ et bt =
+      Eff.Spec.blockCtx γ (forget et) (blockIso et bt)
 
   blockInputIso :
-    ∀ et bt,
-      Eff.Spec.blockInputs et bt ≃
-      Eff.Spec.blockInputs (forget et) (blockIso et bt)
+    ∀ {γ} (et : Et γ) (bt : Eff.Spec.blockTag γ et),
+      Eff.Spec.blockInputs γ et bt ≃
+      Eff.Spec.blockInputs γ (forget et) (blockIso et bt)
 
   blockOutputIso :
-    ∀ et bt,
-      Eff.Spec.blockOutputs et bt ≃
-      Eff.Spec.blockOutputs (forget et) (blockIso et bt)
+    ∀ {γ} (et : Et γ) (bt : Eff.Spec.blockTag γ et),
+      Eff.Spec.blockOutputs γ et bt ≃
+      Eff.Spec.blockOutputs γ (forget et) (blockIso et bt)
 ```
 
-`Es` and `Et` contain fully applied operation requests, including their
-operands, so `forget` transports the entire request.
+The exact orientation of the equivalences is an API choice. Pick one and
+provide named forward/backward helpers. Generated proofs must never manipulate
+the casts induced by `blockCtx_eq` directly.
+
+Useful derived helpers are:
+
+```lean
+P.sourceOutput
+P.targetOutput
+P.sourceBlockTag
+P.targetBlockTag
+P.sourceBlockInput
+P.targetBlockInput
+P.sourceBlockOutput
+P.targetBlockOutput
+P.castSourceBlockState
+P.castTargetBlockState
+```
+
+For the AST, the principal transport is:
+
+```lean
+P : EffPullback Es eff.denote
+```
+
+The target evaluator actually emits `EvalEff eff`. User operations are
+injected into that stack. `Tau` is handled silently by the behavioral
+relation. `Fail` has no successful certificate rule.
+
+### 6.1 Supported source operations
 
 The target-to-source map is total. Compilation in the other direction is
 partial:
@@ -384,159 +602,46 @@ partial:
 ```lean
 structure EffPullback.Supported
     (P : EffPullback Es Et)
-    (source : Es) where
-  target : Et
+    {γ : Γ}
+    (source : Es γ) where
+
+  target : Et γ
   forget_eq : P.forget target = source
 ```
 
-The Meta-level registry supplies `Supported` for every operation it emits.
+The reflector registry supplies `Supported` for every source operation it
+emits.
 
-Use equivalences for the Eutt-equivalent fragment. Runtime-partial conversions
-need a precondition or a directional simulation theorem instead.
-
-The usual effect stack is composed from identity pullbacks for shared effects
-and `EffPullback.sum`. `Tau` is silent for weak equivalence; `Fail` is a
-matched terminal effect.
+Use equivalences only for the genuinely equivalent fragment. A
+runtime-partial representation conversion needs a precondition or a
+directional simulation theorem.
 
 ---
 
-## 6. Target evaluator interface
+## 7. The central inductive certificate
 
-The proof API treats the evaluator state as an abstract indexed carrier:
+The certificate relates:
 
-```lean
-EvalState (eff : EffSig) : Type v → Type _
-```
-
-Its implementation may contain:
-
-- the closure heap;
-- the current expression or call;
-- a defunctionalized continuation stack;
-- loop frames;
-- copy states needed by the corecursor.
-
-None of these continuation constructors belong in macro-generated
-certificates.
-
-### 6.1 Public entry states
-
-Return the heap as ordinary evaluator data. The result index of a main
-expression or standalone function call is:
-
-```lean
-ProgramState eff × R
-```
-
-Thus the public entry states have types:
-
-```lean
-EvalState.mainExpr :
-  ProgramState eff →
-  Expr eff TgtVal t →
-  EvalState eff (ProgramState eff × TgtVal t)
-
-EvalState.mainCall :
-  ProgramState eff →
-  FnRef →
-  TgtVal a →
-  EvalState eff (ProgramState eff × TgtVal b)
-
-EvalState.blockExpr :
-  ProgramState eff →
-  Expr eff TgtVal t →
-  EvalState eff (TgtVal t)
-```
-
-`blockExpr` is available only when `t` is an ABI type accepted as an effect
-block result.
-
-These are smart constructors into the one internal state representation. They
-are not names for additional evaluators.
-
-### 6.2 The one coalgebra
-
-There is exactly one one-step evaluator:
-
-```lean
-def evalCo
-    (R : Type v)
-    (state : EvalState eff R) :
-    Eff.Step Et (EvalState eff) R :=
-  -- The sole pattern match over the actual internal EvalState constructors.
-  ...
-```
-
-The document intentionally does not prescribe or name those internal
-constructors. Whatever representation implements the heap and continuation
-machine is defined once beside `evalCo`. Generic library proofs may case-split
-on it there; certificate statements and generated proofs use only
-`mainExpr`, `mainCall`, `blockExpr`, and `evalCo`.
-
-The target tree is:
-
-```lean
-def evalTree (state : EvalState eff R) : ITree Et R :=
-  ITree.corec evalCo state
-```
-
-There is no heap-preserving side observation and no duplicate evaluator.
-
-### 6.3 Intrinsic block results
-
-An effect block is required by `Eff.Step` to return exactly:
-
-```lean
-Eff.Spec.blockOutputs e tag
-```
-
-not a heap pair. This is the one place where the heap cannot be part of the
-observable result without changing the effect signature.
-
-The indexed `EvalState` therefore distinguishes:
-
-- main/call fibers, whose result index is `ProgramState eff × R`;
-- block fibers, whose result index is the declared flat block output.
-
-A block state still carries and updates its heap internally. At the block
-boundary its terminal `evalCo` case returns only the flat block value and
-discards the final heap.
-
-This is not an additional semantic choice. Every effect input, output, block
-input, and block output is forced to denote an `AbiType`, and `AbiType`
-contains no `FnRef` transitively. Therefore:
-
-- a block cannot return a newly allocated closure;
-- an operation cannot smuggle such a closure through another ABI container;
-- code after the operation has no typed reference by which it could observe
-  block-local closure allocations.
-
-`ProgramState` is persistent allocation state, not mutable user-visible state,
-so there is no mutation that must be merged back either. Discarding the
-block's final heap is consequently forced by the type discipline and is
-semantics-preserving. The block computation still carries its starting/current
-heap while it runs, so closures captured before or allocated and consumed
-within that block remain valid for the lifetime of that execution.
-
----
-
-## 7. The central inductive judgment
-
-The judgment must itself be indexed by the source and target result types.
-This matters because operation blocks change both indices. Define:
+- a source `RawFree` at context `γ`;
+- a target evaluator state at the same context `γ`;
+- possibly different source and target result types.
 
 ```lean
 inductive FreeEval
-    (P : EffPullback Es Et) :
-    {A : Type} →
-    {R : Type} →
+    (P : EffPullback Es eff.denote) :
+    {γ : eff.Ctx} →
+    {A R : Type} →
     (Done : A → R → Prop) →
-    RawFree Es A →
-    EvalState eff R →
+    RawFree Es γ A →
+    EvalState eff (γ, R) →
     Prop
 ```
 
-The constructor shapes are:
+The shared root context is not cosmetic. It is what permits corresponding
+operations to be compared. Block premises move both computations to the
+transported block context.
+
+### 7.1 Return rule
 
 ```lean
 | ret
@@ -544,80 +649,101 @@ The constructor shapes are:
       source.observe =
         Eff.Step.ret sourceResult)
     (htarget :
-      evalCo _ target =
+      Expr.denoteCo (γ, R) target =
         Eff.Step.ret targetResult)
     (hDone :
       Done sourceResult targetResult) :
     FreeEval P Done source target
+```
 
+### 7.2 Matched user-operation rule
+
+Schematically:
+
+```lean
 | op
-    (et : Et)
+    {γ : eff.Ctx}
+    (et : eff.denote γ)
+
     (sourceBlocks :
-      (st : Eff.Spec.blockTag (P.forget et)) →
-      Eff.Spec.blockInputs (P.forget et) st →
+      (sb : Eff.Spec.blockTag γ (P.forget et)) →
+      Eff.Spec.blockInputs γ (P.forget et) sb →
       RawFree Es
-        (Eff.Spec.blockOutputs (P.forget et) st))
+        (Eff.Spec.blockCtx γ (P.forget et) sb)
+        (Eff.Spec.blockOutputs γ (P.forget et) sb))
+
     (sourceK :
-      Eff.Spec.output (P.forget et) →
-      RawFree Es A)
+      Eff.Spec.output γ (P.forget et) →
+      RawFree Es γ A)
+
     (targetBlocks :
-      (tt : Eff.Spec.blockTag et) →
-      Eff.Spec.blockInputs et tt →
-      EvalState eff (Eff.Spec.blockOutputs et tt))
+      (tb : Eff.Spec.blockTag γ et) →
+      Eff.Spec.blockInputs γ et tb →
+      EvalState eff
+        (Eff.Spec.blockCtx γ et tb,
+         Eff.Spec.blockOutputs γ et tb))
+
     (targetK :
-      Eff.Spec.output et →
-      EvalState eff R)
-    (hsource :
-      source.observe =
-        Eff.Step.op
-          (P.forget et)
-          sourceBlocks
-          sourceK)
+      Eff.Spec.output γ et →
+      EvalState eff (γ, R))
+
+    (hsource : source.observe = ...)
     (htarget :
-      evalCo _ target =
+      Expr.denoteCo (γ, R) target =
         Eff.Step.op
-          et
-          targetBlocks
+          (injectUserOp et)
+          (injectUserBlocks targetBlocks)
           targetK)
+
     (continuations :
       ∀ targetOutput,
         FreeEval P Done
-          (sourceK
-            (P.outputIso et targetOutput))
+          (sourceK (P.sourceOutput et targetOutput))
           (targetK targetOutput))
+
     (blocks :
-      ∀ targetTag targetBlockInput,
+      ∀ targetTag targetInput,
         FreeEval P
-          (fun sourceResult targetResult =>
-            sourceResult =
-              P.blockOutputIso
-                et targetTag targetResult)
-          (sourceBlocks
-            (P.blockIso et targetTag)
-            (P.blockInputIso
-              et targetTag targetBlockInput))
-          (targetBlocks
-            targetTag targetBlockInput)) :
-    FreeEval P Done source target
+          (P.blockResultRel et targetTag)
+          (P.sourceBlock sourceBlocks targetTag targetInput)
+          (targetBlocks targetTag targetInput)) :
 
-| sourceTau
-    (hsource :
-      source.observe =
-        Eff.Step.tau sourceNext)
-    (next :
-      FreeEval P Done sourceNext target) :
     FreeEval P Done source target
+```
 
+`P.sourceBlock` performs the hidden `blockCtx_eq` cast. The recursive block
+certificate is therefore indexed by the target block context:
+
+```lean
+Eff.Spec.blockCtx γ et targetTag
+```
+
+No generated proof sees the equality cast.
+
+### 7.3 Silent target-step rule
+
+```lean
 | targetTau
     (htarget :
-      evalCo _ target =
+      Expr.denoteCo (γ, R) target =
         Eff.Step.tau targetNext)
     (next :
       FreeEval P Done source targetNext) :
     FreeEval P Done source target
 ```
 
-The root instantiation of `Done` receives the returned heap explicitly:
+An analogous `sourceTau` rule is useful when `Es` itself contains a designated
+silent `Tau` effect.
+
+These constructors are inductive. A certificate may skip finitely many
+administrative steps but cannot certify an infinite target-only `Tau` loop.
+
+There is deliberately no target-`Fail` rule. Reaching invalid function lookup
+or another evaluator failure makes `FreeEval` unprovable.
+
+### 7.4 Root and block result relations
+
+For a main expression, the terminal relation sees the final heap:
 
 ```lean
 fun sourceResult (finalHeap, targetResult) =>
@@ -625,45 +751,33 @@ fun sourceResult (finalHeap, targetResult) =>
   V.holds finalHeap sourceResult targetResult
 ```
 
-Block instantiations use their flat transported result relation. Consequently
-the same `FreeEval` family handles heap-returning main fibers and flat block
-fibers without a side observation type.
+For a block, the terminal relation is the flat result relation induced by
+`P.blockOutputIso`.
 
-There is no special `fail` rule. `Fail` is an ordinary matched `op` whose
-output and block arities are empty, so its recursive premises are vacuous.
+The same `FreeEval` family handles both because it is polymorphic in `A`, `R`,
+and `Done` at every context.
 
-The silent constructors are inductive. Consequently a certificate can skip
-any finite number of administrative `Tau`s, but cannot justify an infinite
-target-only `Tau` loop.
+---
 
-In particular, do not encode `FreeEval` as a predicate at one fixed `A` and
-`R`: that definition cannot descend into intrinsically typed block fibers.
+## 8. Derived behavior and termination
 
-The exact constructor surface should be hidden behind:
+### 8.1 Context-indexed heterogeneous Eutt
 
-```lean
-FreeEval.ret
-FreeEval.op
-FreeEval.sourceTau
-FreeEval.targetTau
-```
-
-and higher-level `ExprCert.*` theorems.
-
-### 7.1 Derived heterogeneous Eutt
-
-Define the ordinary public relation:
+The public behavioral relation compares computations at a shared context:
 
 ```lean
 Eutt
-    (P : EffPullback Es Et)
+    (P : EffPullback Es eff.denote)
     (RR : A → R → Prop)
-    (source : ITree Es A)
-    (target : ITree Et R) :
+    (source : CompM Es γ A)
+    (target : CompM (EvalEff eff) γ R) :
     Prop
 ```
 
-Then prove once:
+Internally its coinductive relation is indexed over context/result pairs so
+that matched block children may move to another context.
+
+Prove once:
 
 ```lean
 FreeEval.toEutt
@@ -673,13 +787,14 @@ FreeEval.toEutt
         RR sourceResult targetResult)
     (h : FreeEval P Done source target) :
     Eutt P RR
-      source.toITree
-      (evalTree target)
+      source.toCompM
+      target.denote
 ```
 
-This proof corecurses only in the library. The input certificate is inductive.
+This library proof uses `CompM.observe` and coinduction. Macro-generated
+proofs only build the inductive `FreeEval` certificate.
 
-### 7.2 Derived target well-foundedness
+### 8.2 Target accessibility
 
 Also prove:
 
@@ -689,38 +804,37 @@ FreeEval.targetWellFounded :
   EvalState.WellFounded target
 ```
 
-This is an ordinary induction on the `FreeEval` certificate. It is independent
-of whether the chosen Eutt presentation exposes a convenient
-divergence-reflection theorem.
+This is ordinary induction over `FreeEval`. It proves target termination
+without relying on a subtle divergence-reflection property of Eutt.
 
-Thus correctness and termination are two projections of one certificate:
+Thus one certificate has two projections:
 
 ```text
-                         ┌──► heterogeneous Eutt
+                         ┌──► context-indexed heterogeneous Eutt
 FreeEval certificate ───┤
-                         └──► target well-foundedness
+                         └──► target accessibility
 ```
 
 ---
 
-## 8. Expression certificates
+## 9. Expression certificates
 
-For:
+At context `γ`, for:
 
 ```lean
-source : Free Es A
-target : Expr eff TgtVal t
+source : Free Es γ A
+target : Expr eff Tp.denote γ t
 ```
 
 define:
 
 ```lean
 def ExprCertAt
-    (P : EffPullback Es Et)
+    (P : EffPullback Es eff.denote)
     (initial : ProgramState eff)
     (V : ValueRel eff A t)
-    (source : Free Es A)
-    (target : Expr eff TgtVal t) : Prop :=
+    (source : Free Es γ A)
+    (target : Expr eff Tp.denote γ t) : Prop :=
 
   FreeEval P
     (fun sourceValue (finalHeap, targetValue) =>
@@ -730,25 +844,24 @@ def ExprCertAt
     (EvalState.mainExpr initial target)
 ```
 
-There is no `source.run pure` and no source `ITree` in this judgment.
+There is no `source.run pure` and no coinductive source computation in this
+macro-facing judgment.
 
-### 8.1 Function relations
+### 9.1 Function relations
 
-A source function has ordinary terminating call semantics:
+Object-language function types do not contain contexts:
 
 ```lean
-sourceCall :
-  F →
-  A →
-  Free Es B
+.fn a b
 ```
 
-Define:
+The relation for a particular closure does contain its execution context:
 
 ```lean
 def ValueRel.fn
-    (P : EffPullback Es Et)
-    (sourceCall : F → A → Free Es B)
+    (P : EffPullback Es eff.denote)
+    (callCtx : eff.Ctx)
+    (sourceCall : F → A → Free Es callCtx B)
     (RA : ValueRel eff A a)
     (RB : ValueRel eff B b) :
     ValueRel eff F (.fn a b)
@@ -767,15 +880,18 @@ fun heap sourceFn targetRef =>
           HeapExtends future finalHeap ∧
           RB.holds finalHeap sourceResult targetResult)
         (sourceCall sourceFn sourceArg).lower
-        (EvalState.mainCall future targetRef targetArg)
+        (EvalState.mainCall
+          (γ := callCtx)
+          future targetRef targetArg)
 ```
 
-The closure may be called in any future heap. Its source result remains a
-`Free` computation, not a source `ITree`.
+The context belongs to the computation relation and closure-heap entry, not
+to `Tp.fn`. Heap lookup proves that `targetRef` names a definition at
+`callCtx`.
 
-### 8.2 Macro-facing rules
+### 9.2 Macro-facing syntax rules
 
-Provide opaque, syntax-directed theorems:
+Provide opaque rules:
 
 ```lean
 ExprCert.ret
@@ -784,17 +900,21 @@ ExprCert.builtin
 ExprCert.lam
 ExprCert.app
 ExprCert.ite
+ExprCert.loop
 ExprCert.op
 ```
 
-Representative application rule:
+All ordinary expression rules preserve the current context `γ`.
+
+A representative application rule is:
 
 ```lean
 ExprCert.app
     (hf :
-      (ValueRel.fn P sourceCall RA RB).holds
+      (ValueRel.fn P γ sourceCall RA RB).holds
         heap sourceFn targetRef)
-    (hx : RA.holds heap sourceArg targetArg)
+    (hx :
+      RA.holds heap sourceArg targetArg)
     (hk :
       ∀ future sourceResult targetResult,
         HeapExtends heap future →
@@ -807,17 +927,9 @@ ExprCert.app
       (.app targetRef targetArg targetK)
 ```
 
-Its proof uses:
+All computations here run at the same `γ`.
 
-- `Free.lower_bind`;
-- the function relation;
-- the generic evaluator push-frame lemma;
-- induction/composition for `FreeEval`.
-
-The target stack is handled inside the theorem. The generated proof supplies
-only the concrete source and AST continuations.
-
-Representative lambda rule:
+A representative lambda rule is:
 
 ```lean
 ExprCert.lam
@@ -831,7 +943,7 @@ ExprCert.lam
     (k :
       ∀ future targetRef,
         HeapExtends heap future →
-        (ValueRel.fn P sourceCall RA RB).holds
+        (ValueRel.fn P γ sourceCall RA RB).holds
           future sourceFn targetRef →
         ExprCertAt P future RC
           (sourceK sourceFn)
@@ -841,33 +953,65 @@ ExprCert.lam
       (.lam targetBody targetK)
 ```
 
-The source does not perform an effect to allocate a lambda. It substitutes the
-Lean function into `sourceK`; the target allocates a `FnRef`, and the Kripke
-function relation connects them.
+The source substitutes a Lean function. The target allocates a `FnRef`.
+`HeapExtends` connects the new heap to the old one.
+
+### 9.3 The operation rule
+
+For:
+
+```lean
+sourceOp : Es γ
+targetOp : eff.denote γ
+```
 
 `ExprCert.op` accepts:
 
 - `P.Supported sourceOp`;
-- related inputs;
-- a certificate for every corresponding block;
-- a certificate for every related output continuation.
+- the corresponding target request;
+- a certificate for every output continuation at the enclosing context `γ`;
+- a certificate for every block at
+  `eff.blockCtx γ targetOp blockTag`;
+- the transported flat result relation for each block.
 
-All effect transports remain inside `ExprCert.op`.
+The rule hides:
+
+- injection of `targetOp` into `EvalEff eff`;
+- output and block payload equivalences;
+- the equality cast between source and target block contexts;
+- evaluator continuation-frame manipulation.
+
+This is the only expression rule that changes context, and only its block
+premises do so.
 
 ---
 
-## 9. Structural and well-founded recursion
+## 10. Definitions and recursion
 
-The source already contains the information that recursive calls terminate.
-The proof API must reuse it instead of inventing a coinductive self-call seed.
+Each target definition has its own execution context:
 
-There is no `OpenExprCert`, `SelfCallSpec`, or coinductive
-`DefCert.install`.
+```lean
+targetBody :
+  FnRef →
+  a.denote →
+  Expr eff Tp.denote defCtx b
+```
 
-### 9.1 The local recursive-call hypothesis
+Its source counterpart has:
 
-Fix the newly allocated target reference `selfRef`. The induction motive must
-already contain the Kripke quantification:
+```lean
+sourceCall :
+  F →
+  A →
+  Free Es defCtx B
+```
+
+The definition certificate installs a
+`ValueRel.fn P defCtx sourceCall RA RB`.
+
+### 10.1 Local recursive-call hypothesis
+
+Fix the newly allocated target reference `selfRef`:
 
 ```lean
 def FunctionCallCorrect (sourceArg : A) : Prop :=
@@ -879,32 +1023,25 @@ def FunctionCallCorrect (sourceArg : A) : Prop :=
         HeapExtends future finalHeap ∧
         RB.holds finalHeap sourceResult targetResult)
       (sourceCall sourceDef sourceArg).lower
-      (EvalState.mainCall future selfRef targetArg)
+      (EvalState.mainCall
+        (γ := defCtx)
+        future selfRef targetArg)
 ```
 
-While checking the body at `x`, the proof context then contains:
+For well-founded recursion, checking the body at `x` receives:
 
 ```lean
 ih :
   ∀ y, Smaller y x → FunctionCallCorrect y
 ```
 
-A target self-call is still ordinary `.app`. A proof helper such as:
+A recursive target call is still ordinary `.app`. `RecExprCert.app`
+specializes `ih` to the current future heap and related target argument.
 
-```lean
-RecExprCert.app
-```
+The quantification over future heaps is essential: recursive calls may occur
+after local closure allocation.
 
-merely specializes `ih y hyx` to the current future heap and related target
-argument. It does not introduce another AST node or a coinductive assumption.
-
-Quantifying over `future` in the motive is essential: a recursive call may
-occur after the body has allocated more closures. `HeapExtends` lets the same
-induction hypothesis remain valid there without copying any heap proof.
-
-### 9.2 Well-founded closing theorem
-
-The generic closing theorem has this shape:
+### 10.2 Well-founded closing rule
 
 ```lean
 DefCert.wf
@@ -917,121 +1054,145 @@ DefCert.wf
       ∀ x,
         (∀ y, Smaller y x → FunctionCallCorrect y) →
         BodyCorrect x) :
-    InstalledFunctionCorrect ...
+    InstalledFunctionCorrect
+      (ctx := defCtx)
+      ...
 ```
 
-Its proof is `wf.induction`. At each argument it:
+Its implementation is `wf.induction`. At each argument it:
 
-1. unfolds the source function once with `source_unfold`;
-2. unfolds target closure lookup/call once;
-3. applies `body`;
+1. unfolds the source function once;
+2. unfolds target heap lookup and call once;
+3. applies the body certificate;
 4. discharges recursive calls from the induction hypothesis.
 
-Target call `Tau`s are administrative silent steps consumed by `FreeEval`.
-They are not what makes the recursion logically sound.
+Target call `Tau`s are administrative steps consumed by `FreeEval`. They do
+not justify recursion.
 
-### 9.3 Structural recursors
+### 10.3 Structural recursors
 
-Provide a specialization:
+Provide:
 
 ```lean
 DefCert.structural
-```
-
-for definitions whose source equation follows an ordinary recursor. For
-`Nat.brecOn`, provide a theorem tailored to the equation generated by Lean:
-
-```lean
 DefCert.natBrecOn
 ```
 
-It should accept:
+The `Nat.brecOn` rule consumes:
 
 - the source unfolding theorem;
 - certificates for the generated base/body functionals;
 - recursive-call certificates supplied by the recursor induction hypothesis.
 
-The reflector recognizes the recursor using Lean metadata and instantiates
-this theorem. It does not normalize the recursive computation or unroll it at
-the call site.
+The reflector recognizes the recursor from Lean metadata. It does not
+normalize or unroll recursive calls.
 
-Nonrecursive definitions are the degenerate case and need no recursion
-hypothesis.
+Nonrecursive definitions are the degenerate case:
+
+```lean
+DefCert.nonrecursive
+```
 
 ---
 
-## 10. Program certificates
+## 11. Program certificates
 
-Internally:
+A program has an explicit main context:
+
+```lean
+target :
+  Program eff mainCtx inputTp outputTp Tp.denote
+
+source :
+  SourceInput →
+  Free Es mainCtx SourceOutput
+```
+
+Individual definitions inside `target` may use other contexts. Each
+`ProgramCert.define` premise records the definition's own `defCtx`.
 
 ```lean
 def ProgramCertAt
-    (P : EffPullback Es Et)
+    (P : EffPullback Es eff.denote)
     (heap : ProgramState eff)
-    (source : SourceInput → Free Es SourceOutput)
-    (target : Program eff inputTp outputTp TgtVal) :
-    Prop := ...
+    (source :
+      SourceInput →
+      Free Es mainCtx SourceOutput)
+    (target :
+      Program eff mainCtx inputTp outputTp Tp.denote) :
+    Prop :=
+  ...
 ```
 
-The macro-facing assembly rules are:
+Assembly rules:
 
 ```lean
 ProgramCert.main
 
 ProgramCert.define
-    (definition : InstalledFunctionCorrect ...)
+    (definition :
+      InstalledFunctionCorrect
+        (ctx := defCtx)
+        ...)
     (rest :
       ∀ heap' ref,
         HeapExtends heap heap' →
-        FunctionRelated heap' sourceDef ref →
+        FunctionRelated
+          (ctx := defCtx)
+          heap' sourceDef ref →
         ProgramCertAt P heap' sourceMain (targetRest ref)) :
     ProgramCertAt P heap sourceMain
       (.define targetBody targetRest)
 ```
 
-`FunctionRelated` abbreviates `ValueRel.fn ... .holds`.
+`FunctionRelated` abbreviates the `holds` field of the appropriate
+context-indexed `ValueRel.fn`.
 
-The continuation in `ProgramCert.define` is only the static sequence of
-definitions in the certificate. It is not a semantic computation
-continuation.
+The continuation of `ProgramCert.define` represents the static remainder of
+the definition list. It is not a computation continuation.
 
-### 10.1 Public correctness theorem
+### 11.1 Public denotation
 
-The evaluator-facing denotation returns its final heap:
+The program denotation runs at `mainCtx`:
 
 ```lean
 Program.denote :
-  Program eff inputTp outputTp TgtVal →
-  TgtVal inputTp →
-  ITree Et (ProgramState eff × TgtVal outputTp)
+  Program eff mainCtx inputTp outputTp Tp.denote →
+  inputTp.val.denote →
+  CompM
+    (EvalEff eff)
+    mainCtx
+    (ProgramState eff × outputTp.val.denote)
 ```
 
-For callers interested only in the ABI value, expose:
+For value-only clients:
 
 ```lean
 Program.denoteValue target input :=
   (Program.denote target input).map Prod.snd
 ```
 
-Correctness is stated against the heap-returning denotation, using:
+### 11.2 Public correctness
 
 ```lean
 def OutputRel
     (sourceOutput : SourceOutput)
-    (targetOutput : ProgramState eff × TgtVal outputTp) : Prop :=
+    (targetOutput :
+      ProgramState eff × outputTp.val.denote) : Prop :=
   OutputValueRel.holds
     targetOutput.1
     sourceOutput
     targetOutput.2
 ```
 
-Then:
-
 ```lean
 def ProgramCorrect
-    (P : EffPullback Es Et)
-    (source : SourceInput → Free Es SourceOutput)
-    (target : Program eff inputTp outputTp TgtVal) :
+    (P : EffPullback Es eff.denote)
+    (source :
+      SourceInput →
+      Free Es mainCtx SourceOutput)
+    (target :
+      Program eff mainCtx inputTp outputTp Tp.denote) :
     Prop :=
 
   ∀ sourceInput targetInput,
@@ -1040,23 +1201,25 @@ def ProgramCorrect
       sourceInput
       targetInput →
     Eutt P OutputRel
-      (Free.toITree (source sourceInput))
+      (Free.toCompM (source sourceInput))
       (Program.denote target targetInput)
 ```
 
-This follows through `FreeEval.toEutt`.
+Both computations are rooted at `mainCtx`. Their block children may move
+through other contexts according to the transported effect signatures.
 
-A value-only Eutt theorem follows by relational `map` congruence; it should be
-derived rather than reproved by the macro.
+A value-only theorem follows by relational `map` congruence and should not be
+reproved by the macro.
 
-### 10.2 Public termination theorem
-
-Expose separately:
+### 11.3 Public termination
 
 ```lean
 def ProgramTerminates
-    (source : SourceInput → Free Es SourceOutput)
-    (target : Program eff inputTp outputTp TgtVal) :
+    (source :
+      SourceInput →
+      Free Es mainCtx SourceOutput)
+    (target :
+      Program eff mainCtx inputTp outputTp Tp.denote) :
     Prop :=
 
   ∀ sourceInput targetInput,
@@ -1064,37 +1227,38 @@ def ProgramTerminates
       (ProgramState.empty eff)
       sourceInput
       targetInput →
-    ITree.WellFounded
+    CompM.WellFounded
       (Program.denote target targetInput)
 ```
 
-This follows through `FreeEval.targetWellFounded`.
+Keep the source visible in the theorem even if it could technically be erased
+from the final proposition: it records where the accessibility proof came
+from.
 
-The source argument may be omitted from the final definition if desired, but
-keeping it visible documents where the termination evidence came from.
-
-### 10.3 Combined theorem
-
-The most useful macro result is:
+### 11.4 Combined result
 
 ```lean
 structure ProgramVerified ... : Prop where
-  correct : ProgramCorrect P source target
-  terminates : ProgramTerminates source target
+  correct :
+    ProgramCorrect P source target
+  terminates :
+    ProgramTerminates source target
 ```
 
-Both fields are derived from one `ProgramCertAt`; the macro must not construct
-two parallel proofs.
+Both fields are projections of one `ProgramCertAt`. The macro does not build
+parallel correctness and termination proofs.
 
 ---
 
-## 11. Generated proof shape
+## 12. Generated proof shape
 
-A well-founded recursive definition should elaborate approximately as:
+A recursive definition at `fooCtx`, followed by a definition at `barCtx` and
+a main expression at `mainCtx`, should elaborate approximately as:
 
 ```lean
 exact ProgramCert.define
   (DefCert.wf
+    (ctx := fooCtx)
     foo_wf
     foo_unfold
     (fun x ih =>
@@ -1106,27 +1270,27 @@ exact ProgramCert.define
 
     ProgramCert.define
       (DefCert.nonrecursive
+        (ctx := barCtx)
         (ExprCert.app fooRelated ...))
       (fun heap₂ barRef barRelated hExt₂ =>
 
         ProgramCert.main
+          (ctx := mainCtx)
           (ExprCert.op
             supportedPrint
             ...
             (ExprCert.app barRelated ...))))
 ```
 
-For a source `Nat.brecOn`, replace the generic `DefCert.wf` application with
-`DefCert.natBrecOn`.
-
 The Meta-level environment stores:
 
 ```text
 source declaration
+  ↦ definition context
   ↦ target FnRef local
   ↦ function-relation proof local
   ↦ argument/result ValueRel terms
-  ↦ sourceCall term
+  ↦ sourceCall term at that context
   ↦ source unfolding/recursor theorem
 ```
 
@@ -1135,29 +1299,32 @@ definitions.
 
 ---
 
-## 12. Complexity requirements
+## 13. Complexity requirements
 
-1. `Free.lower` is shared once per source expression; the macro does not reduce
-   the resulting `W` tree.
-2. Every `ExprCert`, `DefCert`, and `ProgramCert` rule is opaque.
-3. Each emitted AST node corresponds to one certificate theorem application.
-4. Recursive source functions are proved with their existing
-   structural/well-founded induction principle, never by unrolling examples.
-5. Each definition certificate is built once and referenced at call sites.
-6. Existing function relations are stable under `HeapExtends`; installing a
-   definition does not copy old proofs.
-7. The concrete heap is not represented as nested proof conjunctions or
-   traversed at calls.
-8. Effect transport witnesses are emitted once per operation occurrence or
-   shared in local `let`s.
-9. Source bodies, target bodies, and relation terms are shared through local
-   `let`/`have` bindings.
-10. Bind reassociation and evaluator-stack manipulation occur only inside
-    opaque library theorems.
-11. The Eutt and target-well-foundedness theorems are both projections of one
-    certificate.
-12. Regression tests cover long definition chains, repeated early calls, and
-    structurally recursive functions at large symbolic inputs.
+1. `Free.lower` is shared once per source expression.
+2. The macro never reduces the resulting `W` tree.
+3. Every `ExprCert`, `DefCert`, and `ProgramCert` rule is opaque.
+4. Each emitted AST node corresponds to one certificate theorem application.
+5. Recursive source functions use their existing structural or
+   well-founded induction principle.
+6. Each definition certificate is constructed once and referenced at calls.
+7. Older closure proofs survive allocation through `HeapExtends`.
+8. The concrete hash-map heap is absent from generated proof terms.
+9. Effect-transport witnesses are emitted once per operation or shared by a
+   local `let`.
+10. Block-context equality casts occur only inside transport helpers and
+    opaque certificate rules.
+11. Source bodies, target bodies, and relation terms are shared with
+    `let`/`have`.
+12. Bind reassociation and evaluator-stack manipulation occur only in library
+    theorems.
+13. Eutt and target accessibility are projections of one certificate.
+14. Regression tests cover:
+    - long definition chains;
+    - repeated early calls;
+    - definitions in different contexts;
+    - effects whose blocks change context;
+    - structurally recursive functions at large symbolic inputs.
 
 The intended generated term size is:
 
@@ -1165,82 +1332,87 @@ The intended generated term size is:
 O(AST nodes + call sites + definitions)
 ```
 
-It must not depend on the number of recursive unfoldings at a concrete input.
+It must not depend on concrete recursive unfolding depth.
 
 ---
 
-## 13. Induction and coinduction boundary
-
-The division is now sharp.
+## 14. Induction and coinduction boundary
 
 Induction is used for:
 
 1. the source `W` tree;
 2. `FreeEval`;
 3. source structural or well-founded recursion;
-4. target well-foundedness.
+4. target accessibility.
 
-Corecursion/coinduction is used only for:
+Corecursion or coinduction is used only for:
 
-1. constructing the target `ITree`;
-2. defining/proving generic heterogeneous Eutt;
-3. the generic theorem `FreeEval.toEutt`.
+1. constructing the target `CompM` from the
+   `(eff.Ctx × Type)`-indexed evaluator state;
+2. defining generic context-indexed heterogeneous Eutt;
+3. proving `FreeEval.toEutt`.
 
 In particular:
 
 - recursive definitions are not closed by coinduction;
-- target administrative `Tau`s do not serve as termination guards;
+- target administrative `Tau`s are not termination guards;
 - generated certificates never construct coinduction seeds;
-- the evaluator continuation stack remains an implementation detail.
-
-This matches the actual authorial intent: a terminating source proof is erased
-by compilation, while a corecursive target representation preserves behavior.
+- block context changes are handled by indices and `EffPullback`;
+- evaluator continuation frames remain internal.
 
 ---
 
-## 14. Implementation order
+## 15. Implementation order
 
-1. Add `Free.lower`, `RawFree.toITree`, `Free.toITree`, and their monad/effect
-   laws.
-2. Index main/call evaluator states by `ProgramState eff × R` and block states
-   by their declared flat block result.
-3. Implement the evaluator exactly once as ordinary `evalCo`, then define
-   `evalTree := ITree.corec evalCo`.
-4. Define `HeapExtends` and prove allocation/lookup stability.
-5. Define `EffPullback`, `Supported`, identity, and sum composition.
-6. Define heterogeneous Eutt over the two effect signatures.
-7. Define inductive `FreeEval`.
-8. Prove `FreeEval.toEutt` and `FreeEval.targetWellFounded`.
-9. Define `ValueRel` and its base/product/sum/array/function constructors.
-10. Prove the closed `ExprCert.*` rules, including bind/frame composition.
-11. Prove `DefCert.nonrecursive`, `DefCert.wf`, and
-    `DefCert.structural`.
-12. Add the `Nat.brecOn` specialization.
-13. Define `ProgramCert.define/main`, `ProgramCorrect`,
+1. Finish the `(eff.Ctx × Type)`-indexed `EvalState`.
+2. Implement `Expr.denoteCo` once and define its `CompM.corec`.
+3. Add `Free.lower`, `RawFree.toCompM`, and their laws.
+4. Define public evaluator entry-state constructors.
+5. Define `HeapExtends` and allocation/lookup stability.
+6. Define context-preserving `EffPullback`, including `blockCtx_eq`.
+7. Add cast-free derived block transport helpers.
+8. Define context-indexed heterogeneous Eutt.
+9. Define inductive, context-indexed `FreeEval`.
+10. Prove `FreeEval.toEutt` and `FreeEval.targetWellFounded`.
+11. Define `ValueRel`, including context-indexed function relations.
+12. Prove the opaque `ExprCert.*` rules.
+13. Prove `DefCert.nonrecursive`, `DefCert.wf`, and structural specializations.
+14. Define `ProgramCert.define/main`, `ProgramCorrect`,
     `ProgramTerminates`, and `ProgramVerified`.
-14. Build the macro using only the opaque certificate API.
-15. Add proof-size, elaboration-time, Eutt, and termination regression tests.
+15. Build the reflector using only the opaque certificate API.
+16. Add proof-size, elaboration-time, context-transition, Eutt, and
+    termination regression tests.
 
 ---
 
-## 15. Decisions to preserve
+## 16. Decisions to preserve
 
-- Source programs are `Free`, not `CompM` or arbitrary `ITree`.
-- `ExactCodensity` is lowered to the inductive `W` representation before
-  logical reasoning.
-- The proof logic contains no second CPS computation language.
-- The target evaluator is a single corecursor into `ITree`.
-- Main/call evaluator fibers return `(finalHeap, value)` directly.
-- Intrinsic block fibers return their declared ABI result; the `AbiType`
-  restriction makes their allocation-only final heap unobservable.
+- `Tp` and `AbiTp` are not parameterized by the effect context.
+- Source computations are `Free Es γ A`.
+- Target computations are `CompM (EvalEff eff) γ A`.
+- `CompM.observe`/`roll` are the complete proof-facing coalgebra API; `ITree`
+  and exact codensity remain implementation details.
+- Source and target effect families share `eff.Ctx`.
+- Operation continuations stay in the enclosing context.
+- Operation blocks run in their intrinsic `blockCtx`.
+- The corecursor carrier is indexed by `eff.Ctx × Type`.
+- There is one target evaluator and no proof-only evaluator.
+- Main and call modes expose the final heap.
+- Block modes return only their intrinsic ABI result.
 - The central source-to-target certificate is inductive.
-- Correctness and target termination are derived from the same certificate.
-- Target functions are `FnRef`; source functions remain ordinary Lean values.
-- Closure validity is indexed by and monotone under heap extension.
-- Target effects are a compile-time-partial pullback of natural source effects.
-- Runtime-partial encodings use simulations rather than Eutt equivalence.
-- Recursive target self-calls are ordinary applications.
-- Source recursion is justified by the original structural/WF principle.
-- The public behavior theorem is ordinary heterogeneous Eutt.
-- The public termination theorem is explicit rather than hidden inside Eutt.
+- Correctness and target termination come from the same certificate.
+- Target functions are `FnRef`; source functions remain Lean values.
+- A function's execution context lives in its heap entry and function
+  relation, not in `Tp.fn`.
+- Closure validity is monotone under heap extension.
+- Natural and reflected user effects are connected by a context-preserving
+  pullback.
+- Block-context casts are hidden behind the pullback API.
+- Runtime-partial encodings use directional simulations rather than claiming
+  Eutt equivalence.
+- Recursive target calls are ordinary applications.
+- Source recursion is justified by its original structural or
+  well-foundedness theorem.
+- The public behavioral theorem is context-indexed heterogeneous Eutt.
+- The public termination theorem is explicit.
 - Generated certificate size is linear in the emitted program.
