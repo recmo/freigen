@@ -48,7 +48,7 @@ instance {Γ : Type u} : Spec (@NoEff Γ) where
 
 def Sum {Γ : Type u} (T₁ T₂ : Γ → Type u) : Γ → Type u := fun γ => T₁ γ ⊕ T₂ γ
 
-infix:65 " ⊕ₑ " => Sum
+infixr:65 " ⊕ₑ " => Sum
 
 instance sumInst {Γ : Type u} {T₁ T₂ : Γ → Type u}
     [Spec T₁] [Spec T₂] : Spec (T₁ ⊕ₑ T₂) where
