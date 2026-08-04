@@ -1,6 +1,7 @@
 import Freigen.Eff
-import Freigen.Free
+import Freigen.Free.Basic
 import Freigen.CompM.Basic
+import Freigen.CompM.WF
 
 namespace Freigen.Ast
 
@@ -228,7 +229,7 @@ def Expr.denote {eff} {γ : eff.Ctx} {o : Tp} (state : ProgramState eff) (expr :
     CompM (Eff.Fail ⊕ₑ Eff.Tau ⊕ₑ eff.denote) γ (ProgramState eff × o.denote) :=
   CompM.corec denoteCo (EvalState.cont state expr fun s r => EvalState.done (s, r))
 
-def Program.denote {eff} {γ} {iT oT} (p: Program eff γ iT oT Tp.denote) (i: iT.val.denote):
+def Program.denote' {eff} {γ} {iT oT} (p: Program eff γ iT oT Tp.denote) (i: iT.val.denote):
     CompM (Eff.Fail ⊕ₑ Eff.Tau ⊕ₑ eff.denote) γ (ProgramState eff × oT.val.denote) :=
   go (ProgramState.empty _) p where
   go : ProgramState eff → Program eff γ iT oT Tp.denote →
@@ -237,5 +238,24 @@ def Program.denote {eff} {γ} {iT oT} (p: Program eff γ iT oT Tp.denote) (i: iT
     let (s', f) := s.alloc (fun f x => body f x)
     go s' (k f)
   | .main body => Expr.denote s (body i)
+
+def Program.denote {eff} {γ} {iT oT} (p: Program eff γ iT oT Tp.denote) (i: iT.val.denote):
+    CompM (Eff.Fail ⊕ₑ Eff.Tau ⊕ₑ eff.denote) γ oT.val.denote :=
+  (·.2) <$> Program.denote' p i
+
+structure ProgramCert {srcEff : EffSig} {tgtEff : srcEff.Ctx → Type} [Eff.Spec tgtEff]
+    (handler : Eff.Handler srcEff.denote (Free tgtEff))
+    {iTp oTp : AbiTp} {γ : srcEff.Ctx}
+    (p : ∀{V}, Program srcEff γ iTp oTp V)
+    (t : iTp.val.denote → Free tgtEff γ oTp.val.denote) where
+  wf : ∀ i, CompM.WF (p.denote i)
+  nofail : ∀ i, Free.UnusedL ((p.denote i).toFree $ wf i)
+  correct : ∀ i, (
+    p.denote i
+    |>.toFree (wf i)
+    |>.elideL (nofail i)
+    |>.interpL (fun _ _ => pure ())
+    |>.interp handler
+  ) = t i
 
 end Freigen.Ast

@@ -1,6 +1,6 @@
 import Freigen.ITree.WF
 import Freigen.CompM.Basic
-import Freigen.Free
+import Freigen.Free.Basic
 
 namespace Freigen.CompM
 
@@ -20,6 +20,5 @@ def toFree {Γ : Type u} {E : Γ → Type u} [s: Eff.Spec E] {γ : Γ} {α : Typ
         )
       ) recur
   )
-
 
 end Freigen.CompM

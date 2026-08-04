@@ -28,6 +28,24 @@ protected def ExactCodensity.equiv {M} [Monad M] [LawfulMonad M] {α : Type u} :
   left_inv x := by simp only [ExactCodensity.exact]
   right_inv x := by simp
 
+@[simp]
+theorem ExactCodensity.equiv_pure
+    {M : Type u → Type v} [Monad M] [LawfulMonad M]
+    (x : α) :
+    ExactCodensity.equiv (pure x : ExactCodensity M α) =
+      pure x :=
+  rfl
+
+@[simp]
+theorem ExactCodensity.equiv_bind
+    {M : Type u → Type v} [Monad M] [LawfulMonad M]
+    (x : ExactCodensity M α)
+    (f : α → ExactCodensity M β) :
+    ExactCodensity.equiv (x >>= f) =
+      ExactCodensity.equiv x >>= fun a =>
+        ExactCodensity.equiv (f a) :=
+  (x.exact _).symm
+
 def ExactCodensity.bind_def {M} [Monad M] [LawfulMonad M] {α β : Type _} (x : ExactCodensity M α) (f : α → ExactCodensity M β) :
     x >>= f = ⟨fun g => x.run fun a => (f a).run g, by
       intros

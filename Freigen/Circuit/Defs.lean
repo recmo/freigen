@@ -1,7 +1,7 @@
 import Freigen.CompM.Basic
 import Freigen.Circuit.Context
 import Freigen.Eff
-import Freigen.Free
+import Freigen.Free.Basic
 
 namespace Freigen.Circuit
 
