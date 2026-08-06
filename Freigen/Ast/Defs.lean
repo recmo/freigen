@@ -2,6 +2,7 @@ import Freigen.Eff
 import Freigen.Free.Basic
 import Freigen.CompM.Basic
 import Freigen.CompM.WF
+import Std.Data.ExtHashMap.Lemmas
 
 namespace Freigen.Ast
 
@@ -131,38 +132,58 @@ inductive Program
     (Var mainInput.val → Expr eff Var mainCtx mainOutput.val) →
     Program eff mainCtx mainInput mainOutput Var
 
-structure ProgramState (eff : EffSig) where
+structure Heap (eff : EffSig) where
   next : Nat
   env :
-    Std.HashMap Nat
+    Std.ExtHashMap Nat
       (Σ γ : eff.Ctx,
         Σ i : Tp,
         Σ o : Tp,
           Tp.denote i → Expr eff Tp.denote γ o)
+  env_supp : ∀ id, id < next ↔ env.contains id
 
-def ProgramState.empty (eff : EffSig) : ProgramState eff where
+instance {eff} : PartialOrder (Heap eff) where
+  le s₁ s₂ := s₁.next ≤ s₂.next ∧ ∀ id, id < s₁.next → s₁.env.get? id = s₂.env.get? id
+  le_refl := by simp
+  le_trans := by grind
+  le_antisymm := by
+    rintro a b ⟨_, _⟩ ⟨_, _⟩
+    rcases a with ⟨na, sa, _⟩
+    rcases b with ⟨nb, sb, _⟩
+    simp only at *
+    have : na = nb := by grind
+    cases this
+    have : sa = sb := by grind
+    cases this
+    rfl
+
+def Heap.empty (eff : EffSig) : Heap eff where
   next := 0
   env := default
+  env_supp := by simp [default]
 
-def ProgramState.alloc
+def Heap.alloc
     {eff : EffSig} {γ : eff.Ctx} {i o : Tp}
-    (s : ProgramState eff)
+    (s : Heap eff)
     (f :
       Tp.denote (.fn i o) →
       Tp.denote i →
       Expr eff Tp.denote γ o) :
-    ProgramState eff × FnRef :=
+    Heap eff × FnRef :=
   let id := s.next
-  let s' : ProgramState eff := {
-    s with
+  let s' : Heap eff := {
     next := id + 1
     env := s.env.insert id ⟨γ, i, o, f id⟩
+    env_supp := by
+      intro i
+      cases s
+      grind
   }
   (s', id)
 
-def ProgramState.lookup
+def Heap.lookup
     {eff : EffSig} {γ : eff.Ctx} {i o : Tp}
-    (s : ProgramState eff) :
+    (s : Heap eff) :
     Tp.denote (.fn i o) →
     Option (Tp.denote i → Expr eff Tp.denote γ o) := fun x => do
   let x ← s.env.get? x
@@ -176,24 +197,18 @@ def ProgramState.lookup
 inductive ExprCont
     (eff : EffSig) (γ : eff.Ctx) :
     Tp → Tp → Type where
-| pure :
+| pure {o i} :
     (i.denote → Expr eff Tp.denote γ o) →
     ExprCont eff γ i o
-| bind :
+| bind {o' o i} :
     (i.denote → Expr eff Tp.denote γ o') →
     ExprCont eff γ o' o →
     ExprCont eff γ i o
 
--- abbrev EvalState
---     (eff : EffSig) (γ : eff.Ctx) (o : Tp) :=
---   ProgramState eff ×
---     (Σ i : Tp, Tp.denote i ×
---       (Tp.denote i → Expr eff Tp.denote γ o))
-
 inductive EvalState (eff : EffSig): eff.Ctx × Type → Type _ where
 | done {γ} {R}: R → EvalState eff (γ, R)
-| cont {γ} {R} {i : Tp}: ProgramState eff → Expr eff Tp.denote γ i →
-    (ProgramState eff → Tp.denote i → EvalState eff (γ, R)) → EvalState eff (γ, R)
+| cont {γ} {R} {i : Tp}: Heap eff → Expr eff Tp.denote γ i →
+    (Heap eff → Tp.denote i → EvalState eff (γ, R)) → EvalState eff (γ, R)
 
 def Expr.denoteCo {eff} (i : eff.Ctx × Type) : EvalState eff i → Eff.Step eff.Ctx (Eff.Fail ⊕ₑ Eff.Tau ⊕ₑ eff.denote) (EvalState eff) i
 | .done v => Eff.Step.ret v
@@ -225,15 +240,38 @@ def Expr.denoteCo {eff} (i : eff.Ctx × Type) : EvalState eff i → Eff.Step eff
       EvalState.cont s (blocks tag inp) fun _ r => EvalState.done r
     ) fun o => EvalState.cont s (k' o) k
 
-def Expr.denote {eff} {γ : eff.Ctx} {o : Tp} (state : ProgramState eff) (expr : Expr eff Tp.denote γ o) :
-    CompM (Eff.Fail ⊕ₑ Eff.Tau ⊕ₑ eff.denote) γ (ProgramState eff × o.denote) :=
+def Expr.denote {eff} {γ : eff.Ctx} {o : Tp} (state : Heap eff) (expr : Expr eff Tp.denote γ o) :
+    CompM (Eff.Fail ⊕ₑ Eff.Tau ⊕ₑ eff.denote) γ (Heap eff × o.denote) :=
   CompM.corec denoteCo (EvalState.cont state expr fun s r => EvalState.done (s, r))
 
+structure ExprCertAt {srcEff : EffSig} {tgtEff : srcEff.Ctx → Type} [Eff.Spec tgtEff]
+    (handler : Eff.Handler srcEff.denote (Free tgtEff))
+    {γ : srcEff.Ctx} {oTp : AbiTp}
+    (h : Heap srcEff)
+    (e : Expr srcEff Tp.denote γ oTp.val)
+    (t : Free tgtEff γ oTp.val.denote) : Prop where
+  wf : CompM.WF (Expr.denote h e)
+  nofail : Free.UnusedL ((Expr.denote h e).toFree wf)
+  correct :
+    (·.2) <$> ((Expr.denote h e).toFree wf
+      |>.elideL nofail
+      |>.interpL (fun _ _ => pure ())
+      |>.interp handler
+    ) = t
+
+def ExprCert {srcEff : EffSig} {tgtEff : srcEff.Ctx → Type} [Eff.Spec tgtEff]
+    (handler : Eff.Handler srcEff.denote (Free tgtEff))
+    {γ : srcEff.Ctx} {oTp : AbiTp}
+    (h : Heap srcEff)
+    (e : Expr srcEff Tp.denote γ oTp.val)
+    (t : Free tgtEff γ oTp.val.denote) : Prop :=
+  ∀ h', h ≤ h' → ExprCertAt handler h' e t
+
 def Program.denote' {eff} {γ} {iT oT} (p: Program eff γ iT oT Tp.denote) (i: iT.val.denote):
-    CompM (Eff.Fail ⊕ₑ Eff.Tau ⊕ₑ eff.denote) γ (ProgramState eff × oT.val.denote) :=
-  go (ProgramState.empty _) p where
-  go : ProgramState eff → Program eff γ iT oT Tp.denote →
-    CompM (Eff.Fail ⊕ₑ Eff.Tau ⊕ₑ eff.denote) γ (ProgramState eff × oT.val.denote) := fun s => fun
+    CompM (Eff.Fail ⊕ₑ Eff.Tau ⊕ₑ eff.denote) γ (Heap eff × oT.val.denote) :=
+  go (Heap.empty _) p where
+  go : Heap eff → Program eff γ iT oT Tp.denote →
+    CompM (Eff.Fail ⊕ₑ Eff.Tau ⊕ₑ eff.denote) γ (Heap eff × oT.val.denote) := fun s => fun
   | .define body k =>
     let (s', f) := s.alloc (fun f x => body f x)
     go s' (k f)
