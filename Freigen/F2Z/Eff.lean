@@ -26,10 +26,10 @@ inductive ConstraintEff (ctx : Context) where
 | assertR1C (a b c : ctx.Wℤ)
 | f2z (a : ctx.WBool)
 | hint (argTps : List WitnessSide)
-    (args : HList (WitnessSize.denoteW ctx.Wℤ ctx.WBool) argTps) (α : Type)
+    (args : HList (WitnessSize.denoteW ctx.Wℤ ctx.WBool) argTps) (n : Nat)
 
-inductive HintEff (ctx : Context) : Type u where
-| writeWitness (a: Bool)
+inductive HintEff (ctx : Context) where
+| fail : String → HintEff ctx
 
 end Eff
 
@@ -44,30 +44,29 @@ open Context
 instance [ctx : Context]:
     Freigen.Eff.Spec (Γ := Eff.Scope) (Eff ctx) where
   output := fun
-    | .constraint, .assertR1C a b c => Cert $ fun ρ _ => ρ a * ρ b = ρ c
-    | .constraint, .f2z a =>
-      (x : ctx.Wℤ) × (Cert $ fun ρℤ ρBool => (Bool.toInt <| ρBool a) = ρℤ x)
-    | .constraint, .hint _ _ α => α
-    | .hint, .writeWitness _ => ctx.WBool
+    | .constraint, .assertR1C _ _ _ => Unit
+    | .constraint, .f2z _ => ctx.Wℤ
+    | .constraint, .hint _ _ n => Vector ctx.WBool n
+    | .hint, .fail _ => Unit
   blockTag := fun
     | .constraint, .assertR1C _ _ _ => PEmpty
     | .constraint, .f2z _ => PEmpty
     | .constraint, .hint _ _ _ => PUnit
-    | .hint, .writeWitness _ => PEmpty
+    | .hint, .fail _ => PEmpty
   blockCtx := fun
     | .constraint, .assertR1C _ _ _ => nofun
     | .constraint, .f2z _ => nofun
     | .constraint, .hint _ _ _ => fun _ => .hint
-    | .hint, .writeWitness _ => nofun
+    | .hint, .fail _ => nofun
   blockInputs := fun
     | .constraint, .assertR1C _ _ _ => nofun
     | .constraint, .f2z _ => nofun
     | .constraint, .hint argTps _ _ => fun _ => HList WitnessSize.denoteF argTps
-    | .hint, .writeWitness _ => nofun
+    | .hint, .fail _ => nofun
   blockOutputs := fun
     | .constraint, .assertR1C _ _ _ => nofun
     | .constraint, .f2z _ => fun _ => ctx.Wℤ
-    | .constraint, .hint _ _ α => fun _ => α
-    | .hint, .writeWitness _ => nofun
+    | .constraint, .hint _ _ n => fun _ => Vector Bool n
+    | .hint, .fail _ => nofun
 
 end Freigen.F2Z.Eff

@@ -7,7 +7,7 @@ open Context
 
 variable [ctx : Context]
 
-def Circuit : Type → Type _ :=
+abbrev Circuit : Type → Type _ :=
   Free (Eff ctx) .constraint
 
 instance : Monad (Circuit) :=
@@ -16,7 +16,7 @@ instance : Monad (Circuit) :=
 instance : LawfulMonad (Circuit) :=
   inferInstanceAs (LawfulMonad (Free (Eff ctx) .constraint))
 
-def Hint : Type → Type _ :=
+abbrev Hint : Type → Type _ :=
   Free (Eff ctx) .hint
 
 instance : Monad (Hint) :=
@@ -25,22 +25,17 @@ instance : Monad (Hint) :=
 instance : LawfulMonad (Hint) :=
   inferInstanceAs (LawfulMonad (Free (Eff ctx) .hint))
 
-def assertR1C (a b c : Wℤ) :
-    Circuit (Cert $ fun ρ _ => ρ a * ρ b = ρ c) :=
+def assertR1C (a b c : Wℤ) : Circuit Unit :=
   Free.op (E := Eff ctx) (γ := .constraint) (Eff.ConstraintEff.assertR1C a b c) nofun
 
-def f2z (a : WBool) :
-    Circuit ((x : Wℤ) × (Cert $ fun ρℤ ρBool => (Bool.toInt <| ρBool a) = ρℤ x)) :=
+def f2z (a : WBool) : Circuit Wℤ :=
   Free.op (E := Eff ctx) (γ := .constraint) (Eff.ConstraintEff.f2z a) nofun
 
-def hint {α} {argTps : List Eff.WitnessSide}
+def hint {n : Nat} {argTps : List Eff.WitnessSide}
     (args : HList (Eff.WitnessSize.denoteW ctx.Wℤ ctx.WBool) argTps)
-    (body : HList (Eff.WitnessSize.denoteF) argTps → Hint α):
-    Circuit α :=
-  Free.op (E := Eff ctx) (γ := .constraint) (Eff.ConstraintEff.hint argTps args α)
-    (fun _ i => body i)
-
-def writeWitness (a : Bool) : Hint WBool :=
-  Free.op (E := Eff ctx) (γ := .hint) (Eff.HintEff.writeWitness a) nofun
+    (body : HList Eff.WitnessSize.denoteF argTps → Vector Bool n) :
+    Circuit (Vector WBool n) :=
+  Free.op (E := Eff ctx) (γ := .constraint) (Eff.ConstraintEff.hint argTps args n)
+    (fun _ i => pure (body i))
 
 end Freigen.F2Z

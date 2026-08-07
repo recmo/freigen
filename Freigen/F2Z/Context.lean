@@ -24,17 +24,19 @@ structure Valuation
 instance : CoeFun (Valuation W) fun _ => W → F where
   coe v := v.toFun
 
-class CertLogic {Wℤ} {WBool}
-    [AddCommMonoid Wℤ] [ModuleWithOne ℤ Wℤ]
-    [AddCommMonoid WBool] [ModuleWithOne Bool WBool]
-    (C : (Valuation Wℤ → Valuation WBool → Prop) → Sort u) where
-  derive :
-    {ι : Type} →
-    {P : ι → Valuation Wℤ → Valuation WBool → Prop} →
-    {Q : Valuation Wℤ → Valuation WBool → Prop} →
-    (∀ ρ₁ ρ₂, (∀ i, P i ρ₁ ρ₂) → Q ρ₁ ρ₂) →
-    ((i : ι) → C (P i)) →
-    C Q
+@[simp]
+theorem Valuation.one_apply (ρ : Valuation W) : ρ (1 : W) = 1 :=
+  ρ.one_map
+
+@[simp]
+theorem Valuation.add_apply (ρ : Valuation W) (x y : W) :
+    ρ (x + y) = ρ x + ρ y :=
+  ρ.toFun.map_add x y
+
+@[simp]
+theorem Valuation.smul_apply (ρ : Valuation W) (a : F) (x : W) :
+    ρ (a • x) = a * ρ x :=
+  ρ.toFun.map_smul a x
 
 class Context where
     Wℤ : Type
@@ -43,21 +45,17 @@ class Context where
     [moduleWZ : ModuleWithOne ℤ Wℤ]
     [monoidWBool : AddCommMonoid WBool]
     [moduleWBool : ModuleWithOne Bool WBool]
-    Cert : (Valuation Wℤ → Valuation WBool → Prop) → Sort u
-    [cert : CertLogic Cert]
 
 attribute [implicit_reducible]
   Context.monoidWZ
   Context.moduleWZ
   Context.monoidWBool
   Context.moduleWBool
-  Context.cert
 
 attribute [instance]
   Context.monoidWZ
   Context.moduleWZ
   Context.monoidWBool
   Context.moduleWBool
-  Context.cert
 
 end Freigen.F2Z

@@ -1,4 +1,3 @@
-import Freigen.F2Z.Cert
 import Freigen.F2Z.Defs
 import Mathlib.Data.List.DropRight
 import Mathlib.Algebra.BigOperators.Fin
@@ -57,50 +56,81 @@ private theorem ofDigits_vector_eq_sum {n : Nat} (v : Vector Bool n) :
 variable [ctx : Context]
 
 def fromBits {n : Nat} (r : Vector WBool n):
-    Circuit $ (i : Wℤ) × Cert (fun pℤ pB => pℤ i = ∑ k : Fin n, 2^k.val * (pB r[k]).toInt) :=
+    Circuit Wℤ :=
   match n with
-  | 0 => pure ⟨0, by cert; simp⟩
+  | 0 => pure 0
   | n + 1 => do
-    let ⟨i, ht⟩ ← fromBits r.tail
-    let ⟨b, hh⟩ ← f2z r.head
-    pure ⟨b + 2 • i, by
-      cert
-      simp only [Valuation.add_apply, ←hh, LinearMap.map_smul_of_tower, ht, Nat.add_one_sub_one,
-        Int.nsmul_eq_mul, Nat.cast_ofNat, Fin.getElem_fin,
-        Fin.sum_univ_succ, Fin.coe_ofNat_eq_mod, Nat.zero_mod, pow_zero, one_mul, Fin.val_succ,
-        pow_succ, Finset.mul_sum]
-      congr 2
-      ext i
-      ring_nf
-      congr 4
-      simp only [getElem, Vector.get_tail]
-      grind
-    ⟩
+    let i ← fromBits r.tail
+    let b ← f2z r.head
+    pure (b + 2 • i)
 
 def toBits (n : ℕ) (i: Wℤ):
-    Circuit $ (r: Vector WBool n) × Cert (fun ρℤ ρBool => ∃(ni : Nat), ρℤ i = ni ∧
-      (r.toList.map (fun b => ρBool b) |>.rdropWhile (· = false)) = ni.bits) := do
-  let r ← hint (argTps := [.z]) h![i] fun h![i] => do
+    Circuit (Vector WBool n) := do
+  let r ← hint (argTps := [.z]) h![i] fun h![i] =>
     let rawBits := i.toNat.bits.toArray
     let padded := rawBits.take n ++ Array.replicate (n - rawBits.size) false
     let paddedVec : Vector Bool n := ⟨padded, by grind⟩
-    paddedVec.mapM writeWitness
-  let ⟨sum, hs⟩ ← fromBits r
-  let c ← assertR1C sum 1 i
-  return ⟨r, by
-    cert
-    let v := r.map ρBool
-    let ni := Nat.ofDigits 2 (v.toList.map Bool.toNat)
-    refine ⟨ni, ?_, ?_⟩
-    · calc
-        ρℤ i = ρℤ sum := by simpa using c.symm
-        _ = ∑ k : Fin n, 2 ^ k.val * (ρBool r[k]).toInt := hs
-        _ = (ni : Int) := by
-          have h := congrArg (fun x : Nat => (x : Int)) (ofDigits_vector_eq_sum v).symm
-          have hbool (b : Bool) : (b.toNat : Int) = b.toInt := by cases b <;> rfl
-          simpa [v, ni, hbool] using h
-    · simpa [v, ni, Vector.toList_map] using (bits_ofDigits_bool v.toList).symm
-  ⟩
+    paddedVec
+  let sum ← fromBits r
+  assertR1C sum 1 i
+  return r
+
+open Std.Do
+open scoped Std.Do
+
+-- /-- The direct semantics of `fromBits`: every successful result denotes the input bit vector. -/
+-- @[spec] def fromBits_spec {n : Nat} (r : Vector WBool n) :
+--     Triple (fromBits r) spred(⌜True⌝)
+--       (⇓? i ρ => ⌜ρ.z i = ∑ k : Fin n, 2 ^ k.val * (ρ.bool r[k]).toInt⌝) :=
+--   match n with
+--   | 0 => by
+--       simp [fromBits]
+--       mvcgen <;> simp_all
+--   | n + 1 => by
+--       rw [fromBits]
+--       mvcgen
+--       mspec (fromBits_spec r.tail)
+--       mvcgen
+--       intro b hrel
+--       simp_all
+--       simp only [Fin.sum_univ_succ, Fin.coe_ofNat_eq_mod, Nat.zero_mod, pow_zero, one_mul,
+--         Fin.val_succ, pow_succ, Finset.mul_sum]
+--       congr 2
+--       · simpa [Vector.head] using hrel.symm
+--       · funext i
+--         ring_nf
+--         congr 4
+--         convert Vector.get_tail r i using 1
+--         · rfl
+--         · congr 1
+--           omega
+
+-- /-- The direct semantics of `toBits`, replacing its former returned certificate. -/
+-- @[spec] theorem toBits_spec (n : Nat) (i : Wℤ) :
+--     Triple (toBits n i) spred(⌜True⌝)
+--       (⇓? r ρ => ⌜∃ ni : Nat, ρ.z i = ni ∧
+--         (r.toList.map (fun b => ρ.bool b) |>.rdropWhile (· = false)) = ni.bits⌝) := by
+--   rw [toBits]
+--   mvcgen
+--   intro r
+--   mvcgen
+--   split
+--   next hc =>
+--     mvcgen
+--     rename_i _ sum ρ hsum
+--     let v := r.map ρ.bool
+--     let ni := Nat.ofDigits 2 (v.toList.map Bool.toNat)
+--     refine ⟨ni, ?_, ?_⟩
+--     · have hc' : ρ.z sum = ρ.z i := by simpa using hc
+--       calc
+--         ρ.z i = ρ.z sum := hc'.symm
+--         _ = ∑ k : Fin n, 2 ^ k.val * (ρ.bool r[k]).toInt := hsum
+--         _ = (ni : Int) := by
+--           have h := congrArg (fun x : Nat => (x : Int)) (ofDigits_vector_eq_sum v).symm
+--           have hbool (b : Bool) : (b.toNat : Int) = b.toInt := by cases b <;> rfl
+--           simpa [v, ni, hbool] using h
+--     · simpa [v, ni, Vector.toList_map] using (bits_ofDigits_bool v.toList).symm
+--   next => simp
 
 
 
