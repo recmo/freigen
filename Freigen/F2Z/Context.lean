@@ -11,6 +11,9 @@ variable {F W} [Semiring F] [AddCommMonoid W]
 class ModuleWithOne (F: outParam Type) W [Semiring F] [AddCommMonoid W]
     extends Module F W, One W
 
+instance : ModuleWithOne ℤ ℤ where
+instance : ModuleWithOne Bool Bool where
+
 variable [ModuleWithOne F W]
 
 instance (priority := 100) : NatCast W where

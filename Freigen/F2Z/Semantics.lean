@@ -171,26 +171,37 @@ deriving Repr
 def R1C.satisfies (r1c : R1C F) (witness : Nat → F): Prop :=
   r1c.a.eval witness * r1c.b.eval witness = r1c.c.eval witness
 
+def R1C.satisfies' (r1c : R1C F) (witness : Nat → F): Bool :=
+  r1c.a.eval witness * r1c.b.eval witness = r1c.c.eval witness
+
 structure CS where
   r1cs : Array (R1C ℤ)
   m : Array (LC Bool)
 deriving Inhabited, Repr
+
+def CS.satisfies' (cs : CS) (witness : Nat → Bool): Bool :=
+  let mw := cs.m.map (Bool.toInt ∘ LC.eval witness)
+  let mw := fun i => mw[i]!
+  cs.r1cs.all (fun r1c => r1c.satisfies' mw)
 
 def CS.satisfies (cs : CS) (witness : Nat → Bool): Prop :=
   let mw := cs.m.map (Bool.toInt ∘ LC.eval witness)
   let mw := fun i => mw[i]!
   ∀ r1c ∈ cs.r1cs, r1c.satisfies mw
 
-scoped instance : Context where
-  Wℤ := LC ℤ
-  WBool := LC Bool
-
 structure CSBuilder where
   result : CS
   nextWit : Nat
 deriving Inhabited
 
-def CSBuilder.fresh : StateM CSBuilder (LC Bool) := do
+
+namespace CSBuilder
+
+scoped instance ctx : Context where
+  Wℤ := LC ℤ
+  WBool := LC Bool
+
+def fresh : StateM CSBuilder (LC Bool) := do
   modifyGet (fun s => ({ some s.nextWit }, { s with nextWit := s.nextWit + 1 }))
 
 def NoMonad : Type → Type u := fun _ => PUnit
@@ -207,7 +218,7 @@ instance : (γ : Eff.Scope) → Monad (RunnerM γ)
 | .constraint => inferInstance
 | .hint       => inferInstance
 
-def runCircuit (circ : Vector (LC Bool) n → Circuit Unit): StateM CSBuilder Unit := do
+def run' (circ : Vector (LC Bool) n → Circuit Unit): StateM CSBuilder Unit := do
   let initial ← Vector.ofFnM (fun _ => CSBuilder.fresh)
   Free.interp (M := RunnerM) (@fun
     | .constraint, .assertR1C a b c, _ => do
@@ -224,6 +235,42 @@ def runCircuit (circ : Vector (LC Bool) n → Circuit Unit): StateM CSBuilder Un
     | .hint, .fail _, _ => ()
   ) (circ initial)
 
+def run (circ : Vector (LC Bool) n → Circuit (ctx := ctx) Unit): CS :=
+  (StateT.run (run' circ) default).2.1
+
+end CSBuilder
+
+namespace Witgen
+
+scoped instance ctx : Context where
+  Wℤ := ℤ
+  WBool := Bool
+
+abbrev RunnerM : Eff.Scope → Type → Type
+| .constraint => StateM (Array Bool)
+| .hint => Option
+
+instance : (γ : Eff.Scope) → Monad (RunnerM γ)
+| .constraint => inferInstance
+| .hint       => inferInstance
+
+def run' (circ : Vector Bool n → Circuit Unit) (inp : Vector Bool n): StateM (Array Bool) Unit := do
+  set inp.toArray
+  Free.interp (M := RunnerM) (@fun
+    | .constraint, .assertR1C _ _ _, _ => pure ()
+    | .constraint, .f2z a, _ => pure a.toInt
+    | .constraint, .hint _ args n, blkO => do
+      let r := (blkO () args).getD (Vector.replicate n false)
+      modify (fun arr => arr ++ r.toArray)
+      pure r
+    | .hint, .fail _, _ => none
+  ) (circ inp)
+
+def run (circ : Vector Bool n → Circuit Unit) (inp : Vector Bool n): Array Bool :=
+  (StateT.run (run' circ inp) default).2
+
+end Witgen
+
 namespace Ex
 
 variable [ctx : Context]
@@ -233,7 +280,7 @@ def fromBits {n : Nat} (r : Vector WBool n):
     Circuit Wℤ :=
   match n with
   | 0 => pure 0
-  | n + 1 => do
+  | _ + 1 => do
     let i ← fromBits r.tail
     let b ← f2z r.head
     pure (b + 2 • i)
@@ -255,6 +302,12 @@ def smol (inp : Vector WBool 8) : Circuit Unit := do
 
 end Ex
 
-#eval ((StateT.run $ runCircuit $ Ex.smol) default).2.1
+open scoped CSBuilder in
+def smolCS := CSBuilder.run Ex.smol
+
+open scoped Witgen in
+def smolWit := Witgen.run Ex.smol (#v[true, false, true, true, false, false, false, false])
+
+#eval CS.satisfies' smolCS (fun i => smolWit[i]!)
 
 end Freigen.F2Z.Semantics

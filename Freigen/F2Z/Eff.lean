@@ -14,11 +14,11 @@ inductive WitnessSide
 | z : WitnessSide
 | f₂ : WitnessSide
 
-def WitnessSize.denoteW (Wℤ WBool : Type) : WitnessSide → Type
+def WitnessSide.denoteW (Wℤ WBool : Type) : WitnessSide → Type
 | WitnessSide.z  => Wℤ
 | WitnessSide.f₂ => WBool
 
-def WitnessSize.denoteF : WitnessSide → Type
+def WitnessSide.denoteF : WitnessSide → Type
 | WitnessSide.z  => ℤ
 | WitnessSide.f₂ => Bool
 
@@ -26,7 +26,7 @@ inductive ConstraintEff (ctx : Context) where
 | assertR1C (a b c : ctx.Wℤ)
 | f2z (a : ctx.WBool)
 | hint (argTps : List WitnessSide)
-    (args : HList (WitnessSize.denoteW ctx.Wℤ ctx.WBool) argTps) (n : Nat)
+    (args : HList (WitnessSide.denoteW ctx.Wℤ ctx.WBool) argTps) (n : Nat)
 
 inductive HintEff (ctx : Context) where
 | fail : String → HintEff ctx
@@ -61,7 +61,7 @@ instance [ctx : Context]:
   blockInputs := fun
     | .constraint, .assertR1C _ _ _ => nofun
     | .constraint, .f2z _ => nofun
-    | .constraint, .hint argTps _ _ => fun _ => HList WitnessSize.denoteF argTps
+    | .constraint, .hint argTps _ _ => fun _ => HList WitnessSide.denoteF argTps
     | .hint, .fail _ => nofun
   blockOutputs := fun
     | .constraint, .assertR1C _ _ _ => nofun

@@ -32,8 +32,8 @@ def f2z (a : WBool) : Circuit Wℤ :=
   Free.op (E := Eff ctx) (γ := .constraint) (Eff.ConstraintEff.f2z a) nofun
 
 def hint {n : Nat} {argTps : List Eff.WitnessSide}
-    (args : HList (Eff.WitnessSize.denoteW ctx.Wℤ ctx.WBool) argTps)
-    (body : HList Eff.WitnessSize.denoteF argTps → Vector Bool n) :
+    (args : HList (Eff.WitnessSide.denoteW ctx.Wℤ ctx.WBool) argTps)
+    (body : HList Eff.WitnessSide.denoteF argTps → Vector Bool n) :
     Circuit (Vector WBool n) :=
   Free.op (E := Eff ctx) (γ := .constraint) (Eff.ConstraintEff.hint argTps args n)
     (fun _ i => pure (body i))
