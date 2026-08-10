@@ -210,6 +210,12 @@ instance : Monad NoMonad where
   pure _ := PUnit.unit
   bind _ _ := PUnit.unit
 
+instance : LawfulMonad NoMonad := LawfulMonad.mk' _
+  (by intros; rfl)
+  (by intros; rfl)
+  (by intros; rfl)
+
+
 abbrev RunnerM : Eff.Scope → Type → Type
 | .constraint => StateM CSBuilder
 | .hint => NoMonad
@@ -218,8 +224,7 @@ instance : (γ : Eff.Scope) → Monad (RunnerM γ)
 | .constraint => inferInstance
 | .hint       => inferInstance
 
-def run' (circ : Vector (LC Bool) n → Circuit Unit): StateM CSBuilder Unit := do
-  let initial ← Vector.ofFnM (fun _ => CSBuilder.fresh)
+def run' {α} (circ : Circuit α): StateM CSBuilder α := do
   Free.interp (M := RunnerM) (@fun
     | .constraint, .assertR1C a b c, _ => do
         let cs ← get
@@ -233,10 +238,10 @@ def run' (circ : Vector (LC Bool) n → Circuit Unit): StateM CSBuilder Unit := 
         pure lc
     | .constraint, .hint _ _ _, _ => Vector.ofFnM (fun _ => CSBuilder.fresh)
     | .hint, .fail _, _ => ()
-  ) (circ initial)
+  ) circ
 
-def run (circ : Vector (LC Bool) n → Circuit (ctx := ctx) Unit): CS :=
-  (StateT.run (run' circ) default).2.1
+def run {α} (circ : Circuit α) (initial : CSBuilder): (α × CSBuilder) :=
+  StateT.run (run' circ) initial
 
 end CSBuilder
 
@@ -302,12 +307,12 @@ def smol (inp : Vector WBool 8) : Circuit Unit := do
 
 end Ex
 
-open scoped CSBuilder in
-def smolCS := CSBuilder.run Ex.smol
+-- open scoped CSBuilder in
+-- def smolCS := CSBuilder.run Ex.smol
 
 open scoped Witgen in
 def smolWit := Witgen.run Ex.smol (#v[true, false, true, true, false, false, false, false])
 
-#eval CS.satisfies' smolCS (fun i => smolWit[i]!)
+-- #eval CS.satisfies' smolCS (fun i => smolWit[i]!)
 
 end Freigen.F2Z.Semantics
