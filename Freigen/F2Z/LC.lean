@@ -7,45 +7,6 @@ import Mathlib.Algebra.Ring.BooleanRing
 
 namespace Freigen.F2Z
 
-section
-
-variable {F W} [Semiring F] [AddCommMonoid W]
-
-class ModuleWithOne (F : outParam Type) W [Semiring F] [AddCommMonoid W]
-    extends Module F W, One W
-
-instance : ModuleWithOne ℤ ℤ where
-instance : ModuleWithOne Bool Bool where
-
-variable [ModuleWithOne F W]
-
-instance (priority := 100) : NatCast W where
-  natCast n := n • 1
-
-structure Valuation
-    (W : Type) [AddCommMonoid W] [ModuleWithOne F W] where
-  toFun : W →ₗ[F] F
-  one_map : toFun 1 = 1
-
-instance : CoeFun (Valuation W) fun _ => W → F where
-  coe v := v.toFun
-
-@[simp]
-theorem Valuation.one_apply (ρ : Valuation W) : ρ (1 : W) = 1 :=
-  ρ.one_map
-
-@[simp]
-theorem Valuation.add_apply (ρ : Valuation W) (x y : W) :
-    ρ (x + y) = ρ x + ρ y :=
-  ρ.toFun.map_add x y
-
-@[simp]
-theorem Valuation.smul_apply (ρ : Valuation W) (a : F) (x : W) :
-    ρ (a • x) = a * ρ x :=
-  ρ.toFun.map_smul a x
-
-end
-
 def WitnessId := Option Nat
 
 instance : Ord WitnessId := inferInstanceAs (Ord (Option Nat))
@@ -184,34 +145,70 @@ instance : Module F (LC F) where
   add_smul := by intros; ext; simp [HSMul.hSMul, add_mul]
   zero_smul := by intros; ext; simp [HSMul.hSMul, zero_mul]
 
-instance : ModuleWithOne F (LC F) where
+instance (priority := 100) : NatCast (LC F) where
+  natCast n := n • 1
 
-def LC.eval (witness : Nat → F) : Valuation (LC F) where
-  toFun := {
-    toFun f := f.coeffs.foldMap (fun i c => c * i.eval witness)
-    map_add' := by
-      intro x y
-      simp only [add_def]
-      rw [Std.ExtTreeMap.foldMap_filter, Std.ExtTreeMap.foldMap_mergeWith]
-      · intro k
-        cases k <;> simp [WitnessId.eval, add_mul]
-      · intro k v h
-        simp at h
-        simp [h]
-    map_smul' := by
-      intro a x
-      simp only [HSMul.hSMul, SMul.smul, map]
-      rw [Std.ExtTreeMap.foldMap_filter, Std.ExtTreeMap.foldMap_map,
-        ← Std.ExtTreeMap.foldMap_const_mul]
-      · congr 1; ext; simp [mul_assoc]
-      · intros; simp_all
-  }
-  one_map := by
-    simp [OfNat.ofNat, One.one, Singleton.singleton]
-    split
-    · apply Eq.symm
-      assumption
-    · change (0 + (1 * 1) = (1 : F))
-      simp
+def LC.eval (witness : Nat → F) (f : LC F) : F :=
+  f.coeffs.foldMap (fun i c => c * i.eval witness)
+
+omit [DecidableEq F] in
+@[simp]
+theorem LC.eval_zero (witness : Nat → F) :
+    (0 : LC F).eval witness = 0 := by
+  rfl
+
+@[simp]
+theorem LC.eval_add (witness : Nat → F) (x y : LC F) :
+    (x + y).eval witness = x.eval witness + y.eval witness := by
+  simp only [LC.eval, add_def]
+  rw [Std.ExtTreeMap.foldMap_filter, Std.ExtTreeMap.foldMap_mergeWith]
+  · intro k
+    cases k <;> simp [WitnessId.eval, add_mul]
+  · intro k v h
+    simp at h
+    simp [h]
+
+@[simp]
+theorem LC.eval_nsmul (witness : Nat → F) (n : Nat) (x : LC F) :
+    (n • x).eval witness = n • x.eval witness := by
+  induction n with
+  | zero => simp
+  | succ n ih => simp [succ_nsmul, ih, add_mul]
+
+@[simp]
+theorem LC.eval_smul (witness : Nat → F) (a : F) (x : LC F) :
+    (a • x).eval witness = a * x.eval witness := by
+  simp only [LC.eval, HSMul.hSMul, SMul.smul, map]
+  rw [Std.ExtTreeMap.foldMap_filter, Std.ExtTreeMap.foldMap_map,
+    ← Std.ExtTreeMap.foldMap_const_mul]
+  · congr 1; ext; simp [mul_assoc]
+  · intros; simp_all
+
+@[simp]
+theorem LC.eval_one (witness : Nat → F) :
+    (1 : LC F).eval witness = 1 := by
+  simp [LC.eval, OfNat.ofNat, One.one, Singleton.singleton]
+  split
+  · apply Eq.symm
+    assumption
+  · change (0 + (1 * 1) = (1 : F))
+    simp
+
+@[simp]
+theorem LC.eval_sum {I : Type*} (witness : Nat → F)
+    (s : Finset I) (f : I → LC F) :
+    (∑ i ∈ s, f i).eval witness = ∑ i ∈ s, (f i).eval witness := by
+  classical
+  induction s using Finset.induction_on with
+  | empty => simp
+  | @insert a s ha ih => simp [ha, ih]
+
+@[simp]
+theorem LC.eval_natCast (witness : Nat → F) (n : Nat) :
+    (n : LC F).eval witness = n := by
+  change (n • (1 : LC F)).eval witness = (n : F)
+  induction n with
+  | zero => simp
+  | succ n ih => simp [succ_nsmul, ih]
 
 end Freigen.F2Z

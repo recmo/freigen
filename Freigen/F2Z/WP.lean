@@ -35,7 +35,7 @@ def choose (α : Type u) : Nondet α := chooseWhere (fun _ => True)
 end Nondet
 
 abbrev Shape : PostShape :=
-  .arg (Valuation (LC Bool)) $ .arg (Valuation (LC ℤ)) .pure
+  .arg (Nat → Bool) $ .arg (Nat → ℤ) .pure
 
 def Nondet.abort : Nondet α :=
   PredTrans.const ⌜True⌝
@@ -52,17 +52,17 @@ instance : (e: Eff.Scope) → LawfulMonad (RunnerM e)
 | .constraint => inferInstance
 | .hint       => inferInstance
 
-def handler (ρB : Valuation (LC Bool)) (ρZ : Valuation (LC ℤ)) :
+def handler (ρB : Nat → Bool) (ρZ : Nat → ℤ) :
     Freigen.Eff.Handler Eff RunnerM :=
   fun {γ} e _ => match γ, e with
     | .constraint, .assertR1C a b c =>
-        if ρZ a * ρZ b = ρZ c then pure () else Nondet.abort
+        if a.eval ρZ * b.eval ρZ = c.eval ρZ then pure () else Nondet.abort
     | .constraint, .f2z a =>
-        Nondet.chooseWhere fun x : LC ℤ => (ρB a).toInt = ρZ x
+        Nondet.chooseWhere fun x : LC ℤ => (a.eval ρB).toInt = x.eval ρZ
     | .constraint, .hint _ _ n => Nondet.choose (Vector (LC Bool) n)
     | .hint, .fail _ => ()
 
-def interp (ρB : Valuation (LC Bool)) (ρZ : Valuation (LC ℤ)) {α : Type}
+def interp (ρB : Nat → Bool) (ρZ : Nat → ℤ) {α : Type}
     (x : Circuit α) : Nondet α :=
   Free.interp (M := RunnerM) (handler ρB ρZ) x
 
@@ -78,7 +78,7 @@ def interp (ρB : Valuation (LC Bool)) (ρZ : Valuation (LC ℤ)) {α : Type}
 --     ext Q
 --     simp [WP.wp, interp]
 
-variable {ρB : Valuation (LC Bool)} {ρZ : Valuation (LC ℤ)}
+variable {ρB : Nat → Bool} {ρZ : Nat → ℤ}
 
 @[simp, spec]
 theorem interp_bind {x : Circuit α} {f : α → Circuit β} : interp ρB ρZ (do let a ← x; f a) = (do let a ← interp ρB ρZ x; interp ρB ρZ (f a)) := by
@@ -116,7 +116,7 @@ theorem interp_mapM (xs : Vector α n) (f : α → Circuit β) :
 
 @[spec]
 theorem f2z {a ρB ρZ}:
-    ⦃⌜True⌝⦄ interp ρB ρZ (f2z a) ⦃⇓ r => ⌜(ρB a).toInt = ρZ r⌝⦄ := by
+    ⦃⌜True⌝⦄ interp ρB ρZ (f2z a) ⦃⇓ r => ⌜(a.eval ρB).toInt = r.eval ρZ⌝⦄ := by
   rw [Triple.iff]
   simp only [SPred.entails_nil]
   simp only [SPred.down_pure_nil, wp, interp, F2Z.f2z]
@@ -126,7 +126,7 @@ theorem f2z {a ρB ρZ}:
   tauto
 
 theorem adequate {circ : Circuit α} {wit} {P : α → Prop} :
-    ⦃ ⌜True⌝ ⦄ interp (LC.eval wit) ((Semantics.CSBuilder.run circ default).2.intValuation wit) circ ⦃ ⇓ v => ⌜P v⌝ ⦄ →
+    ⦃ ⌜True⌝ ⦄ interp wit ((Semantics.CSBuilder.run circ default).2.intWitness wit) circ ⦃ ⇓ v => ⌜P v⌝ ⦄ →
     (Semantics.CSBuilder.run circ default).2.satisfies wit →
     P (Semantics.CSBuilder.run circ default).1 := by sorry
 

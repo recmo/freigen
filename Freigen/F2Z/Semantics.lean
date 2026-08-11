@@ -32,10 +32,9 @@ def CS.satisfies (cs : CS) (witness : Nat → Bool): Prop :=
   let mw := fun i => mw[i]!
   ∀ r1c ∈ cs.r1cs, r1c.satisfies mw
 
-def CS.intValuation (cs : CS) (witness : Nat → Bool) : Valuation (LC ℤ) :=
+def CS.intWitness (cs : CS) (witness : Nat → Bool) : Nat → ℤ :=
   let mw := cs.m.map (Bool.toInt ∘ LC.eval witness)
-  let mw := fun i => mw[i]!
-  LC.eval mw
+  fun i => mw[i]!
 
 structure CSBuilder where
   result : CS
@@ -96,18 +95,20 @@ structure State where
   ints : Array ℤ := #[]
 deriving Inhabited
 
-def State.boolValuation (s : State) : Valuation (LC Bool) :=
-  LC.eval fun i => s.bools[i]!
+def State.boolWitness (s : State) : Nat → Bool :=
+  fun i => s.bools[i]!
 
-def State.intValuation (s : State) : Valuation (LC ℤ) :=
-  LC.eval fun i => s.ints[i]!
+def State.intWitness (s : State) : Nat → ℤ :=
+  fun i => s.ints[i]!
 
 def evalArgs (s : State) : {argTps : List Eff.WitnessSide} →
     HList Eff.WitnessSide.denoteW argTps →
     HList Eff.WitnessSide.denoteF argTps
   | [], .nil => .nil
-  | .z :: _, .cons x xs => .cons (s.intValuation x) (evalArgs s xs)
-  | .f₂ :: _, .cons x xs => .cons (s.boolValuation x) (evalArgs s xs)
+  | .z :: _, .cons x xs =>
+      .cons (LC.eval (F := ℤ) s.intWitness x) (evalArgs s xs)
+  | .f₂ :: _, .cons x xs =>
+      .cons (LC.eval (F := Bool) s.boolWitness x) (evalArgs s xs)
 
 abbrev RunnerM : Eff.Scope → Type → Type
 | .constraint => StateM State
@@ -125,7 +126,7 @@ def run' (circ : Vector (LC Bool) n → Circuit Unit) (inp : Vector Bool n) : St
     | .constraint, .f2z a, _ => do
       let s ← get
       let nextIdx := s.ints.size
-      let value := (s.boolValuation a).toInt
+      let value := (a.eval s.boolWitness).toInt
       set { s with ints := s.ints.push value }
       pure ({ some nextIdx } : LC ℤ)
     | .constraint, .hint _ args n, blkO => do

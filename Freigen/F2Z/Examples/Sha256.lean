@@ -198,7 +198,7 @@ section Sound
 
 open scoped Sound
 open Std.Do
-variable {ρB : Valuation (LC Bool)} {ρZ : Valuation (LC ℤ)}
+variable {ρB : Nat → Bool} {ρZ : Nat → ℤ}
 
 private theorem natCast_ofBits_eq_sum {n : Nat} (f : Fin n → Bool) :
     (Nat.ofBits f : ℤ) = ∑ i : Fin n, (2 : ℤ) ^ i.val * (f i).toInt := by
@@ -217,26 +217,26 @@ private theorem natCast_ofBits_eq_sum {n : Nat} (f : Fin n → Bool) :
 theorem fromBitsBE_sound {r : Vector (LC Bool) n} :
   ⦃ ⌜True⌝ ⦄
   (Sound.interp ρB ρZ $ fromBitsBE r)
-  ⦃⇓ a => ⌜ρZ a = Nat.ofBits (Vector.get $ r.reverse |>.map ρB)⌝⦄ := by
+  ⦃⇓ a => ⌜a.eval ρZ = Nat.ofBits (Vector.get $ r.reverse |>.map (LC.eval ρB))⌝⦄ := by
   mvcgen [fromBitsBE, Array.mapM_eq_foldlM] invariants
   · ⇓⟨cursor, out⟩ =>
-      ⌜cursor.prefix.map (Bool.toInt ∘ ρB) = out.toList.map ρZ⌝
+      ⌜cursor.prefix.map (Bool.toInt ∘ LC.eval ρB) = out.toList.map (LC.eval ρZ)⌝
   case vc1.step.success => simp_all
   case vc3.h.post.success =>
     simp [VectorMapM.vectorToArrayPost]
     intro hB a rfl
-    have hv : (r.map ρB).reverse.map Bool.toInt = a.map ρZ := by
+    have hv : (r.map (LC.eval ρB)).reverse.map Bool.toInt = a.map (LC.eval ρZ) := by
       apply Vector.toList_inj.mp
       simpa only [Vector.toList, Vector.toArray_map, Vector.toArray_reverse,
         Array.toList_map, Array.toList_reverse, List.map_reverse, List.map_map,
         Function.comp_apply] using hB
     rw [natCast_ofBits_eq_sum]
-    change (∑ i : Fin n, (2 : ℤ) ^ i.val * ρZ a[i]) =
-      ∑ i : Fin n, (2 : ℤ) ^ i.val * ((r.map ρB).reverse[i]).toInt
+    change (∑ i : Fin n, (2 : ℤ) ^ i.val * a[i].eval ρZ) =
+      ∑ i : Fin n, (2 : ℤ) ^ i.val * ((r.map (LC.eval ρB)).reverse[i]).toInt
     apply Finset.sum_congr rfl
     intro i _
     have hi := congrArg (fun v : Vector ℤ n => v[i]) hv
-    have hi' : ((r.map ρB).reverse[i]).toInt = ρZ a[i] := by simpa using hi
+    have hi' : ((r.map (LC.eval ρB)).reverse[i]).toInt = a[i].eval ρZ := by simpa using hi
     rw [← hi']
 
 end Sound
