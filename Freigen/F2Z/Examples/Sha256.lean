@@ -1,4 +1,5 @@
 import Freigen.F2Z.Defs
+import Freigen.F2Z.Gadgets
 import Freigen.F2Z.Semantics
 import Freigen.F2Z.WP
 import Batteries.Data.Int
@@ -147,23 +148,25 @@ example : perm
 
 section Circuit
 
-variable [ctx : Context]
-open Context
+local instance : Inhabited (LC ℤ) := ⟨0⟩
+local instance : Inhabited (LC Bool) := ⟨0⟩
 
-local instance : Inhabited Wℤ := ⟨0⟩
-local instance : Inhabited WBool := ⟨0⟩
-
-def fromBitsBE {n : ℕ} (r : Vector WBool n) : Circuit Wℤ := do
+def fromBitsBE {n : ℕ} (r : Vector (LC Bool) n) : Circuit (LC ℤ) := do
   let bits ← r.reverse.mapM f2z
   return ∑ i : Fin n, 2 ^ i.val • bits[i]
+
+def toBitsBE (n : ℕ) (i : LC ℤ) : Circuit (Vector (LC Bool) n) := do
+  return (← toBits n i).reverse
 
 def _root_.Vector.rotateRight {n : Nat} (v : Vector α n) (k : Nat) : Vector α n :=
   let k := k % n
   have : (n - (n - k) + min (n - k) n) = n := by omega
   this ▸ (v.drop (n - k) ++ v.take (n - k))
 
-def permCircuit (m : Vector (Vector WBool 32) 16) (s : Vector (Vector WBool 32) 8) : Circuit (Vector (Vector WBool 32) 8) := do
-  let mut w : Vector (Vector WBool 32 × Wℤ) 64 := default
+def permCircuit (m : Vector (Vector (LC Bool) 32) 16)
+    (s : Vector (Vector (LC Bool) 32) 8) :
+    Circuit (Vector (Vector (LC Bool) 32) 8) := do
+  let mut w : Vector (Vector (LC Bool) 32 × LC ℤ) 64 := default
   for h:i in [0:16] do
     w := w.set! i (m[i], ←fromBitsBE m[i])
   for i in [16:64] do
@@ -195,8 +198,6 @@ section Sound
 
 open scoped Sound
 open Std.Do
-open Semantics (LC)
-
 variable {ρB : Valuation (LC Bool)} {ρZ : Valuation (LC ℤ)}
 
 private theorem natCast_ofBits_eq_sum {n : Nat} (f : Fin n → Bool) :
@@ -213,7 +214,7 @@ private theorem natCast_ofBits_eq_sum {n : Nat} (f : Fin n → Bool) :
     ring_nf
 
 @[spec]
-theorem fromBitsBE_sound {r : Vector (Semantics.LC Bool) n} :
+theorem fromBitsBE_sound {r : Vector (LC Bool) n} :
   ⦃ ⌜True⌝ ⦄
   (Sound.interp ρB ρZ $ fromBitsBE r)
   ⦃⇓ a => ⌜ρZ a = Nat.ofBits (Vector.get $ r.reverse |>.map ρB)⌝⦄ := by

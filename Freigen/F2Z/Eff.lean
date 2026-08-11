@@ -1,4 +1,4 @@
-import Freigen.F2Z.Context
+import Freigen.F2Z.LC
 import Freigen.CompM.Basic
 import Freigen.Eff
 import Freigen.Free.Basic
@@ -14,39 +14,36 @@ inductive WitnessSide
 | z : WitnessSide
 | f₂ : WitnessSide
 
-def WitnessSide.denoteW (Wℤ WBool : Type) : WitnessSide → Type
-| WitnessSide.z  => Wℤ
-| WitnessSide.f₂ => WBool
+def WitnessSide.denoteW : WitnessSide → Type
+| WitnessSide.z  => LC ℤ
+| WitnessSide.f₂ => LC Bool
 
 def WitnessSide.denoteF : WitnessSide → Type
 | WitnessSide.z  => ℤ
 | WitnessSide.f₂ => Bool
 
-inductive ConstraintEff (ctx : Context) where
-| assertR1C (a b c : ctx.Wℤ)
-| f2z (a : ctx.WBool)
+inductive ConstraintEff where
+| assertR1C (a b c : LC ℤ)
+| f2z (a : LC Bool)
 | hint (argTps : List WitnessSide)
-    (args : HList (WitnessSide.denoteW ctx.Wℤ ctx.WBool) argTps) (n : Nat)
+    (args : HList WitnessSide.denoteW argTps) (n : Nat)
 
-inductive HintEff (ctx : Context) where
-| fail : String → HintEff ctx
+inductive HintEff where
+| fail : String → HintEff
 
 end Eff
 
-def Eff (ctx : Context) : Eff.Scope → Type _
-| .constraint => Eff.ConstraintEff ctx
-| .hint => Eff.HintEff ctx
+def Eff : Eff.Scope → Type _
+| .constraint => Eff.ConstraintEff
+| .hint => Eff.HintEff
 
 namespace Eff
 
-open Context
-
-instance [ctx : Context]:
-    Freigen.Eff.Spec (Γ := Eff.Scope) (Eff ctx) where
+instance : Freigen.Eff.Spec (Γ := Eff.Scope) Eff where
   output := fun
     | .constraint, .assertR1C _ _ _ => Unit
-    | .constraint, .f2z _ => ctx.Wℤ
-    | .constraint, .hint _ _ n => Vector ctx.WBool n
+    | .constraint, .f2z _ => LC ℤ
+    | .constraint, .hint _ _ n => Vector (LC Bool) n
     | .hint, .fail _ => Unit
   blockTag := fun
     | .constraint, .assertR1C _ _ _ => PEmpty
@@ -65,7 +62,7 @@ instance [ctx : Context]:
     | .hint, .fail _ => nofun
   blockOutputs := fun
     | .constraint, .assertR1C _ _ _ => nofun
-    | .constraint, .f2z _ => fun _ => ctx.Wℤ
+    | .constraint, .f2z _ => fun _ => LC ℤ
     | .constraint, .hint _ _ n => fun _ => Vector Bool n
     | .hint, .fail _ => nofun
 

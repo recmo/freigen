@@ -7,8 +7,6 @@ import Batteries.Data.Vector.Lemmas
 
 namespace Freigen.F2Z
 
-open Context
-
 private theorem ofDigits_rdropWhile_false (l : List Bool) :
     Nat.ofDigits 2 ((l.rdropWhile (fun b => !b)).map Bool.toNat) =
       Nat.ofDigits 2 (l.map Bool.toNat) := by
@@ -53,10 +51,8 @@ private theorem ofDigits_vector_eq_sum {n : Nat} (v : Vector Bool n) :
   rw [← Vector.ofFn_getElem (xs := v), Vector.toList_ofFn]
   simpa using ofDigits_bool_eq_sum (fun i : Fin n => v[i.val])
 
-variable [ctx : Context]
-
-def fromBits {n : Nat} (r : Vector WBool n):
-    Circuit Wℤ :=
+def fromBits {n : Nat} (r : Vector (LC Bool) n) :
+    Circuit (LC ℤ) :=
   match n with
   | 0 => pure 0
   | n + 1 => do
@@ -64,8 +60,8 @@ def fromBits {n : Nat} (r : Vector WBool n):
     let b ← f2z r.head
     pure (b + 2 • i)
 
-def toBits (n : ℕ) (i: Wℤ):
-    Circuit (Vector WBool n) := do
+def toBits (n : ℕ) (i : LC ℤ) :
+    Circuit (Vector (LC Bool) n) := do
   let r ← hint (argTps := [.z]) h![i] fun h![i] =>
     let rawBits := i.toNat.bits.toArray
     let padded := rawBits.take n ++ Array.replicate (n - rawBits.size) false
@@ -79,7 +75,7 @@ open Std.Do
 open scoped Std.Do
 
 -- /-- The direct semantics of `fromBits`: every successful result denotes the input bit vector. -/
--- @[spec] def fromBits_spec {n : Nat} (r : Vector WBool n) :
+-- @[spec] def fromBits_spec {n : Nat} (r : Vector (LC Bool) n) :
 --     Triple (fromBits r) spred(⌜True⌝)
 --       (⇓? i ρ => ⌜ρ.z i = ∑ k : Fin n, 2 ^ k.val * (ρ.bool r[k]).toInt⌝) :=
 --   match n with
@@ -106,7 +102,7 @@ open scoped Std.Do
 --           omega
 
 -- /-- The direct semantics of `toBits`, replacing its former returned certificate. -/
--- @[spec] theorem toBits_spec (n : Nat) (i : Wℤ) :
+-- @[spec] theorem toBits_spec (n : Nat) (i : LC ℤ) :
 --     Triple (toBits n i) spred(⌜True⌝)
 --       (⇓? r ρ => ⌜∃ ni : Nat, ρ.z i = ni ∧
 --         (r.toList.map (fun b => ρ.bool b) |>.rdropWhile (· = false)) = ni.bits⌝) := by

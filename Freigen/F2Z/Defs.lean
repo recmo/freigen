@@ -1,41 +1,37 @@
-import Freigen.F2Z.Context
+import Freigen.F2Z.LC
 import Freigen.F2Z.Eff
 
 namespace Freigen.F2Z
 
-open Context
-
-variable [ctx : Context]
-
 abbrev Circuit : Type → Type _ :=
-  Free (Eff ctx) .constraint
+  Free Eff .constraint
 
 instance : Monad (Circuit) :=
-  inferInstanceAs (Monad (Free (Eff ctx) .constraint))
+  inferInstanceAs (Monad (Free Eff .constraint))
 
 instance : LawfulMonad (Circuit) :=
-  inferInstanceAs (LawfulMonad (Free (Eff ctx) .constraint))
+  inferInstanceAs (LawfulMonad (Free Eff .constraint))
 
 abbrev Hint : Type → Type _ :=
-  Free (Eff ctx) .hint
+  Free Eff .hint
 
 instance : Monad (Hint) :=
-  inferInstanceAs (Monad (Free (Eff ctx) .hint))
+  inferInstanceAs (Monad (Free Eff .hint))
 
 instance : LawfulMonad (Hint) :=
-  inferInstanceAs (LawfulMonad (Free (Eff ctx) .hint))
+  inferInstanceAs (LawfulMonad (Free Eff .hint))
 
-def assertR1C (a b c : Wℤ) : Circuit Unit :=
-  Free.op (E := Eff ctx) (γ := .constraint) (Eff.ConstraintEff.assertR1C a b c) nofun
+def assertR1C (a b c : LC ℤ) : Circuit Unit :=
+  Free.op (E := Eff) (γ := .constraint) (Eff.ConstraintEff.assertR1C a b c) nofun
 
-def f2z (a : WBool) : Circuit Wℤ :=
-  Free.op (E := Eff ctx) (γ := .constraint) (Eff.ConstraintEff.f2z a) nofun
+def f2z (a : LC Bool) : Circuit (LC ℤ) :=
+  Free.op (E := Eff) (γ := .constraint) (Eff.ConstraintEff.f2z a) nofun
 
 def hint {n : Nat} {argTps : List Eff.WitnessSide}
-    (args : HList (Eff.WitnessSide.denoteW ctx.Wℤ ctx.WBool) argTps)
+    (args : HList Eff.WitnessSide.denoteW argTps)
     (body : HList Eff.WitnessSide.denoteF argTps → Vector Bool n) :
-    Circuit (Vector WBool n) :=
-  Free.op (E := Eff ctx) (γ := .constraint) (Eff.ConstraintEff.hint argTps args n)
+    Circuit (Vector (LC Bool) n) :=
+  Free.op (E := Eff) (γ := .constraint) (Eff.ConstraintEff.hint argTps args n)
     (fun _ i => pure (body i))
 
 end Freigen.F2Z

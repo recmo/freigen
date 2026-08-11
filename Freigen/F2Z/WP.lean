@@ -4,10 +4,8 @@ import Std.Tactic.Do
 
 namespace Freigen.F2Z.Sound
 
-open Context
 open Std.Do
 open scoped Std.Do
-open Semantics (LC)
 
 def Nondet := PredTrans .pure
 
@@ -42,10 +40,6 @@ abbrev Shape : PostShape :=
 def Nondet.abort : Nondet α :=
   PredTrans.const ⌜True⌝
 
-scoped instance ctx : Context where
-  Wℤ := LC ℤ
-  WBool := LC Bool
-
 abbrev RunnerM : Eff.Scope → Type → Type
 | .constraint => Nondet
 | .hint       => Semantics.CSBuilder.NoMonad
@@ -59,13 +53,13 @@ instance : (e: Eff.Scope) → LawfulMonad (RunnerM e)
 | .hint       => inferInstance
 
 def handler (ρB : Valuation (LC Bool)) (ρZ : Valuation (LC ℤ)) :
-    Freigen.Eff.Handler (Eff ctx) RunnerM :=
+    Freigen.Eff.Handler Eff RunnerM :=
   fun {γ} e _ => match γ, e with
     | .constraint, .assertR1C a b c =>
         if ρZ a * ρZ b = ρZ c then pure () else Nondet.abort
     | .constraint, .f2z a =>
-        Nondet.chooseWhere fun x : ctx.Wℤ => (ρB a).toInt = ρZ x
-    | .constraint, .hint _ _ n => Nondet.choose (Vector ctx.WBool n)
+        Nondet.chooseWhere fun x : LC ℤ => (ρB a).toInt = ρZ x
+    | .constraint, .hint _ _ n => Nondet.choose (Vector (LC Bool) n)
     | .hint, .fail _ => ()
 
 def interp (ρB : Valuation (LC Bool)) (ρZ : Valuation (LC ℤ)) {α : Type}
@@ -131,7 +125,7 @@ theorem f2z {a ρB ρZ}:
     SPred.forall_nil]
   tauto
 
-theorem adequate {circ : [Context] → Circuit (ctx := ctx) α} {wit} { P : α → Prop} :
+theorem adequate {circ : Circuit α} {wit} {P : α → Prop} :
     ⦃ ⌜True⌝ ⦄ interp (LC.eval wit) ((Semantics.CSBuilder.run circ default).2.intValuation wit) circ ⦃ ⇓ v => ⌜P v⌝ ⦄ →
     (Semantics.CSBuilder.run circ default).2.satisfies wit →
     P (Semantics.CSBuilder.run circ default).1 := by sorry
@@ -139,9 +133,5 @@ theorem adequate {circ : [Context] → Circuit (ctx := ctx) α} {wit} { P : α �
 end Sound
 
 namespace Complete
-
--- scoped instance Context : Context where
---   Wℤ := ℤ
---   WBool := Bool
 
 end Freigen.F2Z.Complete
