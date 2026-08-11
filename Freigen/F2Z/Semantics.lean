@@ -160,40 +160,71 @@ namespace Witgen
 
 structure State where
   bools : Array Bool := #[]
+  ints : Array ℤ := #[]
 deriving Inhabited
 
-def evalArgs : {argTps : List Eff.WitnessSide} →
+def State.boolWitness (s : State) : Nat → Bool :=
+  fun i => s.bools[i]!
+
+def State.intWitness (s : State) : Nat → ℤ :=
+  fun i => s.ints[i]!
+
+def evalArgs (s : State) : {argTps : List Eff.WitnessSide} →
     HList Eff.WitnessSide.denoteW argTps →
     HList Eff.WitnessSide.denoteF argTps
   | [], .nil => .nil
-  | .z :: _, .cons x xs =>
-      .cons x.constant (evalArgs xs)
-  | .f₂ :: _, .cons x xs =>
-      .cons x.constant (evalArgs xs)
+  | Eff.WitnessSide.z :: _, .cons x xs =>
+      .cons (show ℤ from LC.eval s.intWitness x) (evalArgs s xs)
+  | Eff.WitnessSide.f₂ :: _, .cons x xs =>
+      .cons (show Bool from LC.eval s.boolWitness x) (evalArgs s xs)
 
 abbrev RunnerM : Eff.Scope → Type → Type
-| .constraint => StateM State
+| .constraint => StateT State Option
 | .hint => Option
 
 instance : (γ : Eff.Scope) → Monad (RunnerM γ)
 | .constraint => inferInstance
 | .hint       => inferInstance
 
-def run' (circ : Circuit α) : StateM State α := do
-  Free.interp (M := RunnerM) (@fun
-    | .constraint, .assertR1C _ _ _, _ => pure ()
-    | .constraint, .f2z a, _ =>
-      pure (LC.ofConst a.constant.toInt)
-    | .constraint, .hint _ args n, blkO => do
-      let r := (blkO () (evalArgs args)).getD (Vector.replicate n false)
-      let s ← get
-      set { s with bools := s.bools ++ r.toArray }
-      pure (r.map LC.ofConst)
-    | .hint, .fail _, _ => none
-  ) circ
+instance : (γ : Eff.Scope) → LawfulMonad (RunnerM γ)
+| .constraint => inferInstance
+| .hint       => inferInstance
 
-def run (circ : Circuit α) : Array Bool :=
-  (StateT.run (run' circ) default).2.bools
+def handler : Freigen.Eff.Handler Eff RunnerM :=
+  @fun
+    | .constraint, .assertR1C a b c, _ => do
+      let s ← get
+      if a.Bounded s.ints.size ∧ b.Bounded s.ints.size ∧
+          c.Bounded s.ints.size ∧
+          a.eval s.intWitness * b.eval s.intWitness = c.eval s.intWitness then
+        pure ()
+      else
+        failure
+    | .constraint, .f2z a, _ => do
+      let s ← get
+      if a.Bounded s.bools.size then
+        let out : LC ℤ := {s.ints.size}
+        set { s with ints := s.ints.push (a.eval s.boolWitness).toInt }
+        pure out
+      else
+        failure
+    | .constraint, .hint _ args _, blkO => do
+      let s ← get
+      let r ← StateT.lift (blkO () (evalArgs s args))
+      let nextWit := s.bools.size
+      set { s with bools := s.bools ++ r.toArray }
+      pure (Vector.ofFn fun i => ({nextWit + i.val} : LC Bool))
+    | .hint, .fail _, _ => none
+
+def runAt { γ : Eff.Scope } (circ : Free Eff γ α) : RunnerM γ α :=
+  Free.interp handler circ
+
+def run' (circ : Circuit α) : StateT State Option α :=
+  runAt circ
+
+def run (circ : Circuit α) : Option (Array Bool) := do
+  let (_, s) ← StateT.run (run' circ) default
+  pure s.bools
 
 end Witgen
 

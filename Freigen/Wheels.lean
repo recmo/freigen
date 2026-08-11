@@ -322,6 +322,22 @@ private theorem foldMap_eq_list [TransCmp cmp] [AddCommMonoid γ]
     foldMap t φ = foldMapList φ t.toList := by
   exact foldl_eq_foldl_toList
 
+theorem foldMap_congr [TransCmp cmp] [AddCommMonoid γ]
+    (t : ExtTreeMap α β cmp) (φ ψ : α → β → γ)
+    (h : ∀ k v, (k, v) ∈ t.toList → φ k v = ψ k v) :
+    foldMap t φ = foldMap t ψ := by
+  rw [foldMap_eq_list, foldMap_eq_list]
+  generalize t.toList = l at h ⊢
+  induction l with
+  | nil => rfl
+  | cons p l ih =>
+      rw [foldMapList_cons, foldMapList_cons]
+      congr 1
+      · exact h p.1 p.2 (by simp)
+      · apply ih
+        intro k v hmem
+        exact h k v (by simp [hmem])
+
 @[simp]
 theorem foldMap_empty [TransCmp cmp] [AddCommMonoid γ]
     (φ : α → β → γ) :

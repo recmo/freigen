@@ -247,18 +247,290 @@ namespace Complete
 open Std.Do
 open scoped Std.Do
 
-def interp : (x : Circuit α) → Option α := Free.interp (M := fun _ => Option) (@fun
-  | .constraint, .assertR1C a b c, _ => if a.constant = b.constant * c.constant then some () else none
-  | .constraint, .f2z a, _ => pure $ (a.constant.toNat : LC ℤ)
-  | .constraint, .hint _ args _, blkO => do
-    let r ← (blkO () (Semantics.Witgen.evalArgs args))
-    pure $ r.map (fun (i: Bool) => i)
-  | .hint, .fail _, _ => none
-)
+private structure Related (cs : Semantics.CSBuilder)
+    (ws : Semantics.Witgen.State) : Prop where
+  nextWit_eq : cs.nextWit = ws.bools.size
+  m_bounded : ∀ a ∈ cs.result.m, a.Bounded ws.bools.size
+  m_eval : cs.result.m.map (Bool.toInt ∘ LC.eval ws.boolWitness) = ws.ints
+  r1cs_bounded : ∀ r ∈ cs.result.r1cs,
+    r.a.Bounded ws.ints.size ∧ r.b.Bounded ws.ints.size ∧
+      r.c.Bounded ws.ints.size
+  r1cs_satisfy : ∀ r ∈ cs.result.r1cs, r.satisfies ws.intWitness
 
-theorem adequate {circ : Circuit α} {α} :
-    ⦃ ⌜True⌝ ⦄ interp circ ⦃ ⇓ _ => ⌜True⌝ ⦄ →
-      (Semantics.CSBuilder.run circ default).2.satisfies ((Semantics.Witgen.run circ)[·]!) := by sorry
+private theorem Related.initial : Related default default := by
+  refine {
+    nextWit_eq := rfl
+    m_bounded := by
+      intro a ha
+      change a ∈ (#[] : Array (LC Bool)) at ha
+      simp at ha
+    m_eval := by
+      native_decide
+    r1cs_bounded := by
+      intro r hr
+      change r ∈ (#[] : Array (Semantics.R1C ℤ)) at hr
+      simp at hr
+    r1cs_satisfy := by
+      intro r hr
+      change r ∈ (#[] : Array (Semantics.R1C ℤ)) at hr
+      simp at hr
+  }
+
+private theorem Related.intWitness_eq {cs : Semantics.CSBuilder}
+    {ws : Semantics.Witgen.State} (h : Related cs ws) :
+    cs.result.intWitness ws.boolWitness = ws.intWitness := by
+  unfold Semantics.CS.intWitness
+  rw [h.m_eval]
+  rfl
+
+private theorem Related.satisfies {cs : Semantics.CSBuilder}
+    {ws : Semantics.Witgen.State} (h : Related cs ws) :
+    cs.result.satisfies ws.boolWitness := by
+  change ∀ r ∈ cs.result.r1cs,
+    r.satisfies (cs.result.intWitness ws.boolWitness)
+  intro r hr
+  rw [h.intWitness_eq]
+  exact h.r1cs_satisfy r hr
+
+private theorem boolWitness_append (ws : Semantics.Witgen.State)
+    (r : Array Bool) {i : Nat} (hi : i < ws.bools.size) :
+    ws.boolWitness i = ({ ws with bools := ws.bools ++ r }).boolWitness i := by
+  unfold Semantics.Witgen.State.boolWitness
+  change ws.bools[i]! = (ws.bools ++ r)[i]!
+  rw [getElem!_pos ws.bools i hi,
+    getElem!_pos (ws.bools ++ r) i (by simp; omega)]
+  exact (Array.getElem_append_left hi).symm
+
+private theorem intWitness_push (ws : Semantics.Witgen.State)
+    (v : ℤ) {i : Nat} (hi : i < ws.ints.size) :
+    ws.intWitness i = ({ ws with ints := ws.ints.push v }).intWitness i := by
+  unfold Semantics.Witgen.State.intWitness
+  change ws.ints[i]! = (ws.ints.push v)[i]!
+  rw [getElem!_pos ws.ints i hi,
+    getElem!_pos (ws.ints.push v) i (by simp; omega)]
+  exact (Array.getElem_push_lt hi).symm
+
+private theorem Related.assertR1C {cs : Semantics.CSBuilder}
+    {ws : Semantics.Witgen.State} (h : Related cs ws)
+    {a b c : LC ℤ}
+    (hbounded : a.Bounded ws.ints.size ∧ b.Bounded ws.ints.size ∧
+      c.Bounded ws.ints.size)
+    (hsat : a.eval ws.intWitness * b.eval ws.intWitness = c.eval ws.intWitness) :
+    Related
+      { cs with result := {
+          cs.result with r1cs := cs.result.r1cs.push { a := a, b := b, c := c }
+        } }
+      ws := by
+  refine {
+    nextWit_eq := h.nextWit_eq
+    m_bounded := h.m_bounded
+    m_eval := h.m_eval
+    r1cs_bounded := ?_
+    r1cs_satisfy := ?_
+  }
+  · intro r hr
+    rw [Array.mem_push] at hr
+    rcases hr with hr | rfl
+    · exact h.r1cs_bounded r hr
+    · exact hbounded
+  · intro r hr
+    rw [Array.mem_push] at hr
+    rcases hr with hr | rfl
+    · exact h.r1cs_satisfy r hr
+    · exact hsat
+
+private theorem Related.f2z {cs : Semantics.CSBuilder}
+    {ws : Semantics.Witgen.State} (h : Related cs ws) (a : LC Bool)
+    (hbounded : a.Bounded ws.bools.size) :
+    Related
+      { cs with result := { cs.result with m := cs.result.m.push a } }
+      { ws with ints := ws.ints.push (a.eval ws.boolWitness).toInt } := by
+  let v := (a.eval ws.boolWitness).toInt
+  let ws' : Semantics.Witgen.State := { ws with ints := ws.ints.push v }
+  refine {
+    nextWit_eq := h.nextWit_eq
+    m_bounded := ?_
+    m_eval := ?_
+    r1cs_bounded := ?_
+    r1cs_satisfy := ?_
+  }
+  · intro x hx
+    rw [Array.mem_push] at hx
+    rcases hx with hx | rfl
+    · exact h.m_bounded x hx
+    · exact hbounded
+  · change (cs.result.m.push a).map
+      (Bool.toInt ∘ LC.eval ws'.boolWitness) = ws'.ints
+    rw [show ws'.boolWitness = ws.boolWitness from rfl]
+    simpa only [v, ws', Array.map_push, Function.comp_apply] using
+      congrArg (fun xs => xs.push v) h.m_eval
+  · intro r hr
+    obtain ⟨ha, hb, hc⟩ := h.r1cs_bounded r hr
+    simpa [ws', v] using ⟨ha.mono (by simp), hb.mono (by simp), hc.mono (by simp)⟩
+  · intro r hr
+    obtain ⟨ha, hb, hc⟩ := h.r1cs_bounded r hr
+    have hea := LC.eval_eq_of_bounded ha (fun i hi => intWitness_push ws v hi)
+    have heb := LC.eval_eq_of_bounded hb (fun i hi => intWitness_push ws v hi)
+    have hec := LC.eval_eq_of_bounded hc (fun i hi => intWitness_push ws v hi)
+    simpa [Semantics.R1C.satisfies, ws', v, hea, heb, hec] using
+      h.r1cs_satisfy r hr
+
+private theorem Related.hint {cs : Semantics.CSBuilder}
+    {ws : Semantics.Witgen.State} (h : Related cs ws) (r : Array Bool) :
+    Related { cs with nextWit := cs.nextWit + r.size }
+      { ws with bools := ws.bools ++ r } := by
+  let ws' : Semantics.Witgen.State := { ws with bools := ws.bools ++ r }
+  refine {
+    nextWit_eq := by simp [h.nextWit_eq]
+    m_bounded := ?_
+    m_eval := ?_
+    r1cs_bounded := h.r1cs_bounded
+    r1cs_satisfy := h.r1cs_satisfy
+  }
+  · intro a ha
+    exact (h.m_bounded a ha).mono (by simp)
+  · calc
+      cs.result.m.map (Bool.toInt ∘ LC.eval ws'.boolWitness) =
+          cs.result.m.map (Bool.toInt ∘ LC.eval ws.boolWitness) := by
+        apply Array.ext
+        · simp
+        · intro i hi₁ hi₂
+          simp only [Array.getElem_map]
+          apply congrArg Bool.toInt
+          have hi : i < cs.result.m.size := by simpa using hi₁
+          apply LC.eval_eq_of_bounded (h.m_bounded _ (Array.getElem_mem hi))
+          intro k hk
+          exact (boolWitness_append ws r hk).symm
+      _ = ws.ints := h.m_eval
+
+private theorem runAt_adequate {a : Circuit α}
+    {cs : Semantics.CSBuilder} {ws ws' : Semantics.Witgen.State}
+    {value : α} (hrel : Related cs ws)
+    (hrun : StateT.run (Semantics.Witgen.runAt a) ws = some (value, ws')) :
+    let result := StateT.run (Semantics.CSBuilder.runAt a) cs
+    result.1 = value ∧ Related result.2 ws' := by
+  let motive := fun (γ : Eff.Scope) (α : Type) (a : Free Eff γ α) =>
+    match γ with
+    | .constraint => ∀ (cs : Semantics.CSBuilder)
+        (ws ws' : Semantics.Witgen.State) (value : α),
+        Related cs ws →
+        StateT.run (Semantics.Witgen.runAt a) ws = some (value, ws') →
+        let result := StateT.run (Semantics.CSBuilder.runAt a) cs
+        result.1 = value ∧ Related result.2 ws'
+    | .hint => True
+  refine (Free.recOn (motive := motive) a ?_ ?_)
+    cs ws ws' value hrel hrun
+  · intro γ α value
+    cases γ with
+    | hint => trivial
+    | constraint =>
+      intro cs ws ws' value' hrel hrun
+      simp [Semantics.Witgen.runAt, Semantics.CSBuilder.runAt] at hrun ⊢
+      rcases hrun with ⟨rfl, rfl⟩
+      exact ⟨rfl, hrel⟩
+  · intro γ α e blocks k _ ihk
+    cases γ with
+    | hint => trivial
+    | constraint =>
+      intro cs ws ws' value hrel hrun
+      unfold Semantics.Witgen.runAt at hrun
+      rw [Free.interp_bind (lawfulM := fun γ => match γ with
+            | .constraint => inferInstance
+            | .hint => inferInstance),
+        Free.interp_op (lawfulM := fun γ => match γ with
+            | .constraint => inferInstance
+            | .hint => inferInstance)] at hrun
+      unfold Semantics.CSBuilder.runAt
+      rw [Free.interp_bind (lawfulM := fun γ => match γ with
+            | .constraint => inferInstance
+            | .hint => inferInstance),
+        Free.interp_op (lawfulM := fun γ => match γ with
+            | .constraint => inferInstance
+            | .hint => inferInstance)]
+      cases e with
+      | assertR1C a b c =>
+          by_cases hall : a.Bounded ws.ints.size ∧ b.Bounded ws.ints.size ∧
+              c.Bounded ws.ints.size ∧
+              a.eval ws.intWitness * b.eval ws.intWitness = c.eval ws.intWitness
+          · rcases hall with ⟨ha, hb, hc, hsat⟩
+            simp [Semantics.Witgen.handler, ha, hb, hc, hsat] at hrun
+            simp [Semantics.CSBuilder.handler]
+            exact ihk () _ _ _ _ (hrel.assertR1C ⟨ha, hb, hc⟩ hsat) hrun
+          · simp [Semantics.Witgen.handler, hall] at hrun
+      | f2z a =>
+          by_cases ha : a.Bounded ws.bools.size
+          · have hsize : cs.result.m.size = ws.ints.size := by
+              simpa using congrArg Array.size hrel.m_eval
+            simp [Semantics.Witgen.handler, ha] at hrun
+            simp [Semantics.CSBuilder.handler]
+            rw [hsize]
+            exact ihk ({ws.ints.size} : LC ℤ) _ _ _ _
+              (hrel.f2z a ha) hrun
+          · simp [Semantics.Witgen.handler, ha] at hrun
+      | hint argTps args n =>
+          cases hbody : Semantics.Witgen.runAt (blocks ()
+            (Semantics.Witgen.evalArgs ws args)) with
+          | none =>
+              unfold Semantics.Witgen.runAt at hbody
+              simp [Semantics.Witgen.handler, hbody] at hrun
+          | some r =>
+              unfold Semantics.Witgen.runAt at hbody
+              simp [Semantics.Witgen.handler, hbody] at hrun
+              have hn : r.toArray.size = n := by simp
+              have hrel' : Related
+                  { cs with nextWit := cs.nextWit + n }
+                  { ws with bools := ws.bools ++ r.toArray } := by
+                simpa [hn] using hrel.hint r.toArray
+              simp [Semantics.CSBuilder.handler]
+              simpa only [Semantics.CSBuilder.runAt, hrel.nextWit_eq] using
+                ihk (Vector.ofFn fun i => ({ws.bools.size + i.val} : LC Bool))
+                  _ _ _ _ hrel' hrun
+
+private theorem adequate_run' {α} {circ : Circuit α} {value : α}
+    {ws : Semantics.Witgen.State} :
+    StateT.run (Semantics.Witgen.run' circ) default = some (value, ws) →
+    (Semantics.CSBuilder.run circ default).2.satisfies ws.boolWitness := by
+  intro hrun
+  have h := runAt_adequate
+    (a := circ) (cs := default) (ws := default) (ws' := ws) (value := value)
+    Related.initial (by simpa [Semantics.Witgen.run'] using hrun)
+  simp only [Semantics.CSBuilder.run, Semantics.CSBuilder.run'] at ⊢
+  generalize hcs : StateT.run (Semantics.CSBuilder.runAt circ) default = result at h ⊢
+  rcases result with ⟨result, cs⟩
+  exact h.2.satisfies
+
+theorem adequate_run {α} {circ : Circuit α} {wit : Array Bool} :
+    Semantics.Witgen.run circ = some wit →
+    (Semantics.CSBuilder.run circ default).2.satisfies (wit[·]!) := by
+  intro hrun
+  unfold Semantics.Witgen.run at hrun
+  generalize hstate : StateT.run (Semantics.Witgen.run' circ) default = result at hrun
+  cases result with
+  | none => simp at hrun
+  | some result =>
+      rcases result with ⟨value, ws⟩
+      simp at hrun
+      subst wit
+      exact adequate_run' hstate
+
+theorem adequate {α} {circ : Circuit α} :
+    ⦃ ⌜True⌝ ⦄ Semantics.Witgen.run circ ⦃ ⇓ _ => ⌜True⌝ ⦄ →
+    ∃ wit, Semantics.Witgen.run circ = some wit ∧
+      (Semantics.CSBuilder.run circ default).2.satisfies (wit[·]!) := by
+  intro htriple
+  rw [Triple.iff] at htriple
+  let P : Option (Array Bool) → Prop
+    | some _ => True
+    | none => False
+  have hsome : P (Semantics.Witgen.run circ) := by
+    apply Option.of_wp_eq rfl P
+    simpa [P, PostCond.noThrow, ExceptConds.false, ExceptConds.const] using htriple
+  cases hrun : Semantics.Witgen.run circ with
+  | none =>
+      simp [P, hrun] at hsome
+  | some wit =>
+      refine ⟨wit, rfl, ?_⟩
+      exact adequate_run hrun
 
 
 end Freigen.F2Z.Complete
