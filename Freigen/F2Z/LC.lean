@@ -23,6 +23,9 @@ def LC.coeff (f : LC F) (a : Nat) : F :=
 instance : CoeFun (LC F) fun _ => Nat → F where
   coe := LC.coeff
 
+instance : Coe F (LC F) where
+  coe c := { constant := c, coeffs := ∅, ne_zero := by simp }
+
 instance {F} [Semiring F] : GetElem (LC F) Nat F (fun _ _ => True) where
   getElem lc k _ := lc.coeff k
 
@@ -74,6 +77,11 @@ instance : Singleton Nat (LC F) where
         · simp [h, hp]
         · simp [default, hp]
   }
+
+@[simp]
+theorem LC.singleton_constant (k : Nat) :
+    ({k} : LC F).constant = 0 := by
+  rfl
 
 instance : One (LC F) where
   one := {
@@ -251,6 +259,30 @@ theorem LC.eval_ofConst (witness : Nat → F) (c : F) :
       (fun i x => x * witness i) = 0 :=
     Std.ExtTreeMap.foldMap_empty _
   rw [h, add_zero]
+
+@[simp]
+theorem LC.eval_singleton (witness : Nat → F) (k : Nat) :
+    ({k} : LC F).eval witness = witness k := by
+  rw [LC.eval, LC.singleton_constant, zero_add]
+  by_cases h : (1 : F) = 0
+  · have hz (x : F) : x = 0 := by
+      calc
+        x = x * 1 := (mul_one x).symm
+        _ = x * 0 := by rw [h]
+        _ = 0 := mul_zero x
+    change (if (1 : F) = 0 then
+      (∅ : Std.ExtTreeMap Nat F) else {(k, (1 : F))}).foldMap
+      (fun i c => c * witness i) = witness k
+    rw [if_pos h]
+    have hempty : (∅ : Std.ExtTreeMap Nat F).foldMap
+        (fun i c => c * witness i) = 0 :=
+      Std.ExtTreeMap.foldMap_empty _
+    exact hempty.trans (hz (witness k)).symm
+  · change (if (1 : F) = 0 then
+      (∅ : Std.ExtTreeMap Nat F) else {(k, (1 : F))}).foldMap
+      (fun i c => c * witness i) = witness k
+    rw [if_neg h, Std.ExtTreeMap.foldMap_singleton]
+    simp
 
 @[simp]
 theorem LC.eval_sum {I : Type*} (witness : Nat → F)

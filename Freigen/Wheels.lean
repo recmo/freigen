@@ -329,6 +329,27 @@ theorem foldMap_empty [TransCmp cmp] [AddCommMonoid γ]
   rw [foldMap_eq_list]
   rfl
 
+@[simp]
+theorem foldMap_singleton [TransCmp cmp] [LawfulEqCmp cmp]
+    [AddCommMonoid γ] (k : α) (v : β) (φ : α → β → γ) :
+    foldMap ({(k, v)} : ExtTreeMap α β cmp) φ = φ k v := by
+  let t : ExtTreeMap α β cmp := {(k, v)}
+  have hlen : t.toList.length = 1 := by
+    simp [t, Std.ExtTreeMap.singleton_eq_insert,
+      Std.ExtTreeMap.length_toList, Std.ExtTreeMap.size_insert]
+  have hmem : (k, v) ∈ t.toList := by
+    simp [t]
+  have hlist : t.toList = [(k, v)] := by
+    cases ht : t.toList with
+    | nil => simp_all
+    | cons p l =>
+      cases l with
+      | nil => simp_all
+      | cons q l => simp_all
+  change foldMap t φ = φ k v
+  rw [foldMap_eq_list, hlist, foldMapList_cons]
+  simp [foldMapList]
+
 /-- Combining map values is sent to addition when each combined entry is. -/
 @[simp]
 theorem foldMap_mergeWith [TransCmp cmp] [LawfulEqCmp cmp]

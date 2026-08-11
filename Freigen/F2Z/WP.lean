@@ -66,18 +66,6 @@ def interp (ρB : Nat → Bool) (ρZ : Nat → ℤ) {α : Type}
     (x : Circuit α) : Nondet α :=
   Free.interp (M := RunnerM) (handler ρB ρZ) x
 
--- instance : WP Circuit Shape where
---   wp x := PredTrans.pushArg fun ρB => PredTrans.pushArg fun ρZ =>
---     (fun a => ((a, ρB), ρZ)) <$> interp ρB ρZ x
-
--- instance : WPMonad Circuit Shape where
---   wp_pure a := by
---     ext Q
---     simp [WP.wp, interp]
---   wp_bind x f := by
---     ext Q
---     simp [WP.wp, interp]
-
 variable {ρB : Nat → Bool} {ρZ : Nat → ℤ}
 
 @[simp, spec]
@@ -125,13 +113,152 @@ theorem f2z {a ρB ρZ}:
     SPred.forall_nil]
   tauto
 
+private theorem satisfies_of_r1cs_prefix {cs : Semantics.CS} {wit : Nat → Bool}
+    {pre : Array (Semantics.R1C ℤ)} {r1c : Semantics.R1C ℤ}
+    (hprefix : (pre.push r1c).toList <+: cs.r1cs.toList)
+    (hsat : cs.satisfies wit) :
+    r1c.satisfies (cs.intWitness wit) := by
+  have hmemList : r1c ∈ cs.r1cs.toList :=
+    hprefix.mem (by simp)
+  have hmem : r1c ∈ cs.r1cs := Array.mem_def.mpr hmemList
+  change ∀ r ∈ cs.r1cs, r.satisfies (cs.intWitness wit) at hsat
+  exact hsat r1c hmem
+
+private theorem intWitness_eq_of_m_prefix {cs : Semantics.CS} {wit : Nat → Bool}
+    {pre : Array (LC Bool)} {a : LC Bool}
+    (hprefix : (pre.push a).toList <+: cs.m.toList) :
+    cs.intWitness wit pre.size = (a.eval wit).toInt := by
+  have hi : pre.size < (pre.push a).toList.length := by simp
+  have hget := hprefix.getElem hi
+  have hsize : pre.size < cs.m.size := by
+    simpa using lt_of_lt_of_le hi hprefix.length_le
+  have hget' : cs.m[pre.size]'hsize = a := by
+    calc
+      cs.m[pre.size] = cs.m.toList[pre.size] := rfl
+      _ = (pre.push a).toList[pre.size] := hget.symm
+      _ = a := by simp
+  unfold Semantics.CS.intWitness
+  rw [getElem!_pos _ _ (by simpa using hsize), Array.getElem_map, hget']
+  rfl
+
+private theorem interp_runAt {a : Circuit α} {s sf : Semantics.CSBuilder}
+    {wit : Nat → Bool} {Q : PostCond α .pure}
+    (hext : Semantics.CSBuilder.Extends
+      (StateT.run (Semantics.CSBuilder.runAt a) s).2 sf)
+    (hsat : sf.result.satisfies wit)
+    (hwp : ((interp wit (sf.result.intWitness wit) a).apply Q).down) :
+    (Q.1 (StateT.run (Semantics.CSBuilder.runAt a) s).1).down := by
+  let motive := fun (γ : Eff.Scope) (α : Type) (a : Free Eff γ α) =>
+    match γ with
+    | .constraint => ∀ (s sf : Semantics.CSBuilder) (wit : Nat → Bool)
+        (Q : PostCond α .pure),
+        Semantics.CSBuilder.Extends
+          (StateT.run (Semantics.CSBuilder.runAt a) s).2 sf →
+        sf.result.satisfies wit →
+        ((interp wit (sf.result.intWitness wit) a).apply Q).down →
+        (Q.1 (StateT.run (Semantics.CSBuilder.runAt a) s).1).down
+    | .hint => True
+  refine (Free.recOn (motive := motive) a ?_ ?_) s sf wit Q hext hsat hwp
+  · intro γ α value
+    cases γ with
+    | hint => trivial
+    | constraint =>
+      intro s sf wit Q hext hsat hwp
+      change (Q.1 value).down
+      change (Q.1 value).down at hwp
+      exact hwp
+  · intro γ α e blocks k _ ihk
+    cases γ with
+    | hint => trivial
+    | constraint =>
+      intro s sf wit Q hext hsat hwp
+      cases e with
+      | assertR1C a b c =>
+          simp [Semantics.CSBuilder.runAt, Semantics.CSBuilder.handler,
+            interp, handler] at hext hwp ⊢
+          let s₁ : Semantics.CSBuilder := {
+            s with result := {
+              s.result with r1cs := s.result.r1cs.push { a := a, b := b, c := c }
+            }
+          }
+          have hs₁sf : Semantics.CSBuilder.Extends s₁ sf :=
+            (Semantics.CSBuilder.run'_extends (a := k ()) (s := s₁)).trans hext
+          have hr1c := satisfies_of_r1cs_prefix hs₁sf.1 hsat
+          change a.eval (sf.result.intWitness wit) * b.eval (sf.result.intWitness wit) =
+            c.eval (sf.result.intWitness wit) at hr1c
+          have hwp' : ((interp wit (sf.result.intWitness wit) (k ())).apply Q).down := by
+            simpa [interp, hr1c] using hwp
+          exact ihk () s₁ sf wit Q hext hsat hwp'
+      | f2z a =>
+          simp [Semantics.CSBuilder.runAt, Semantics.CSBuilder.handler,
+            interp, handler] at hext hwp ⊢
+          let out : LC ℤ := {s.result.m.size}
+          let s₁ : Semantics.CSBuilder := {
+            s with result := { s.result with m := s.result.m.push a }
+          }
+          have hs₁sf : Semantics.CSBuilder.Extends s₁ sf :=
+            (Semantics.CSBuilder.run'_extends (a := k out) (s := s₁)).trans hext
+          have hidx := intWitness_eq_of_m_prefix hs₁sf.2 (wit := wit)
+          have hrel : (a.eval wit).toInt = out.eval (sf.result.intWitness wit) := by
+            simp [out, hidx]
+          change ∀ x : LC ℤ,
+            (a.eval wit).toInt = x.eval (sf.result.intWitness wit) →
+              ((interp wit (sf.result.intWitness wit) (k x)).apply Q).down at hwp
+          exact ihk out s₁ sf wit Q hext hsat (hwp out hrel)
+      | hint argTps args n =>
+          simp [Semantics.CSBuilder.runAt, Semantics.CSBuilder.handler,
+            interp, handler] at hext hwp ⊢
+          let out : Vector (LC Bool) n :=
+            Vector.ofFn fun i => {s.nextWit + i.val}
+          let s₁ : Semantics.CSBuilder := {
+            s with nextWit := s.nextWit + n
+          }
+          change ∀ x : Vector (LC Bool) n, True →
+            ((interp wit (sf.result.intWitness wit) (k x)).apply Q).down at hwp
+          exact ihk out s₁ sf wit Q hext hsat (hwp out True.intro)
+
 theorem adequate {circ : Circuit α} {wit} {P : α → Prop} :
     ⦃ ⌜True⌝ ⦄ interp wit ((Semantics.CSBuilder.run circ default).2.intWitness wit) circ ⦃ ⇓ v => ⌜P v⌝ ⦄ →
     (Semantics.CSBuilder.run circ default).2.satisfies wit →
-    P (Semantics.CSBuilder.run circ default).1 := by sorry
+    P (Semantics.CSBuilder.run circ default).1 := by
+  intro htriple hsat
+  simp only [Semantics.CSBuilder.run, Semantics.CSBuilder.run'] at htriple hsat ⊢
+  generalize hrun : StateT.run (Semantics.CSBuilder.runAt circ) default = result at htriple hsat ⊢
+  rcases result with ⟨value, sf⟩
+  simp only at htriple hsat ⊢
+  rw [Triple.iff] at htriple
+  simp only [SPred.entails_nil, SPred.down_pure_nil, wp] at htriple
+  have hwp := htriple True.intro
+  have h := interp_runAt
+    (a := circ)
+    (s := default)
+    (sf := sf)
+    (wit := wit)
+    (Q := (⇓ v => ⌜P v⌝))
+    (by simpa [hrun] using Semantics.CSBuilder.Extends.refl sf)
+    hsat
+    hwp
+  simpa [hrun] using h
 
 end Sound
 
 namespace Complete
+
+open Std.Do
+open scoped Std.Do
+
+def interp : (x : Circuit α) → Option α := Free.interp (M := fun _ => Option) (@fun
+  | .constraint, .assertR1C a b c, _ => if a.constant = b.constant * c.constant then some () else none
+  | .constraint, .f2z a, _ => pure $ (a.constant.toNat : LC ℤ)
+  | .constraint, .hint _ args _, blkO => do
+    let r ← (blkO () (Semantics.Witgen.evalArgs args))
+    pure $ r.map (fun (i: Bool) => i)
+  | .hint, .fail _, _ => none
+)
+
+theorem adequate {circ : Circuit α} {α} :
+    ⦃ ⌜True⌝ ⦄ interp circ ⦃ ⇓ _ => ⌜True⌝ ⦄ →
+      (Semantics.CSBuilder.run circ default).2.satisfies ((Semantics.Witgen.run circ)[·]!) := by sorry
+
 
 end Freigen.F2Z.Complete

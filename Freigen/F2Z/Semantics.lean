@@ -66,8 +66,12 @@ instance : (γ : Eff.Scope) → Monad (RunnerM γ)
 | .constraint => inferInstance
 | .hint       => inferInstance
 
-def run' {α} (circ : Circuit α): StateM CSBuilder α := do
-  Free.interp (M := RunnerM) (@fun
+instance : (γ : Eff.Scope) → LawfulMonad (RunnerM γ)
+| .constraint => inferInstance
+| .hint       => inferInstance
+
+def handler : Freigen.Eff.Handler Eff RunnerM :=
+  @fun
     | .constraint, .assertR1C a b c, _ => do
         let cs ← get
         let r1c : R1C ℤ := { a := a, b := b, c := c }
@@ -78,13 +82,77 @@ def run' {α} (circ : Circuit α): StateM CSBuilder α := do
         let lc : LC ℤ := { nextIdx }
         set { cs with result := { cs.result with m := cs.result.m.push a } }
         pure lc
-    | .constraint, .hint _ _ _, _ => Vector.ofFnM (fun _ => CSBuilder.fresh)
+    | .constraint, .hint _ _ n, _ => do
+        let s ← get
+        let out : Vector (LC Bool) n :=
+          Vector.ofFn fun i => {s.nextWit + i.val}
+        set { s with nextWit := s.nextWit + n }
+        pure out
     | .hint, .fail _, _ => ()
-  ) circ
+
+def runAt {γ : Eff.Scope} {α} (circ : Free Eff γ α) : RunnerM γ α :=
+  Free.interp handler circ
+
+def run' {α} (circ : Circuit α): StateM CSBuilder α :=
+  runAt circ
 
 def run {α} (circ : Circuit α) (initial : CSBuilder): (α × CS) :=
   let (a, csb) := StateT.run (run' circ) initial
   (a, csb.result)
+
+def Extends (s₁ s₂ : CSBuilder) : Prop :=
+  s₁.result.r1cs.toList <+: s₂.result.r1cs.toList ∧
+    s₁.result.m.toList <+: s₂.result.m.toList
+
+theorem Extends.refl (s : CSBuilder) : Extends s s := by
+  simp [Extends]
+
+theorem Extends.trans {s₁ s₂ s₃ : CSBuilder}
+    (h₁₂ : Extends s₁ s₂) (h₂₃ : Extends s₂ s₃) : Extends s₁ s₃ := by
+  exact ⟨h₁₂.1.trans h₂₃.1, h₁₂.2.trans h₂₃.2⟩
+
+theorem run'_extends {a : Circuit α} {s : CSBuilder} :
+    Extends s (StateT.run (run' a) s).2 := by
+  let motive := fun (γ : Eff.Scope) (α : Type) (a : Free Eff γ α) =>
+    match γ with
+    | .constraint => ∀ s, Extends s (StateT.run (runAt a) s).2
+    | .hint => True
+  apply Free.recOn (motive := motive) a (s := s)
+  · intro γ α value
+    cases γ with
+    | constraint => exact fun s => Extends.refl s
+    | hint => trivial
+  · intro γ α e blocks k _ ihk
+    cases γ with
+    | hint => trivial
+    | constraint =>
+      intro s
+      cases e with
+      | assertR1C a b c =>
+          simp [runAt, handler]
+          apply Extends.trans (s₂ := {
+            s with result := {
+              s.result with r1cs := s.result.r1cs.push { a := a, b := b, c := c }
+            }
+          })
+          · constructor
+            · exact ⟨[{ a := a, b := b, c := c }], by simp⟩
+            · simp
+          · exact ihk () _
+      | f2z a =>
+          simp [runAt, handler]
+          apply Extends.trans (s₂ := {
+            s with result := { s.result with m := s.result.m.push a }
+          })
+          · constructor
+            · simp
+            · exact ⟨[a], by simp⟩
+          · exact ihk ({s.result.m.size} : LC ℤ) _
+      | hint argTps args n =>
+          simp [runAt, handler]
+          apply Extends.trans (s₂ := { s with nextWit := s.nextWit + n })
+          · simp [Extends]
+          · exact ihk (Vector.ofFn fun i => {s.nextWit + i.val}) _
 
 end CSBuilder
 
@@ -111,9 +179,7 @@ instance : (γ : Eff.Scope) → Monad (RunnerM γ)
 | .constraint => inferInstance
 | .hint       => inferInstance
 
-def run' (circ : Vector (LC Bool) n → Circuit Unit) (inp : Vector Bool n) : StateM State Unit := do
-  set ({ bools := inp.toArray } : State)
-  let inputValues := inp.map LC.ofConst
+def run' (circ : Circuit α) : StateM State α := do
   Free.interp (M := RunnerM) (@fun
     | .constraint, .assertR1C _ _ _, _ => pure ()
     | .constraint, .f2z a, _ =>
@@ -124,10 +190,10 @@ def run' (circ : Vector (LC Bool) n → Circuit Unit) (inp : Vector Bool n) : St
       set { s with bools := s.bools ++ r.toArray }
       pure (r.map LC.ofConst)
     | .hint, .fail _, _ => none
-  ) (circ inputValues)
+  ) circ
 
-def run (circ : Vector (LC Bool) n → Circuit Unit) (inp : Vector Bool n) : Array Bool :=
-  (StateT.run (run' circ inp) default).2.bools
+def run (circ : Circuit α) : Array Bool :=
+  (StateT.run (run' circ) default).2.bools
 
 end Witgen
 
@@ -162,8 +228,9 @@ end Ex
 -- open scoped CSBuilder in
 -- def smolCS := CSBuilder.run Ex.smol
 
-def smolWit := Witgen.run Ex.smol (#v[true, false, true, true, false, false, false, false])
+def smolWit := Witgen.run (Ex.smol (#v[true, false, true, true, false, false, false, false]))
 
+#eval smolWit
 -- #eval CS.satisfies' smolCS (fun i => smolWit[i]!)
 
 end Freigen.F2Z.Semantics
