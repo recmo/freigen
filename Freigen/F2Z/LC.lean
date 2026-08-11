@@ -194,34 +194,6 @@ instance (priority := 100) : NatCast (LC F) where
 def LC.eval (witness : Nat → F) (f : LC F) : F :=
   f.constant + f.coeffs.foldMap (fun i c => c * witness i)
 
-def LC.Bounded (n : Nat) (f : LC F) : Prop :=
-  f.coeffs.toList.all (fun p => decide (p.1 < n)) = true
-
-instance (n : Nat) (f : LC F) : Decidable (f.Bounded n) := by
-  unfold LC.Bounded
-  infer_instance
-
-omit [DecidableEq F] in
-theorem LC.Bounded.mono {m n : Nat} {f : LC F}
-    (h : f.Bounded m) (hmn : m ≤ n) : f.Bounded n := by
-  apply List.all_eq_true.mpr
-  intro p hp
-  have hp' := List.all_eq_true.mp h p hp
-  simp only [decide_eq_true_eq] at hp' ⊢
-  exact lt_of_lt_of_le hp' hmn
-
-omit [DecidableEq F] in
-theorem LC.eval_eq_of_bounded {n : Nat} {f : LC F} {witness₁ witness₂ : Nat → F}
-    (hf : f.Bounded n) (hw : ∀ i, i < n → witness₁ i = witness₂ i) :
-    f.eval witness₁ = f.eval witness₂ := by
-  unfold LC.eval
-  congr 1
-  apply Std.ExtTreeMap.foldMap_congr
-  intro k c hmem
-  have hk := List.all_eq_true.mp hf (k, c) hmem
-  simp only [decide_eq_true_eq] at hk
-  rw [hw k hk]
-
 omit [DecidableEq F] in
 @[simp]
 theorem LC.eval_zero (witness : Nat → F) :

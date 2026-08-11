@@ -160,21 +160,19 @@ namespace Witgen
 
 structure State where
   bools : Array Bool := #[]
-  ints : Array ℤ := #[]
 deriving Inhabited
 
 def State.boolWitness (s : State) : Nat → Bool :=
   fun i => s.bools[i]!
 
-def State.intWitness (s : State) : Nat → ℤ :=
-  fun i => s.ints[i]!
+def zeroWitness : Nat → ℤ := fun _ => 0
 
 def evalArgs (s : State) : {argTps : List Eff.WitnessSide} →
     HList Eff.WitnessSide.denoteW argTps →
     HList Eff.WitnessSide.denoteF argTps
   | [], .nil => .nil
   | Eff.WitnessSide.z :: _, .cons x xs =>
-      .cons (show ℤ from LC.eval s.intWitness x) (evalArgs s xs)
+      .cons (show ℤ from LC.eval zeroWitness x) (evalArgs s xs)
   | Eff.WitnessSide.f₂ :: _, .cons x xs =>
       .cons (show Bool from LC.eval s.boolWitness x) (evalArgs s xs)
 
@@ -193,27 +191,18 @@ instance : (γ : Eff.Scope) → LawfulMonad (RunnerM γ)
 def handler : Freigen.Eff.Handler Eff RunnerM :=
   @fun
     | .constraint, .assertR1C a b c, _ => do
-      let s ← get
-      if a.Bounded s.ints.size ∧ b.Bounded s.ints.size ∧
-          c.Bounded s.ints.size ∧
-          a.eval s.intWitness * b.eval s.intWitness = c.eval s.intWitness then
+      if a.eval zeroWitness * b.eval zeroWitness = c.eval zeroWitness then
         pure ()
       else
         failure
     | .constraint, .f2z a, _ => do
       let s ← get
-      if a.Bounded s.bools.size then
-        let out : LC ℤ := {s.ints.size}
-        set { s with ints := s.ints.push (a.eval s.boolWitness).toInt }
-        pure out
-      else
-        failure
+      pure ((a.eval s.boolWitness).toInt : LC ℤ)
     | .constraint, .hint _ args _, blkO => do
       let s ← get
       let r ← StateT.lift (blkO () (evalArgs s args))
-      let nextWit := s.bools.size
       set { s with bools := s.bools ++ r.toArray }
-      pure (Vector.ofFn fun i => ({nextWit + i.val} : LC Bool))
+      pure (r.map LC.ofConst)
     | .hint, .fail _, _ => none
 
 def runAt { γ : Eff.Scope } (circ : Free Eff γ α) : RunnerM γ α :=
