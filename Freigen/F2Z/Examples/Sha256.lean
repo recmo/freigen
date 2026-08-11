@@ -1,7 +1,7 @@
 import Freigen.F2Z.Defs
 import Freigen.F2Z.Gadgets
 import Freigen.F2Z.Semantics
-import Freigen.F2Z.WP
+import Freigen.F2Z.Correctness.Basic
 import Batteries.Data.Int
 import Mathlib.Algebra.BigOperators.Fin
 
@@ -12,18 +12,10 @@ namespace VectorMapM
 open Std.Do
 open scoped Std.Do
 
-/--
-Transfer a postcondition on a fixed-length vector to its underlying array.  Quantifying over every
-vector whose array is `a` avoids having to carry a separate proof that `a.size = n`.
--/
 def vectorToArrayPost {β : Type u} {n : Nat} {ps : PostShape}
     (Q : PostCond (Vector β n) ps) : PostCond (Array β) ps :=
   (spred(fun a => ∀ v, ⌜v.toArray = a⌝ → Q.1 v), Q.2)
 
-/--
-Reason about `Vector.mapM` through `Array.mapM`.  After applying this rule,
-`Array.mapM_eq_foldlM` exposes the traversal to `mvcgen`'s existing cursor-invariant rule.
--/
 @[spec]
 theorem vectorMapM_of_array [Monad m] [WPMonad m ps]
     {f : α → m β} {xs : Vector α n}
@@ -194,11 +186,153 @@ def permCircuit (m : Vector (Vector (LC Bool) 32) 16)
 
 end Circuit
 
+section WF
+
+private theorem list_mapM_f2z_rel
+    {P : WF.Assumption} {xsL xsR : List (LC Bool)}
+    (hlen : xsL.length = xsR.length)
+    (hxs : ∀ leftVal rightVal, P leftVal rightVal →
+      List.Forall₂ (WF.LCEq leftVal.bool rightVal.bool) xsL xsR) :
+    WF.Rel
+      (fun leftVal rightVal ysL ysR =>
+        P leftVal rightVal ∧
+        List.Forall₂ (WF.LCEq leftVal.int rightVal.int) ysL ysR)
+      P (xsL.mapM f2z) (xsR.mapM f2z) := by
+  induction xsL generalizing xsR P with
+  | nil =>
+      cases xsR with
+      | nil =>
+          simp only [List.mapM_nil]
+          exact .pure fun leftVal rightVal hP => ⟨hP, .nil⟩
+      | cons => simp at hlen
+  | cons x xs ih =>
+      cases xsR with
+      | nil => simp at hlen
+      | cons y ys =>
+          simp only [List.mapM_cons]
+          apply WF.Rel.f2z
+          · intro leftVal rightVal hP
+            cases hxs leftVal rightVal hP with
+            | cons hhead _ => exact hhead
+          · intro outL outR
+            let P' : WF.Assumption := fun leftVal rightVal =>
+              P leftVal rightVal ∧
+              outL.eval leftVal.int = (x.eval leftVal.bool).toInt ∧
+              outR.eval rightVal.int = (y.eval rightVal.bool).toInt
+            have htail : ∀ leftVal rightVal, P' leftVal rightVal →
+                List.Forall₂ (WF.LCEq leftVal.bool rightVal.bool) xs ys := by
+              intro leftVal rightVal hP'
+              cases hxs leftVal rightVal hP'.1 with
+              | cons _ htail => exact htail
+            have hrel := ih (P := P') (xsR := ys)
+              (by simpa using hlen) htail
+            apply hrel.bind (fun tail => pure (outL :: tail))
+              (fun tail => pure (outR :: tail))
+            intro S tailL tailR hpost
+            apply WF.Rel.pure
+            intro leftVal rightVal hS
+            have hp := hpost leftVal rightVal hS
+            refine ⟨hp.1.1, .cons ?_ hp.2⟩
+            unfold WF.LCEq
+            cases hxs leftVal rightVal hp.1.1 with
+            | cons hhead _ =>
+                unfold WF.LCEq at hhead
+                exact hp.1.2.1.trans
+                  ((congrArg Bool.toInt hhead).trans hp.1.2.2.symm)
+
+private theorem array_mapM_f2z_rel
+    {P : WF.Assumption} {xsL xsR : Array (LC Bool)}
+    (hlen : xsL.size = xsR.size)
+    (hxs : ∀ leftVal rightVal, P leftVal rightVal →
+      List.Forall₂ (WF.LCEq leftVal.bool rightVal.bool)
+        xsL.toList xsR.toList) :
+    WF.Rel
+      (fun leftVal rightVal ysL ysR =>
+        P leftVal rightVal ∧
+        List.Forall₂ (WF.LCEq leftVal.int rightVal.int)
+          ysL.toList ysR.toList)
+      P (xsL.mapM f2z) (xsR.mapM f2z) := by
+  rw [Array.mapM_eq_mapM_toList, Array.mapM_eq_mapM_toList]
+  have hrel := list_mapM_f2z_rel
+    (P := P) (xsL := xsL.toList) (xsR := xsR.toList)
+    (by simpa using hlen) hxs
+  apply hrel.bind (fun ys => pure ys.toArray) (fun ys => pure ys.toArray)
+  intro S ysL ysR hpost
+  exact .pure fun leftVal rightVal hS => by
+    simpa using hpost leftVal rightVal hS
+
+private def sumArray (bits : Array (LC ℤ)) (n : Nat) : LC ℤ :=
+  ∑ i : Fin n, 2 ^ i.val • bits[i.val]?.getD 0
+
+private theorem fromBitsBE_eq_array (r : Vector (LC Bool) n) :
+    fromBitsBE r = (do
+      let bits ← r.reverse.toArray.mapM f2z
+      pure (sumArray bits n)) := by
+  unfold fromBitsBE
+  rw [← Vector.toArray_mapM]
+  simp only [bind_pure_comp, Functor.map_map]
+  congr 1
+  funext bits
+  simp [sumArray]
+
+theorem fromBitsBE_wf :
+    WF.GadgetSpec
+      (fun leftVal rightVal (left right : Vector (LC Bool) n) =>
+        ∀ i : Fin n,
+          WF.LCEq leftVal.bool rightVal.bool left[i] right[i])
+      fromBitsBE
+      (fun leftVal rightVal left right =>
+        WF.LCEq leftVal.int rightVal.int left right) := by
+  intro left right
+  rw [fromBitsBE_eq_array, fromBitsBE_eq_array]
+  let P : WF.Assumption := fun leftVal rightVal =>
+    ∀ i : Fin n,
+      WF.LCEq leftVal.bool rightVal.bool left[i] right[i]
+  have hinputs : ∀ leftVal rightVal, P leftVal rightVal →
+      List.Forall₂ (WF.LCEq leftVal.bool rightVal.bool)
+        left.reverse.toArray.toList right.reverse.toArray.toList := by
+    intro leftVal rightVal hP
+    apply List.forall₂_iff_get.mpr
+    constructor
+    · simp
+    · intro i hiLeft hiRight
+      simp only [List.get_eq_getElem, Array.getElem_toList]
+      have hi : i < n := by simpa using hiLeft
+      change WF.LCEq leftVal.bool rightVal.bool
+        left.reverse[i] right.reverse[i]
+      rw [Vector.getElem_reverse hi, Vector.getElem_reverse hi]
+      exact hP ⟨n - 1 - i, by omega⟩
+  have hrel := array_mapM_f2z_rel
+    (P := P) (xsL := left.reverse.toArray)
+    (xsR := right.reverse.toArray) (by simp) hinputs
+  apply hrel.bind (fun bits => pure (sumArray bits n))
+    (fun bits => pure (sumArray bits n))
+  intro S bitsL bitsR hpost
+  exact .pure fun leftVal rightVal hS => by
+    have hp := hpost leftVal rightVal hS
+    unfold WF.LCEq sumArray
+    simp only [LC.eval_sum, LC.eval_nsmul]
+    apply Finset.sum_congr rfl
+    intro i _
+    congr 1
+    have hlen := hp.2.length_eq
+    have hsize : bitsL.size = bitsR.size := by simpa using hlen
+    by_cases hi : i.val < bitsL.size
+    · have hiR : i.val < bitsR.size := by omega
+      have hget := hp.2.get (i := i.val)
+        (by simpa using hi) (by simpa using hiR)
+      unfold WF.LCEq at hget
+      simpa [List.get_eq_getElem, hi, hiR] using hget
+    · have hiR : ¬i.val < bitsR.size := by omega
+      simp [hi, hiR]
+
+end WF
+
 section Sound
 
 open scoped Sound
 open Std.Do
-variable {ρB : Nat → Bool} {ρZ : Nat → ℤ}
+variable {valuation : WF.Valuation}
 
 private theorem natCast_ofBits_eq_sum {n : Nat} (f : Fin n → Bool) :
     (Nat.ofBits f : ℤ) = ∑ i : Fin n, (2 : ℤ) ^ i.val * (f i).toInt := by
@@ -216,29 +350,75 @@ private theorem natCast_ofBits_eq_sum {n : Nat} (f : Fin n → Bool) :
 @[spec]
 theorem fromBitsBE_sound {r : Vector (LC Bool) n} :
   ⦃ ⌜True⌝ ⦄
-  (Sound.interp ρB ρZ $ fromBitsBE r)
-  ⦃⇓ a => ⌜a.eval ρZ = Nat.ofBits (Vector.get $ r.reverse |>.map (LC.eval ρB))⌝⦄ := by
+  (Sound.interp valuation $ fromBitsBE r)
+  ⦃⇓ a => ⌜a.eval valuation.int =
+    Nat.ofBits (Vector.get $ r.reverse |>.map (LC.eval valuation.bool))⌝⦄ := by
   mvcgen [fromBitsBE, Array.mapM_eq_foldlM] invariants
   · ⇓⟨cursor, out⟩ =>
-      ⌜cursor.prefix.map (Bool.toInt ∘ LC.eval ρB) = out.toList.map (LC.eval ρZ)⌝
+      ⌜cursor.prefix.map (Bool.toInt ∘ LC.eval valuation.bool) =
+        out.toList.map (LC.eval valuation.int)⌝
   case vc1.step.success => simp_all
   case vc3.h.post.success =>
     simp [VectorMapM.vectorToArrayPost]
     intro hB a rfl
-    have hv : (r.map (LC.eval ρB)).reverse.map Bool.toInt = a.map (LC.eval ρZ) := by
+    have hv : (r.map (LC.eval valuation.bool)).reverse.map Bool.toInt =
+        a.map (LC.eval valuation.int) := by
       apply Vector.toList_inj.mp
       simpa only [Vector.toList, Vector.toArray_map, Vector.toArray_reverse,
         Array.toList_map, Array.toList_reverse, List.map_reverse, List.map_map,
         Function.comp_apply] using hB
     rw [natCast_ofBits_eq_sum]
-    change (∑ i : Fin n, (2 : ℤ) ^ i.val * a[i].eval ρZ) =
-      ∑ i : Fin n, (2 : ℤ) ^ i.val * ((r.map (LC.eval ρB)).reverse[i]).toInt
+    change (∑ i : Fin n, (2 : ℤ) ^ i.val * a[i].eval valuation.int) =
+      ∑ i : Fin n,
+        (2 : ℤ) ^ i.val * ((r.map (LC.eval valuation.bool)).reverse[i]).toInt
     apply Finset.sum_congr rfl
     intro i _
     have hi := congrArg (fun v : Vector ℤ n => v[i]) hv
-    have hi' : ((r.map (LC.eval ρB)).reverse[i]).toInt = a[i].eval ρZ := by simpa using hi
+    have hi' : ((r.map (LC.eval valuation.bool)).reverse[i]).toInt =
+        a[i].eval valuation.int := by simpa using hi
     rw [← hi']
 
 end Sound
+
+section Complete
+
+open Std.Do
+open scoped Std.Do
+
+@[spec]
+theorem fromBitsBE_complete {r : Vector (LC Bool) n}
+    {valuation : WF.Valuation} :
+    ⦃ ⌜True⌝ ⦄
+    Complete.interp valuation (fromBitsBE r)
+    ⦃⇓ a => ⌜a.eval valuation.int =
+      Nat.ofBits (Vector.get $ r.reverse |>.map (LC.eval valuation.bool))⌝⦄ := by
+  mvcgen [fromBitsBE, Array.mapM_eq_foldlM] invariants
+  · ⇓⟨cursor, out⟩ =>
+      ⌜cursor.prefix.map (Bool.toInt ∘ LC.eval valuation.bool) =
+        out.toList.map (LC.eval valuation.int)⌝
+  case vc1.step.success => simp_all
+  case vc3.h.post.success =>
+    simp [VectorMapM.vectorToArrayPost]
+    intro hB a rfl
+    mvcgen
+    have hv : (r.map (LC.eval valuation.bool)).reverse.map Bool.toInt =
+        a.map (LC.eval valuation.int) := by
+      apply Vector.toList_inj.mp
+      simpa only [Vector.toList, Vector.toArray_map, Vector.toArray_reverse,
+        Array.toList_map, Array.toList_reverse, List.map_reverse, List.map_map,
+        Function.comp_apply] using hB
+    rw [natCast_ofBits_eq_sum]
+    simp only [LC.eval_sum, LC.eval_nsmul]
+    change (∑ i : Fin n, (2 : ℤ) ^ i.val * a[i].eval valuation.int) =
+      ∑ i : Fin n,
+        (2 : ℤ) ^ i.val * ((r.map (LC.eval valuation.bool)).reverse[i]).toInt
+    apply Finset.sum_congr rfl
+    intro i _
+    have hi := congrArg (fun v : Vector ℤ n => v[i]) hv
+    have hi' : ((r.map (LC.eval valuation.bool)).reverse[i]).toInt =
+        a[i].eval valuation.int := by simpa using hi
+    rw [← hi']
+
+end Complete
 
 end Freigen.F2Z.Examples

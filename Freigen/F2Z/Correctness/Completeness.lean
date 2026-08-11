@@ -1,6 +1,6 @@
 import Freigen.F2Z.Semantics
 import Freigen.F2Z.Nondet
-import Freigen.F2Z.WF
+import Freigen.F2Z.Correctness.WF
 import Std.Tactic.Do
 
 namespace Freigen.F2Z.Complete
@@ -38,12 +38,12 @@ def interpHandler (valuation : WF.Valuation) :
 def interp (valuation : WF.Valuation) (circ : Circuit α) : Option α :=
   Free.interp (interpHandler valuation) circ
 
-@[simp]
+@[simp, spec]
 theorem interp_pure (valuation : WF.Valuation) (value : α) :
-    interp valuation (pure value : Circuit α) = some value := by
+    interp valuation (pure value : Circuit α) = pure value := by
   rfl
 
-@[simp]
+@[simp, spec]
 theorem interp_bind (valuation : WF.Valuation)
     (circ : Circuit α) (k : α → Circuit β) :
     interp valuation (circ >>= k) =
@@ -54,7 +54,7 @@ theorem interp_bind (valuation : WF.Valuation)
 theorem interp_assertR1C (valuation : WF.Valuation) (a b c : LC ℤ) :
     interp valuation (F2Z.assertR1C a b c) =
       if a.eval valuation.int * b.eval valuation.int = c.eval valuation.int then
-        some ()
+        pure ()
       else
         none := by
   unfold interp F2Z.assertR1C
@@ -64,7 +64,7 @@ theorem interp_assertR1C (valuation : WF.Valuation) (a b c : LC ℤ) :
 @[simp]
 theorem interp_f2z (valuation : WF.Valuation) (a : LC Bool) :
     interp valuation (F2Z.f2z a) =
-      some (LC.ofConst (a.eval valuation.bool).toInt) := by
+      pure (LC.ofConst (a.eval valuation.bool).toInt) := by
   unfold interp F2Z.f2z
   rw [Free.interp_op]
   rfl
@@ -75,10 +75,62 @@ theorem interp_hint (valuation : WF.Valuation)
     (args : HList Eff.WitnessSide.denoteW argTps)
     (body : HList Eff.WitnessSide.denoteF argTps → Vector Bool n) :
     interp valuation (F2Z.hint args body) =
-      some ((body (WF.evalArgs valuation args)).map LC.ofConst) := by
+      pure ((body (WF.evalArgs valuation args)).map LC.ofConst) := by
   unfold interp F2Z.hint
   rw [Free.interp_op]
   simp [interpHandler]
+
+@[spec]
+theorem option_some_spec (value : α)
+    (Q : PostCond α (.except PUnit .pure)) :
+    Triple (some value) (Q.1 value) Q := by
+  apply Triple.iff.mpr
+  exact SPred.entails.rfl
+
+@[spec]
+theorem interp_f2z_spec {a : LC Bool} {valuation : WF.Valuation} :
+    ⦃ ⌜True⌝ ⦄ interp valuation (F2Z.f2z a)
+    ⦃⇓ result =>
+      ⌜result.eval valuation.int = (a.eval valuation.bool).toInt⌝⦄ := by
+  rw [interp_f2z]
+  mvcgen
+  case vc1 => simp
+
+@[simp, spec]
+theorem interp_map (valuation : WF.Valuation)
+    (f : α → β) (circ : Circuit α) :
+    interp valuation (f <$> circ) = f <$> interp valuation circ := by
+  rw [← bind_pure_comp, interp_bind]
+  generalize interp valuation circ = result
+  cases result <;> rfl
+
+private theorem interp_list_mapM (valuation : WF.Valuation)
+    (xs : List α) (f : α → Circuit β) :
+    interp valuation (xs.mapM f) =
+      xs.mapM (fun x => interp valuation (f x)) := by
+  induction xs with
+  | nil => simp
+  | cons x xs ih =>
+      simp only [List.mapM_cons, interp_bind, ih]
+      generalize interp valuation (f x) = headResult
+      generalize List.mapM (fun x => interp valuation (f x)) xs = tailResult
+      cases headResult <;> cases tailResult <;> rfl
+
+private theorem interp_array_mapM (valuation : WF.Valuation)
+    (xs : Array α) (f : α → Circuit β) :
+    interp valuation (xs.mapM f) =
+      xs.mapM (fun x => interp valuation (f x)) := by
+  simp only [Array.mapM_eq_mapM_toList, interp_map,
+    interp_list_mapM]
+
+@[simp, spec]
+theorem interp_mapM (valuation : WF.Valuation)
+    (xs : Vector α n) (f : α → Circuit β) :
+    interp valuation (xs.mapM f) =
+      xs.mapM (fun x => interp valuation (f x)) := by
+  apply Vector.map_toArray_inj.mp
+  rw [← interp_map, Vector.toArray_mapM,
+    interp_array_mapM, Vector.toArray_mapM]
 
 private def BoolsRealize (ws : Semantics.Witgen.State)
     (valuation : Nat → Bool) : Prop :=
