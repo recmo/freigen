@@ -142,25 +142,34 @@ instance : Module F (LC F) where
 
 instance : ModuleWithOne F (LC F) where
 
-def LC.eval (witness : Nat → F): LC F →ₗ[F] F where
-  toFun f :=
-    f.coeffs.foldMap (fun i c => c * i.eval witness)
-  map_add' := by
-    intro x y
-    simp only [add_def]
-    rw [Std.ExtTreeMap.foldMap_filter, Std.ExtTreeMap.foldMap_mergeWith]
-    · intro k
-      cases k <;> simp [WitnessId.eval, add_mul]
-    · intro k v h
-      simp at h
-      simp [h]
-  map_smul' := by
-    intro a x
-    simp only [HSMul.hSMul, SMul.smul, map]
-    rw [Std.ExtTreeMap.foldMap_filter, Std.ExtTreeMap.foldMap_map,
-      ←Std.ExtTreeMap.foldMap_const_mul]
-    · congr 1; ext; simp [mul_assoc]
-    · intros; simp_all
+def LC.eval (witness : Nat → F): Valuation (LC F) where
+  toFun := {
+    toFun f := f.coeffs.foldMap (fun i c => c * i.eval witness)
+    map_add' := by
+      intro x y
+      simp only [add_def]
+      rw [Std.ExtTreeMap.foldMap_filter, Std.ExtTreeMap.foldMap_mergeWith]
+      · intro k
+        cases k <;> simp [WitnessId.eval, add_mul]
+      · intro k v h
+        simp at h
+        simp [h]
+    map_smul' := by
+      intro a x
+      simp only [HSMul.hSMul, SMul.smul, map]
+      rw [Std.ExtTreeMap.foldMap_filter, Std.ExtTreeMap.foldMap_map,
+        ←Std.ExtTreeMap.foldMap_const_mul]
+      · congr 1; ext; simp [mul_assoc]
+      · intros; simp_all
+  }
+  one_map := by
+    simp [OfNat.ofNat, One.one, Singleton.singleton]
+    split
+    · apply Eq.symm
+      assumption
+    · change (0 + (1 * 1) = (1 : F))
+      simp
+
 
 structure R1C F [Semiring F] where
   a : LC F
@@ -189,11 +198,15 @@ def CS.satisfies (cs : CS) (witness : Nat → Bool): Prop :=
   let mw := fun i => mw[i]!
   ∀ r1c ∈ cs.r1cs, r1c.satisfies mw
 
+def CS.intValuation (cs : CS) (witness : Nat → Bool) : Valuation (LC ℤ) :=
+  let mw := cs.m.map (Bool.toInt ∘ LC.eval witness)
+  let mw := fun i => mw[i]!
+  LC.eval mw
+
 structure CSBuilder where
   result : CS
   nextWit : Nat
 deriving Inhabited
-
 
 namespace CSBuilder
 
@@ -240,8 +253,9 @@ def run' {α} (circ : Circuit α): StateM CSBuilder α := do
     | .hint, .fail _, _ => ()
   ) circ
 
-def run {α} (circ : Circuit α) (initial : CSBuilder): (α × CSBuilder) :=
-  StateT.run (run' circ) initial
+def run {α} (circ : Circuit α) (initial : CSBuilder): (α × CS) :=
+  let (a, csb) := StateT.run (run' circ) initial
+  (a, csb.result)
 
 end CSBuilder
 
