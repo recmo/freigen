@@ -44,7 +44,7 @@ deriving Inhabited
 namespace CSBuilder
 
 def fresh : StateM CSBuilder (LC Bool) := do
-  modifyGet (fun s => ({ some s.nextWit }, { s with nextWit := s.nextWit + 1 }))
+  modifyGet (fun s => ({ s.nextWit }, { s with nextWit := s.nextWit + 1 }))
 
 def NoMonad : Type → Type u := fun _ => PUnit
 
@@ -75,7 +75,7 @@ def run' {α} (circ : Circuit α): StateM CSBuilder α := do
     | .constraint, .f2z a, _ => do
         let cs ← get
         let nextIdx := cs.result.m.size
-        let lc : LC ℤ := { some nextIdx }
+        let lc : LC ℤ := { nextIdx }
         set { cs with result := { cs.result with m := cs.result.m.push a } }
         pure lc
     | .constraint, .hint _ _ _, _ => Vector.ofFnM (fun _ => CSBuilder.fresh)
@@ -92,23 +92,16 @@ namespace Witgen
 
 structure State where
   bools : Array Bool := #[]
-  ints : Array ℤ := #[]
 deriving Inhabited
 
-def State.boolWitness (s : State) : Nat → Bool :=
-  fun i => s.bools[i]!
-
-def State.intWitness (s : State) : Nat → ℤ :=
-  fun i => s.ints[i]!
-
-def evalArgs (s : State) : {argTps : List Eff.WitnessSide} →
+def evalArgs : {argTps : List Eff.WitnessSide} →
     HList Eff.WitnessSide.denoteW argTps →
     HList Eff.WitnessSide.denoteF argTps
   | [], .nil => .nil
   | .z :: _, .cons x xs =>
-      .cons (LC.eval (F := ℤ) s.intWitness x) (evalArgs s xs)
+      .cons x.constant (evalArgs xs)
   | .f₂ :: _, .cons x xs =>
-      .cons (LC.eval (F := Bool) s.boolWitness x) (evalArgs s xs)
+      .cons x.constant (evalArgs xs)
 
 abbrev RunnerM : Eff.Scope → Type → Type
 | .constraint => StateM State
@@ -120,23 +113,18 @@ instance : (γ : Eff.Scope) → Monad (RunnerM γ)
 
 def run' (circ : Vector (LC Bool) n → Circuit Unit) (inp : Vector Bool n) : StateM State Unit := do
   set ({ bools := inp.toArray } : State)
-  let inputWires : Vector (LC Bool) n := Vector.ofFn fun i => { some i.val }
+  let inputValues := inp.map LC.ofConst
   Free.interp (M := RunnerM) (@fun
     | .constraint, .assertR1C _ _ _, _ => pure ()
-    | .constraint, .f2z a, _ => do
-      let s ← get
-      let nextIdx := s.ints.size
-      let value := (a.eval s.boolWitness).toInt
-      set { s with ints := s.ints.push value }
-      pure ({ some nextIdx } : LC ℤ)
+    | .constraint, .f2z a, _ =>
+      pure (LC.ofConst a.constant.toInt)
     | .constraint, .hint _ args n, blkO => do
+      let r := (blkO () (evalArgs args)).getD (Vector.replicate n false)
       let s ← get
-      let r := (blkO () (evalArgs s args)).getD (Vector.replicate n false)
-      let nextIdx := s.bools.size
       set { s with bools := s.bools ++ r.toArray }
-      pure (Vector.ofFn fun i => ({ some (nextIdx + i.val) } : LC Bool))
+      pure (r.map LC.ofConst)
     | .hint, .fail _, _ => none
-  ) (circ inputWires)
+  ) (circ inputValues)
 
 def run (circ : Vector (LC Bool) n → Circuit Unit) (inp : Vector Bool n) : Array Bool :=
   (StateT.run (run' circ inp) default).2.bools

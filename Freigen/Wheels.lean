@@ -322,6 +322,13 @@ private theorem foldMap_eq_list [TransCmp cmp] [AddCommMonoid γ]
     foldMap t φ = foldMapList φ t.toList := by
   exact foldl_eq_foldl_toList
 
+@[simp]
+theorem foldMap_empty [TransCmp cmp] [AddCommMonoid γ]
+    (φ : α → β → γ) :
+    foldMap (empty : ExtTreeMap α β cmp) φ = 0 := by
+  rw [foldMap_eq_list]
+  rfl
+
 /-- Combining map values is sent to addition when each combined entry is. -/
 @[simp]
 theorem foldMap_mergeWith [TransCmp cmp] [LawfulEqCmp cmp]
