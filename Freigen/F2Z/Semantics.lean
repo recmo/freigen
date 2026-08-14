@@ -88,7 +88,7 @@ def handler : Freigen.Eff.Handler Eff RunnerM :=
           Vector.ofFn fun i => {s.nextWit + i.val}
         set { s with nextWit := s.nextWit + n }
         pure out
-    | .hint, .fail _, _ => ()
+    | .hint, .fail _ _, _ => ()
 
 def runAt {γ : Eff.Scope} {α} (circ : Free Eff γ α) : RunnerM γ α :=
   Free.interp handler circ
@@ -200,10 +200,10 @@ def handler : Freigen.Eff.Handler Eff RunnerM :=
       pure ((a.eval s.boolWitness).toInt : LC ℤ)
     | .constraint, .hint _ args _, blkO => do
       let s ← get
-      let r ← StateT.lift (blkO () (evalArgs s args))
+      let r ← StateT.lift (blkO PUnit.unit (evalArgs s args))
       set { s with bools := s.bools ++ r.toArray }
       pure (r.map LC.ofConst)
-    | .hint, .fail _, _ => none
+    | .hint, .fail _ _, _ => none
 
 def runAt { γ : Eff.Scope } (circ : Free Eff γ α) : RunnerM γ α :=
   Free.interp handler circ
@@ -234,7 +234,7 @@ def toBits (n : ℕ) (i : LC ℤ) :
     let rawBits := i.toNat.bits.toArray
     let padded := rawBits.take n ++ Array.replicate (n - rawBits.size) false
     let paddedVec : Vector Bool n := ⟨padded, by grind⟩
-    paddedVec
+    pure paddedVec
   let sum ← fromBits r
   assertR1C sum 1 i
   return r

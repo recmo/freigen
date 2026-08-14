@@ -29,9 +29,11 @@ def f2z (a : LC Bool) : Circuit (LC ℤ) :=
 
 def hint {n : Nat} {argTps : List Eff.WitnessSide}
     (args : HList Eff.WitnessSide.denoteW argTps)
-    (body : HList Eff.WitnessSide.denoteF argTps → Vector Bool n) :
+    (body : HList Eff.WitnessSide.denoteF argTps → Hint (Vector Bool n)) :
     Circuit (Vector (LC Bool) n) :=
-  Free.op (E := Eff) (γ := .constraint) (Eff.ConstraintEff.hint argTps args n)
-    (fun _ i => pure (body i))
+  Free.op (E := Eff) (γ := .constraint) (Eff.ConstraintEff.hint argTps args n) (fun _ => body)
+
+def fail {α : Type} (msg : String) : Hint α :=
+  Free.op (E := Eff) (γ := .hint) (Eff.HintEff.fail α msg) nofun
 
 end Freigen.F2Z

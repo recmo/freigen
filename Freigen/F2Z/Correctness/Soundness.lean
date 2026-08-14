@@ -36,7 +36,7 @@ def handler (valuation : WF.Valuation) :
         Nondet.chooseWhere fun x : LC ℤ =>
           (a.eval valuation.bool).toInt = x.eval valuation.int
     | .constraint, .hint _ _ n => Nondet.choose (Vector (LC Bool) n)
-    | .hint, .fail _ => ()
+    | .hint, .fail _ _ => ()
 
 def interp (valuation : WF.Valuation) {α : Type}
     (x : Circuit α) : Nondet α :=
@@ -54,6 +54,66 @@ theorem interp_bind {x : Circuit α} {f : α → Circuit β} :
 theorem interp_pure (a : α) :
     interp valuation (pure a : Circuit α) = pure a := by
   rfl
+
+/-- MVCGen-facing form of `interp_bind`. Unlike an equational simp lemma,
+this rule exposes the native `Nondet` bind before MVCGen inspects its head. -/
+@[spec]
+theorem interp_bind_spec {x : Circuit α} {f : α → Circuit β}
+    {P : SPred []} {Q : PostCond β .pure}
+    (h : Triple
+      (do
+        let a ← interp valuation x
+        interp valuation (f a))
+      P Q) :
+    Triple (interp valuation (x >>= f)) P Q := by
+  rwa [interp_bind]
+
+/-- MVCGen-facing form of `interp_pure`. -/
+@[spec]
+theorem interp_pure_spec (a : α) (Q : PostCond α .pure) :
+    Triple (interp valuation (pure a : Circuit α)) (Q.1 a) Q := by
+  rw [interp_pure]
+  exact Std.Do.Spec.pure
+
+/-- Interpretation commutes with `forIn'` over lists. -/
+theorem interp_forIn'_list (xs : List α) (init : β)
+    (f : (a : α) → a ∈ xs → β → Circuit (ForInStep β)) :
+    interp valuation (forIn' xs init f) =
+      forIn' xs init fun a h b => interp valuation (f a h b) := by
+  induction xs generalizing init with
+  | nil => simp [interp_pure]
+  | cons x xs ih =>
+      simp only [List.forIn'_cons, interp_bind]
+      congr 1
+      funext step
+      cases step with
+      | done b => simp [interp_pure]
+      | yield b =>
+          simpa using ih b
+            (fun a h b => f a (List.mem_cons_of_mem x h) b)
+
+/-- Interpretation commutes with `forIn'` over legacy ranges, the collection
+used by `for h : i in [start:stop]`. -/
+theorem interp_forIn'_range (xs : Std.Legacy.Range) (init : β)
+    (f : (a : Nat) → a ∈ xs → β → Circuit (ForInStep β)) :
+    interp valuation (forIn' xs init f) =
+      forIn' xs init fun a h b => interp valuation (f a h b) := by
+  rw [Std.Legacy.Range.forIn'_eq_forIn'_range',
+    Std.Legacy.Range.forIn'_eq_forIn'_range']
+  simpa using interp_forIn'_list xs.toList init
+    (fun a h b => f a (Std.Legacy.Range.mem_of_mem_range' h) b)
+
+/-- Expose an interpreted range loop as a native `Nondet` range loop so that
+MVCGen can apply its standard loop rule and request an invariant. -/
+@[spec]
+theorem interp_forIn'_range_spec
+    {xs : Std.Legacy.Range} {init : β}
+    {f : (a : Nat) → a ∈ xs → β → Circuit (ForInStep β)}
+    {P : SPred []} {Q : PostCond β .pure}
+    (h : Triple
+      (forIn' xs init fun a h b => interp valuation (f a h b)) P Q) :
+    Triple (interp valuation (forIn' xs init f)) P Q := by
+  rwa [interp_forIn'_range]
 
 @[simp, spec]
 theorem interp_map (g : α → β) (x : Circuit α) :
@@ -80,6 +140,27 @@ theorem interp_mapM (xs : Vector α n) (f : α → Circuit β) :
   apply Vector.map_toArray_inj.mp
   rw [← interp_map, Vector.toArray_mapM, interp_array_mapM, Vector.toArray_mapM]
 
+/- An assertion adds its equation as an assumption on the surviving path.
+If the equation is false, the sound semantics aborts that path. -/
+@[spec]
+theorem assertR1C (a b c : LC ℤ) (Q : PostCond Unit .pure) :
+    Triple (interp valuation (F2Z.assertR1C a b c))
+      spred(⌜a.eval valuation.int * b.eval valuation.int =
+        c.eval valuation.int⌝ → Q.1 ()) Q := by
+  rw [Triple.iff]
+  simp only [SPred.entails_nil, wp, interp, F2Z.assertR1C]
+  rw [Free.interp_op]
+  simp only [PredTrans.apply, handler, SPred.imp_nil,
+    SPred.down_pure_nil]
+  split
+  · rename_i hconstraint
+    intro hpre
+    have hpost := hpre hconstraint
+    change (Q.1 ()).down
+    exact hpost
+  · intro _
+    exact True.intro
+
 @[spec]
 theorem f2z {a}:
     ⦃⌜True⌝⦄ interp valuation (f2z a)
@@ -92,6 +173,21 @@ theorem f2z {a}:
   simp only [PredTrans.apply, handler, Nondet.chooseWhere, SPred.imp_nil, SPred.down_pure_nil,
     SPred.forall_nil]
   tauto
+
+/-- Soundness treats a hint as universal nondeterminism: the postcondition
+must hold for every vector the constraint-system semantics may return. -/
+@[spec]
+theorem hint {n : Nat} {argTps : List Eff.WitnessSide}
+    (args : HList Eff.WitnessSide.denoteW argTps)
+    (body : HList Eff.WitnessSide.denoteF argTps → Hint (Vector Bool n))
+    (Q : PostCond (Vector (LC Bool) n) .pure) :
+    Triple (interp valuation (F2Z.hint args body))
+      spred(∀ result, Q.1 result) Q := by
+  unfold interp F2Z.hint
+  rw [Free.interp_op]
+  simpa [handler, Nondet.choose] using
+    Nondet.chooseWhere_spec
+      (fun _ : Vector (LC Bool) n => True) Q
 
 /-- The common valuation induced by a constraint system and a Boolean witness. -/
 def csValuation (cs : Semantics.CS)

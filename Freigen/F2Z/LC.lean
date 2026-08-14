@@ -188,6 +188,11 @@ instance : Module F (LC F) where
   add_smul := by intros; ext <;> simp [HSMul.hSMul, add_mul]
   zero_smul := by intros; ext <;> simp [HSMul.hSMul, zero_mul]
 
+/-- Over a ring, the existing module structure canonically upgrades the
+additive monoid of linear combinations to an additive group. -/
+instance {R} [Ring R] [DecidableEq R] : AddCommGroup (LC R) :=
+  Module.addCommMonoidToAddCommGroup R
+
 instance (priority := 100) : NatCast (LC F) where
   natCast n := n • 1
 
@@ -237,6 +242,15 @@ theorem LC.eval_smul (witness : Nat → F) (a : F) (x : LC F) :
       (fun k v => v * witness k) a]
     simp [mul_add]
   · intros; simp_all
+
+@[simp]
+theorem LC.eval_sub {R} [Ring R] [DecidableEq R]
+    (witness : Nat → R) (x y : LC R) :
+    (x - y).eval witness = x.eval witness - y.eval witness := by
+  rw [sub_eq_add_neg, LC.eval_add]
+  rw [← neg_one_smul R y, LC.eval_smul]
+  rw [sub_eq_add_neg]
+  simp
 
 omit [DecidableEq F] in
 @[simp]

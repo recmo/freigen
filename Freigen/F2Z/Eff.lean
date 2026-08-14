@@ -22,14 +22,27 @@ def WitnessSide.denoteF : WitnessSide → Type
 | WitnessSide.z  => ℤ
 | WitnessSide.f₂ => Bool
 
-inductive ConstraintEff where
+unif_hint denoteW_z (side : WitnessSide) where
+  side =?= WitnessSide.z
+  ⊢ LC ℤ =?= side.denoteW
+
+unif_hint denoteW_f₂ (side : WitnessSide) where
+  side =?= WitnessSide.f₂
+  ⊢ LC Bool =?= side.denoteW
+
+/- Keep the witness sort visible to unification hints instead of reducing an
+unknown sort to a stuck recursor.  The equations remain available explicitly
+with `simp [WitnessSide.denoteW]`. -/
+attribute [irreducible] WitnessSide.denoteW
+
+inductive ConstraintEff : Type u where
 | assertR1C (a b c : LC ℤ)
 | f2z (a : LC Bool)
 | hint (argTps : List WitnessSide)
     (args : HList WitnessSide.denoteW argTps) (n : Nat)
 
 inductive HintEff where
-| fail : String → HintEff
+| fail : Type → String → HintEff
 
 end Eff
 
@@ -44,26 +57,26 @@ instance : Freigen.Eff.Spec (Γ := Eff.Scope) Eff where
     | .constraint, .assertR1C _ _ _ => Unit
     | .constraint, .f2z _ => LC ℤ
     | .constraint, .hint _ _ n => Vector (LC Bool) n
-    | .hint, .fail _ => Unit
+    | .hint, .fail α _ => α
   blockTag := fun
     | .constraint, .assertR1C _ _ _ => PEmpty
     | .constraint, .f2z _ => PEmpty
     | .constraint, .hint _ _ _ => PUnit
-    | .hint, .fail _ => PEmpty
+    | .hint, .fail _ _ => PEmpty
   blockCtx := fun
     | .constraint, .assertR1C _ _ _ => nofun
     | .constraint, .f2z _ => nofun
     | .constraint, .hint _ _ _ => fun _ => .hint
-    | .hint, .fail _ => nofun
+    | .hint, .fail _ _ => nofun
   blockInputs := fun
     | .constraint, .assertR1C _ _ _ => nofun
     | .constraint, .f2z _ => nofun
     | .constraint, .hint argTps _ _ => fun _ => HList WitnessSide.denoteF argTps
-    | .hint, .fail _ => nofun
+    | .hint, .fail _ _ => nofun
   blockOutputs := fun
     | .constraint, .assertR1C _ _ _ => nofun
     | .constraint, .f2z _ => fun _ => LC ℤ
     | .constraint, .hint _ _ n => fun _ => Vector Bool n
-    | .hint, .fail _ => nofun
+    | .hint, .fail _ _ => nofun
 
 end Freigen.F2Z.Eff

@@ -19,9 +19,11 @@ def evalArgs (valuation : Valuation) :
     HList Eff.WitnessSide.denoteF argTps
   | [], .nil => .nil
   | .z :: _, .cons x xs =>
-      .cons (show ℤ from x.eval valuation.int) (evalArgs valuation xs)
+      .cons (show ℤ from (show LC ℤ from x).eval valuation.int)
+        (evalArgs valuation xs)
   | .f₂ :: _, .cons x xs =>
-      .cons (show Bool from x.eval valuation.bool) (evalArgs valuation xs)
+      .cons (show Bool from (show LC Bool from x).eval valuation.bool)
+        (evalArgs valuation xs)
 
 /-- Hint arguments are equivalent when they evaluate to the same heterogeneous tuple. -/
 def ArgsEq (leftVal rightVal : Valuation)
@@ -34,6 +36,67 @@ def RealizesBools (valuation : Nat → Bool)
     (xs : Vector (LC Bool) n) (values : Vector Bool n) : Prop :=
   ∀ (i : Nat) (hi : i < n),
     LC.eval valuation xs[i] = values[i]
+
+/-- Stateless denotation of the hint language. -/
+def interpHint (body : Hint α) : Option α :=
+  Free.interp (fun _ _ => none) body
+
+@[simp]
+theorem interpHint_pure (value : α) :
+    interpHint (pure value : Hint α) = some value := by
+  rfl
+
+@[simp]
+theorem interpHint_bind (body : Hint α) (k : α → Hint β) :
+    interpHint (body >>= k) =
+      (interpHint body >>= fun value => interpHint (k value)) := by
+  simp [interpHint, Free.interp_bind]
+
+@[simp]
+theorem interpHint_fail (msg : String) :
+    interpHint (F2Z.fail (α := α) msg) = none := by
+  unfold interpHint F2Z.fail
+  rw [Free.interp_op]
+
+/-- Two hint computations either both fail, or return related values. -/
+def HintRel (R : α → β → Prop) (left : Hint α) (right : Hint β) : Prop :=
+  Option.Rel R (interpHint left) (interpHint right)
+
+/-- A hint computation successfully returns `value`. -/
+def HintReturns (body : Hint α) (value : α) : Prop :=
+  interpHint body = some value
+
+/-- A deterministic hint computation has at most one successful result. -/
+theorem HintReturns.unique {body : Hint α} {left right : α}
+    (hleft : HintReturns body left) (hright : HintReturns body right) :
+    left = right := by
+  unfold HintReturns at hleft hright
+  rw [hleft] at hright
+  exact Option.some.inj hright
+
+attribute [grind →] HintReturns.unique
+
+theorem HintRel.refl (body : Hint α) : HintRel Eq body body := by
+  unfold HintRel
+  cases interpHint body with
+  | none => exact .none
+  | some value => exact .some rfl
+
+theorem HintRel.of_eq {left right : Hint α} (h : left = right) :
+    HintRel Eq left right := by
+  subst right
+  exact HintRel.refl _
+
+theorem HintRel.of_argsEq
+    {argTps : List Eff.WitnessSide}
+    {argsL argsR : HList Eff.WitnessSide.denoteW argTps}
+    (body : HList Eff.WitnessSide.denoteF argTps → Hint α)
+    (hargs : ArgsEq leftVal rightVal argsL argsR) :
+    HintRel Eq (body (evalArgs leftVal argsL))
+      (body (evalArgs rightVal argsR)) := by
+  unfold ArgsEq at hargs
+  rw [hargs]
+  exact HintRel.refl _
 
 /-- Assumptions describing which pairs of total valuations are currently related. -/
 abbrev Assumption := Valuation → Valuation → Prop
@@ -84,21 +147,24 @@ inductive Rel {alpha : Type} (Q : Post alpha) :
         (F2Z.f2z aR >>= kR)
   | hint {P : Assumption} {n : Nat} {argTps : List Eff.WitnessSide}
       {argsL argsR : HList Eff.WitnessSide.denoteW argTps}
-      {bodyL bodyR : HList Eff.WitnessSide.denoteF argTps → Vector Bool n}
+      {bodyL bodyR : HList Eff.WitnessSide.denoteF argTps → Hint (Vector Bool n)}
       {kL kR : Vector (LC Bool) n → Circuit alpha} :
       (∀ leftVal rightVal, P leftVal rightVal →
         ArgsEq leftVal rightVal argsL argsR) →
       (∀ leftVal rightVal, P leftVal rightVal →
-        bodyL (evalArgs leftVal argsL) =
-          bodyR (evalArgs rightVal argsR)) →
+        HintRel Eq
+          (bodyL (evalArgs leftVal argsL))
+          (bodyR (evalArgs rightVal argsR))) →
       (∀ outL outR,
         Rel Q
           (fun leftVal rightVal =>
-            P leftVal rightVal ∧
-            RealizesBools leftVal.bool outL
-              (bodyL (evalArgs leftVal argsL)) ∧
-            RealizesBools rightVal.bool outR
-              (bodyR (evalArgs rightVal argsR)))
+            P leftVal rightVal ∧ ∃ values,
+              HintReturns
+                (bodyL (evalArgs leftVal argsL)) values ∧
+              HintReturns
+                (bodyR (evalArgs rightVal argsR)) values ∧
+              RealizesBools leftVal.bool outL values ∧
+              RealizesBools rightVal.bool outR values)
           (kL outL) (kR outR)) →
       Rel Q P
         (F2Z.hint argsL bodyL >>= kL)
@@ -117,6 +183,28 @@ theorem Rel.assertR1C_pure {Q : Post Unit} {P : Assumption}
     Rel Q P (F2Z.assertR1C aL bL cL) (F2Z.assertR1C aR bR cR) := by
   simpa only [bind_pure] using
     Rel.assertR1C ha hb hc (Rel.pure hpost)
+
+theorem Rel.hint_pure {Q : Post (Vector (LC Bool) n)} {P : Assumption}
+    {argTps : List Eff.WitnessSide}
+    {argsL argsR : HList Eff.WitnessSide.denoteW argTps}
+    {bodyL bodyR : HList Eff.WitnessSide.denoteF argTps →
+      Hint (Vector Bool n)}
+    (hargs : ∀ leftVal rightVal, P leftVal rightVal →
+      ArgsEq leftVal rightVal argsL argsR)
+    (hbody : ∀ leftVal rightVal, P leftVal rightVal →
+      HintRel Eq (bodyL (evalArgs leftVal argsL))
+        (bodyR (evalArgs rightVal argsR)))
+    (hpost : ∀ outL outR leftVal rightVal,
+      (P leftVal rightVal ∧ ∃ values,
+        HintReturns (bodyL (evalArgs leftVal argsL)) values ∧
+        HintReturns (bodyR (evalArgs rightVal argsR)) values ∧
+        RealizesBools leftVal.bool outL values ∧
+        RealizesBools rightVal.bool outR values) →
+      Q leftVal rightVal outL outR) :
+    Rel Q P (F2Z.hint argsL bodyL) (F2Z.hint argsR bodyR) := by
+  rw [← bind_pure (x := F2Z.hint argsL bodyL),
+    ← bind_pure (x := F2Z.hint argsR bodyR)]
+  exact Rel.hint hargs hbody fun outL outR => Rel.pure (hpost outL outR)
 
 theorem Rel.mono {P Q : Post alpha} {R : Assumption}
     {left right : Circuit alpha} (h : Rel P R left right)
@@ -146,6 +234,133 @@ theorem Rel.bind {P : Post alpha} {Q : Post beta} {R : Assumption}
   | hint hargs hbody _ ih =>
       simpa only [bind_assoc] using Rel.hint hargs hbody ih
 
+/-- An effectful function that preserves a logical relation in every ambient world. -/
+def RelHom (R : Post α) (S : Post β)
+    (fL fR : α → Circuit β) : Prop :=
+  ∀ (P : Assumption) left right,
+    (∀ leftVal rightVal, P leftVal rightVal →
+      R leftVal rightVal left right) →
+    Rel (fun leftVal rightVal outL outR =>
+      P leftVal rightVal ∧ S leftVal rightVal outL outR)
+      P (fL left) (fR right)
+
+/-- Pointwise lifting of a relation to fixed-length vectors. -/
+def VectorRel (R : Post α) : Post (Vector α n) :=
+  fun leftVal rightVal left right =>
+    ∀ i : Fin n, R leftVal rightVal left[i] right[i]
+
+private theorem array_mapM_push [Monad m] [LawfulMonad m]
+    (f : α → m β) (xs : Array α) (x : α) :
+    (xs.push x).mapM f = (do
+      let ys ← xs.mapM f
+      let y ← f x
+      pure (ys.push y)) := by
+  simp only [Array.mapM_eq_mapM_toList, Array.toList_push,
+    List.mapM_append, List.mapM_cons, List.mapM_nil]
+  simp
+
+private theorem vector_mapM_push [Monad m] [LawfulMonad m]
+    (f : α → m β) (xs : Vector α n) (x : α) :
+    (xs.push x).mapM f = (do
+      let ys ← xs.mapM f
+      let y ← f x
+      pure (ys.push y)) := by
+  apply Vector.map_toArray_inj.mp
+  rw [Vector.toArray_mapM, Vector.toArray_push, array_mapM_push]
+  rw [← Vector.toArray_mapM (f := f) (xs := xs)]
+  rw [bind_map_left]
+  simp only [← bind_pure_comp, bind_assoc, pure_bind,
+    Vector.toArray_push]
+
+private theorem vector_mapM_empty [Monad m] [LawfulMonad m]
+    (f : α → m β) :
+    Vector.mapM f (#v[] : Vector α 0) =
+      (pure (#v[] : Vector β 0) : m (Vector β 0)) := by
+  apply Vector.map_toArray_inj.mp
+  rw [Vector.toArray_mapM]
+  simp
+
+/-- `Vector.mapM` lifts any relational Kleisli morphism pointwise. -/
+theorem RelHom.vectorMapM {R : Post α} {S : Post β}
+    {fL fR : α → Circuit β} (hf : RelHom R S fL fR) :
+    ∀ {n}, RelHom (VectorRel (n := n) R) (VectorRel (n := n) S)
+      (fun xs => xs.mapM fL) (fun xs => xs.mapM fR) := by
+  intro n
+  induction n with
+  | zero =>
+      intro P left right hinput
+      rw [show left = #v[] from Vector.eq_empty,
+        show right = #v[] from Vector.eq_empty]
+      dsimp only
+      rw [vector_mapM_empty, vector_mapM_empty]
+      exact Rel.pure fun _ _ hP =>
+        ⟨hP, fun i => Fin.elim0 i⟩
+  | succ n ih =>
+      intro P left right hinput
+      obtain ⟨leftInit, leftLast, rfl⟩ :=
+        Vector.exists_push (xs := left)
+      obtain ⟨rightInit, rightLast, rfl⟩ :=
+        Vector.exists_push (xs := right)
+      dsimp only
+      rw [vector_mapM_push, vector_mapM_push]
+      have hinit := ih P leftInit rightInit fun leftVal rightVal hP i => by
+        simpa [VectorRel] using
+          hinput leftVal rightVal hP (Fin.castSucc i)
+      apply hinit.bind
+        (fun init => fL leftLast >>= fun last =>
+          Pure.pure (init.push last))
+        (fun init => fR rightLast >>= fun last =>
+          Pure.pure (init.push last))
+      intro ambient initL initR hambient
+      have hlast := hf ambient leftLast rightLast fun leftVal rightVal hP => by
+        have hp := hambient leftVal rightVal hP
+        simpa [VectorRel] using
+          hinput leftVal rightVal hp.1 (Fin.last n)
+      apply hlast.bind
+        (fun last => Pure.pure (initL.push last))
+        (fun last => Pure.pure (initR.push last))
+      intro final lastL lastR hfinal
+      exact Rel.pure fun leftVal rightVal hP => by
+        have hlastPost := hfinal leftVal rightVal hP
+        have hinitPost := hambient leftVal rightVal hlastPost.1
+        refine ⟨hinitPost.1, ?_⟩
+        intro i
+        by_cases hi : i.val < n
+        · change S leftVal rightVal
+            (initL.push lastL)[i.val] (initR.push lastR)[i.val]
+          rw [Vector.getElem_push_lt hi, Vector.getElem_push_lt hi]
+          exact hinitPost.2 ⟨i, hi⟩
+        · have hieq : i = Fin.last n := by
+            apply Fin.ext
+            simp
+            omega
+          subst i
+          simpa [VectorRel] using hlastPost.2
+
+theorem RelHom.f2z :
+    RelHom
+      (fun leftVal rightVal left right =>
+        LCEq leftVal.bool rightVal.bool left right)
+      (fun leftVal rightVal left right =>
+        LCEq leftVal.int rightVal.int left right)
+      F2Z.f2z F2Z.f2z := by
+  intro P left right hinput
+  have hrel :
+      Rel (fun leftVal rightVal outL outR =>
+          P leftVal rightVal ∧
+          LCEq leftVal.int rightVal.int outL outR)
+        P
+        (F2Z.f2z left >>= (Pure.pure : LC ℤ → Circuit (LC ℤ)))
+        (F2Z.f2z right >>= (Pure.pure : LC ℤ → Circuit (LC ℤ))) := by
+    apply Rel.f2z hinput
+    intro outL outR
+    exact Rel.pure fun leftVal rightVal hP => by
+      refine ⟨hP.1, ?_⟩
+      unfold LCEq
+      exact hP.2.1.trans
+        ((congrArg Bool.toInt (hinput _ _ hP.1)).trans hP.2.2.symm)
+  simpa only [bind_pure] using hrel
+
 /-- A relational specification under a predicate on global valuations. -/
 def Valid (P : Assumption) (left right : Circuit alpha) (Q : Post alpha) : Prop :=
   Rel Q P left right
@@ -171,11 +386,9 @@ attribute [grind ←] Rel.assertR1C_pure
 attribute [grind =]
   LC.eval_zero LC.eval_add LC.eval_nsmul LC.eval_smul
   LC.eval_one LC.eval_ofConst LC.eval_singleton Vector.getElem_map
+  interpHint_pure interpHint_bind interpHint_fail
 attribute [grind unfold]
-  WellFormed Valid LCEq ArgsEq evalArgs RealizesBools
-
-/-- Discharge representation-parametricity goals after unfolding the circuit under test. -/
-macro "wfgen" : tactic =>
-  `(tactic| grind +splitImp)
+  WellFormed Valid GadgetSpec VectorRel LCEq ArgsEq evalArgs RealizesBools
+  HintReturns
 
 end Freigen.F2Z.WF

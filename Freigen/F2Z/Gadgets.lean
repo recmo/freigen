@@ -1,4 +1,5 @@
 import Freigen.F2Z.Defs
+import Freigen.F2Z.Correctness.Basic
 import Mathlib.Data.List.DropRight
 import Mathlib.Algebra.BigOperators.Fin
 import Mathlib.Data.List.Indexes
@@ -7,127 +8,231 @@ import Batteries.Data.Vector.Lemmas
 
 namespace Freigen.F2Z
 
-private theorem ofDigits_rdropWhile_false (l : List Bool) :
-    Nat.ofDigits 2 ((l.rdropWhile (fun b => !b)).map Bool.toNat) =
-      Nat.ofDigits 2 (l.map Bool.toNat) := by
-  induction l using List.reverseRecOn with
-  | nil => simp
-  | append_singleton l b ih =>
-    cases b <;> simp [ih]
+private theorem natCast_ofBits_eq_sum (f : Fin n → Bool) :
+    (Nat.ofBits f : Int) =
+      ∑ k : Fin n, 2 ^ k.val * (f k).toInt := by
+  induction n with
+  | zero => simp
+  | succ n ih =>
+      rw [Nat.ofBits_succ, Nat.cast_add, Nat.cast_mul, Fin.sum_univ_succ]
+      simp only [Nat.cast_ofNat, Fin.val_zero, pow_zero, one_mul,
+        Fin.val_succ, pow_succ]
+      rw [ih, Finset.mul_sum]
+      have hf : ((f 0).toNat : Int) = (f 0).toInt := by
+        cases f 0 <;> rfl
+      rw [hf, add_comm]
+      congr 1
+      apply Finset.sum_congr rfl
+      intro i _
+      simp only [Function.comp_apply]
+      ring
 
-private theorem bits_ofDigits_bool (l : List Bool) :
-    (Nat.ofDigits 2 (l.map Bool.toNat)).bits = l.rdropWhile (fun b => !b) := by
-  let t := l.rdropWhile (fun b => !b)
-  rw [← ofDigits_rdropWhile_false]
-  have hdigits : Nat.digits 2 (Nat.ofDigits 2 (t.map Bool.toNat)) = t.map Bool.toNat := by
-    apply Nat.digits_ofDigits 2 (by omega)
-    · rintro x hx
-      simp only [List.mem_map] at hx
-      obtain ⟨b, _, rfl⟩ := hx
-      cases b <;> simp
-    · intro h
-      have ht : t ≠ [] := by simpa using h
-      have hlast := List.rdropWhile_last_not (fun b : Bool => !b) l ht
-      simp only [List.getLast_map]
-      cases hb : t.getLast ht <;> simp_all [t]
-  rw [Nat.digits_two_eq_bits] at hdigits
-  apply (List.map_inj_right (f := Bool.toNat)
-    (fun a b h => by cases a <;> cases b <;> simp_all)).mp
-  change (Nat.ofDigits 2 (t.map Bool.toNat)).bits.map Bool.toNat = t.map Bool.toNat
-  have hfun : (fun b : Bool => bif b then 1 else 0) = Bool.toNat := by
-    funext b
-    cases b <;> rfl
-  simpa only [hfun] using hdigits
+structure Word (n : Nat) where
+  bitsLE : Vector (LC Bool) n
 
-private theorem ofDigits_bool_eq_sum {n : Nat} (f : Fin n → Bool) :
-    Nat.ofDigits 2 ((List.ofFn f).map Bool.toNat) =
-      ∑ k : Fin n, 2 ^ k.val * (f k).toNat := by
-  simp [Nat.ofDigits_eq_sum_mapIdx, List.mapIdx_eq_ofFn, List.sum_ofFn,
-    Function.comp_def, mul_comm]
+def Word.evalZ (ρ : WF.Valuation) (w : Word n) : ℤ :=
+  Nat.ofBits fun i => (w.bitsLE[i].eval ρ.bool)
 
-private theorem ofDigits_vector_eq_sum {n : Nat} (v : Vector Bool n) :
-    Nat.ofDigits 2 (v.toList.map Bool.toNat) =
-      ∑ k : Fin n, 2 ^ k.val * (v[k]).toNat := by
-  rw [← Vector.ofFn_getElem (xs := v), Vector.toList_ofFn]
-  simpa using ofDigits_bool_eq_sum (fun i : Fin n => v[i.val])
+def Word.take (m : Nat) (w : Word n) : Word (min m n) :=
+  { bitsLE := w.bitsLE.take m }
 
-def fromBits {n : Nat} (r : Vector (LC Bool) n) :
-    Circuit (LC ℤ) :=
-  match n with
-  | 0 => pure 0
-  | n + 1 => do
-    let i ← fromBits r.tail
-    let b ← f2z r.head
-    pure (b + 2 • i)
+def Word.takeLE (m : Nat) (h : m ≤ n) (w : Word n) : Word m :=
+  (Nat.min_eq_left h) ▸ { bitsLE := w.bitsLE.take m }
 
-def toBits (n : ℕ) (i : LC ℤ) :
-    Circuit (Vector (LC Bool) n) := do
-  let r ← hint (argTps := [.z]) h![i] fun h![i] =>
-    let rawBits := i.toNat.bits.toArray
-    let padded := rawBits.take n ++ Array.replicate (n - rawBits.size) false
-    let paddedVec : Vector Bool n := ⟨padded, by grind⟩
-    paddedVec
-  let sum ← fromBits r
-  assertR1C sum 1 i
-  return r
+def Word.rotateRight (k : Nat) (w : Word n) : Word n :=
+  { bitsLE := show (n - k + min k n = n) by omega ▸ (w.bitsLE.drop k ++ w.bitsLE.take k) }
+
+instance : HShiftRight (Word n) Nat (Word n) where
+  hShiftRight w a := show (n - a + min a n = n) by omega ▸
+    { bitsLE := w.bitsLE.drop a ++ Vector.replicate (min a n) (0 : LC Bool)}
+
+instance : HXor (Word n) (Word n) (Word n) where
+  hXor w₁ w₂ := { bitsLE := Vector.zipWith (· + ·) w₁.bitsLE w₂.bitsLE }
+
+instance : GetElem (Word n) (Fin n) (LC Bool) (fun _ _ => True) where
+  getElem w i _ := w.bitsLE[i]
+
+structure U (n : Nat) where
+  bits : Word n
+  intBits : Vector (LC ℤ) n
+
+instance : Inhabited (U n) where
+  default := {
+    bits := {
+      bitsLE := Vector.replicate n 0
+    }
+    intBits := Vector.replicate n 0
+  }
+
+def U.Valid (u : U n) (ρ : WF.Valuation) : Prop :=
+  ∀ i : Fin n, u.intBits[i].eval ρ.int = (u.bits.bitsLE[i].eval ρ.bool).toInt
+
+def U.fromWord (w : Word n) : Circuit (U n) := do
+  let mut res := Vector.replicate n 0
+  for h:i in [0:n] do
+    let b ← f2z w.bitsLE[i]
+    res := res.set! i b
+  pure { bits := w, intBits := res }
+
+def U.intVal (u : U n) : LC ℤ :=
+  ∑ i : Fin n, 2 ^ i.val • u.intBits[i]
+
+def U.eval : U n → WF.Valuation → BitVec n := fun u ρ =>
+  BitVec.ofNat n $ (u.intVal.eval ρ.int).toNat
+
+theorem U.eval_intVal_eq_evalZ (u : U n) (h : u.Valid ρ) :
+    u.intVal.eval ρ.int = u.bits.evalZ ρ := by
+  unfold U.intVal Word.evalZ
+  rw [natCast_ofBits_eq_sum]
+  simp only [LC.eval_sum]
+  apply Finset.sum_congr rfl
+  intro i _
+  rw [LC.eval_nsmul, h i]
+  simp
+
+def U.fromInt (n : Nat) (x : LC ℤ) : Circuit (U n) := do
+  let bits ← hint h![x] fun h![(x: Int)] => match x with
+    | .ofNat n => pure $ Vector.ofFn fun i => n.testBit i
+    | _ => fail s!"negative integer {x} in U.fromInt"
+  let r ← U.fromWord { bitsLE := bits }
+  assertR1C 0 0 (x - r.intVal)
+  pure r
+
+def U.sum (us : Array (U n)) : Circuit (U n) := do
+  let newZ := us.map (·.intVal) |>.sum
+  let newBits ← U.fromInt (n + Nat.clog 2 us.size) newZ
+  have : min n (n + Nat.clog 2 us.size) = n := by grind
+  pure { bits := this ▸ newBits.bits.take n, intBits := this ▸ newBits.intBits.take n }
 
 open Std.Do
 open scoped Std.Do
 
--- /-- The direct semantics of `fromBits`: every successful result denotes the input bit vector. -/
--- @[spec] def fromBits_spec {n : Nat} (r : Vector (LC Bool) n) :
---     Triple (fromBits r) spred(⌜True⌝)
---       (⇓? i ρ => ⌜ρ.z i = ∑ k : Fin n, 2 ^ k.val * (ρ.bool r[k]).toInt⌝) :=
---   match n with
---   | 0 => by
---       simp [fromBits]
---       mvcgen <;> simp_all
---   | n + 1 => by
---       rw [fromBits]
---       mvcgen
---       mspec (fromBits_spec r.tail)
---       mvcgen
---       intro b hrel
---       simp_all
---       simp only [Fin.sum_univ_succ, Fin.coe_ofNat_eq_mod, Nat.zero_mod, pow_zero, one_mul,
---         Fin.val_succ, pow_succ, Finset.mul_sum]
---       congr 2
---       · simpa [Vector.head] using hrel.symm
---       · funext i
---         ring_nf
---         congr 4
---         convert Vector.get_tail r i using 1
---         · rfl
---         · congr 1
---           omega
+private theorem Vector.set!_eq_setIfInBounds (xs : Vector α n) (i : Nat) (x : α) :
+    xs.set! i x = xs.setIfInBounds i x := by
+  rfl
 
--- /-- The direct semantics of `toBits`, replacing its former returned certificate. -/
--- @[spec] theorem toBits_spec (n : Nat) (i : LC ℤ) :
---     Triple (toBits n i) spred(⌜True⌝)
---       (⇓? r ρ => ⌜∃ ni : Nat, ρ.z i = ni ∧
---         (r.toList.map (fun b => ρ.bool b) |>.rdropWhile (· = false)) = ni.bits⌝) := by
---   rw [toBits]
---   mvcgen
---   intro r
---   mvcgen
---   split
---   next hc =>
---     mvcgen
---     rename_i _ sum ρ hsum
---     let v := r.map ρ.bool
---     let ni := Nat.ofDigits 2 (v.toList.map Bool.toNat)
---     refine ⟨ni, ?_, ?_⟩
---     · have hc' : ρ.z sum = ρ.z i := by simpa using hc
---       calc
---         ρ.z i = ρ.z sum := hc'.symm
---         _ = ∑ k : Fin n, 2 ^ k.val * (ρ.bool r[k]).toInt := hsum
---         _ = (ni : Int) := by
---           have h := congrArg (fun x : Nat => (x : Int)) (ofDigits_vector_eq_sum v).symm
---           have hbool (b : Bool) : (b.toNat : Int) = b.toInt := by cases b <;> rfl
---           simpa [v, ni, hbool] using h
---     · simpa [v, ni, Vector.toList_map] using (bits_ofDigits_bool v.toList).symm
---   next => simp
+@[simp]
+theorem U.valid_default {n : Nat} : (default : U n).Valid ρ := by
+  intro i
+  change LC.eval ρ.int (Vector.replicate n (0 : LC ℤ))[i.val] =
+    (LC.eval ρ.bool (Vector.replicate n (0 : LC Bool))[i.val]).toInt
+  simp
+  rfl
 
+@[spec]
+theorem U.fromWord_sound {ρ} {w : Word n}:
+    ⦃ ⌜True⌝ ⦄
+      (Sound.interp ρ $ U.fromWord w)
+    ⦃ ⇓ u => ⌜u.bits = w⌝ ∧ ⌜u.Valid ρ⌝ ⦄ := by
+  mvcgen [U.fromWord] invariants
+  · ⇓⟨cur, res⟩ => ⌜∀ i : Fin n, i.val < cur.prefix.length →
+      res[i].eval ρ.int = (w.bitsLE[i].eval ρ.bool).toInt⌝
+  case vc1 pref cur _ _ _ h₁ _ h₂ =>
+    rename_i suff out hloop hsplit
+    have : cur = pref.length := by grind
+    subst cur
+    have hk : pref.length < n := by grind
+    intro i hseen
+    simp only [List.length_append, List.length_singleton] at hseen
+    rw [Vector.set!_eq_setIfInBounds]
+    simp only [Fin.getElem_fin] at h₁ ⊢
+    by_cases hi : i.val < pref.length
+    · rw [Vector.getElem_setIfInBounds_ne i.isLt (by omega)]
+      exact h₁ i hi
+    · have hieq : i.val = pref.length := by omega
+      simpa [Vector.getElem_setIfInBounds, hieq] using h₂.symm
+  case vc2 => simp
+  case vc3 h =>
+    constructor
+    · trivial
+    · intro i
+      exact h i (by grind)
 
+@[spec]
+theorem U.fromWord_complete {ρ} {w : Word n} :
+    ⦃ ⌜True⌝ ⦄ (Complete.interp ρ $ U.fromWord w)
+    ⦃ ⇓ u => ⌜u.bits = w ∧ u.Valid ρ⌝ ⦄ := by
+  mvcgen [U.fromWord] invariants
+  · ⇓⟨cur, res⟩ => ⌜∀ i : Fin n, i.val < cur.prefix.length →
+      res[i].eval ρ.int = (w.bitsLE[i].eval ρ.bool).toInt⌝
+  case vc1 pref cur _ _ _ h₁ _ h₂ =>
+    rename_i suff out hloop hsplit
+    have : cur = pref.length := by grind
+    subst cur
+    have hk : pref.length < n := by grind
+    intro i hseen
+    simp only [List.length_append, List.length_singleton] at hseen
+    rw [Vector.set!_eq_setIfInBounds]
+    simp only [Fin.getElem_fin] at h₁ ⊢
+    by_cases hi : i.val < pref.length
+    · rw [Vector.getElem_setIfInBounds_ne i.isLt (by omega)]
+      exact h₁ i hi
+    · have hieq : i.val = pref.length := by omega
+      simpa [Vector.getElem_setIfInBounds, hieq] using h₂
+  case vc2 => simp
+  case vc3 h =>
+    constructor
+    · trivial
+    · intro i
+      exact h i (by grind)
+
+theorem U.fromWord_wf :
+    WF.GadgetSpec
+      (fun leftVal rightVal (left right : Word n) =>
+        ∀ i : Fin n,
+          WF.LCEq leftVal.bool rightVal.bool left.bitsLE[i] right.bitsLE[i])
+      U.fromWord
+      (fun leftVal rightVal left right =>
+        (∀ i : Fin n, WF.LCEq leftVal.bool rightVal.bool
+          left.bits.bitsLE[i] right.bits.bitsLE[i]) ∧
+        WF.LCEq leftVal.int rightVal.int left.intVal right.intVal) := by
+  wfgen [U.fromWord]
+
+theorem U.fromInt_sound {ρ} {n : Nat} {x : LC ℤ} :
+    ⦃ ⌜True⌝ ⦄ (Sound.interp ρ $ U.fromInt n x)
+    ⦃ ⇓ u => ⌜u.Valid ρ⌝ ∧ ⌜u.intVal.eval ρ.int = x.eval ρ.int⌝ ⦄ := by
+  mvcgen [fromInt]
+  intro b
+  mvcgen
+  simp only [Valid, LC.eval_zero, mul_zero, LC.eval_sub] at *
+  grind
+
+theorem U.fromInt_complete {ρ} {n : Nat} {x : LC ℤ} (h0 : x.eval ρ.int ≥ 0)
+    (h2 : x.eval ρ.int < 2 ^ n) :
+    ⦃ ⌜True⌝ ⦄ (Complete.interp ρ $ U.fromInt n x)
+    ⦃ ⇓ u => ⌜u.Valid ρ⌝ ∧ ⌜u.intVal.eval ρ.int = x.eval ρ.int⌝ ⦄ := by
+  mvcgen [fromInt]
+  have : ∃n, LC.eval ρ.int x = Int.ofNat n := by
+    exists (x.eval ρ.int).toNat
+    simp_all
+  rcases this with ⟨x', hx'⟩
+  simp only [WF.interpHint, WF.evalArgs, hx', Int.ofNat_eq_natCast, Free.interp_pure,
+    Option.pure_def, Option.some.injEq, exists_eq_left', Vector.map_ofFn]
+  mvcgen
+  rename_i r h
+  rcases h with ⟨h, h'⟩
+  have hxlt : x' < 2 ^ n := by
+    rw [hx'] at h2
+    exact Int.ofNat_lt.mp (by simpa using h2)
+  have hbits : r.bits.evalZ ρ = x' := by
+    simp [Word.evalZ, h, Nat.ofBits_testBit, Nat.mod_eq_of_lt hxlt]
+  have hintVal : r.intVal.eval ρ.int = (x' : Int) :=
+    (U.eval_intVal_eq_evalZ r h').trans (by simpa using hbits)
+  constructor
+  · simp [LC.eval_zero, LC.eval_sub, hx', hintVal]
+  · mvcgen
+
+theorem U.fromInt_wf :
+    WF.GadgetSpec
+      (fun leftVal rightVal (left right : LC ℤ) =>
+        WF.LCEq leftVal.int rightVal.int left right)
+      (U.fromInt n)
+      (fun leftVal rightVal left right =>
+        WF.LCEq leftVal.int rightVal.int left.intVal right.intVal ∧
+        (∀ i : Fin n, WF.LCEq leftVal.bool rightVal.bool
+          left.bits.bitsLE[i] right.bits.bitsLE[i])) := by
+  wfgen [U.fromInt]
+
+-- theorem U.sum
 
 end Freigen.F2Z
