@@ -4,6 +4,54 @@ import Freigen.F2Z.Nondet
 import Freigen.F2Z.Correctness.Completeness
 import Std.Tactic.Do
 
+namespace Std.Do
+
+universe u v
+
+/-- Invariant for `Vector.ofFnM`: after `i` iterations, `xs` contains exactly
+the prefix constructed so far. -/
+@[spec_invariant_type]
+def VectorOfFnM.Invariant (α : Type u) (n : Nat) (ps : PostShape.{u}) :=
+  (i : Nat) → i ≤ n → Vector α i → Assertion ps
+
+/-- Generic MVCGen rule for effectful vector construction. It exposes one
+uniform indexed step obligation and keeps exceptional postconditions fixed
+throughout the construction. -/
+@[spec]
+theorem Spec.vector_ofFnM
+    {α : Type u} {m : Type u → Type v} {ps : PostShape.{u}}
+    [Monad m] [WPMonad m ps]
+    {n : Nat} {f : Fin n → m α} {E : ExceptConds ps}
+    (inv : VectorOfFnM.Invariant α n ps)
+    (step : ∀ i (hi : i < n) (xs : Vector α i),
+      Triple (f ⟨i, hi⟩)
+        (inv i (Nat.le_of_lt hi) xs)
+        (fun x => inv (i + 1) (Nat.succ_le_of_lt hi) (xs.push x), E)) :
+    Triple (Vector.ofFnM f)
+      (inv 0 (Nat.zero_le n) #v[])
+      (fun xs => inv n (Nat.le_refl n) xs, E) := by
+  induction n with
+  | zero =>
+      rw [Vector.ofFnM_zero]
+      exact Triple.pure _ (SPred.entails.refl _)
+  | succ n ih =>
+      rw [Vector.ofFnM_succ]
+      apply Triple.bind (Q := fun xs => inv n (Nat.le_succ n) xs)
+      case hx =>
+        apply ih (inv := fun i hi xs => inv i (hi.trans (Nat.le_succ n)) xs)
+        intro i hi xs
+        exact step i (Nat.lt_trans hi (Nat.lt_succ_self n)) xs
+      case hf =>
+        intro xs
+        apply Triple.bind
+          (Q := fun x => inv (n + 1) (Nat.le_refl _) (xs.push x))
+        case hx => exact step n (Nat.lt_succ_self n) xs
+        case hf =>
+          intro x
+          exact Triple.pure _ (SPred.entails.refl _)
+
+end Std.Do
+
 namespace Freigen.F2Z.Sound
 
 open Std.Do
@@ -139,6 +187,16 @@ theorem interp_mapM (xs : Vector α n) (f : α → Circuit β) :
       xs.mapM (fun x => interp valuation (f x)) := by
   apply Vector.map_toArray_inj.mp
   rw [← interp_map, Vector.toArray_mapM, interp_array_mapM, Vector.toArray_mapM]
+
+/-- Interpretation commutes with constructing a vector effectfully by index. -/
+@[simp, spec]
+theorem interp_ofFnM (f : Fin n → Circuit α) :
+    interp valuation (Vector.ofFnM f) =
+      Vector.ofFnM (fun i => interp valuation (f i)) := by
+  induction n with
+  | zero => simp
+  | succ n ih =>
+      simp only [Vector.ofFnM_succ, interp_bind, interp_pure, ih]
 
 /- An assertion adds its equation as an assumption on the surviving path.
 If the equation is false, the sound semantics aborts that path. -/
@@ -299,26 +357,42 @@ private theorem interp_runAt {a : Circuit α} {s sf : Semantics.CSBuilder}
             ((interp (csValuation sf.result wit) (k x)).apply Q).down at hwp
           exact ihk out s₁ sf wit Q hext hsat (hwp out True.intro)
 
-theorem adequate {circ : Circuit α} {wit} {P : α → Prop} :
-    ⦃ ⌜True⌝ ⦄
-      interp (csValuation (Semantics.CSBuilder.run circ default).2 wit) circ
-    ⦃ ⇓ v => ⌜P v⌝ ⦄ →
-    (Semantics.CSBuilder.run circ default).2.satisfies wit →
-    P (Semantics.CSBuilder.run circ default).1 := by
-  intro htriple hsat
-  simp only [Semantics.CSBuilder.run, Semantics.CSBuilder.run'] at htriple hsat ⊢
-  generalize hrun : StateT.run (Semantics.CSBuilder.runAt circ) default = result at htriple hsat ⊢
+/--
+A soundness proof in the nondeterministic semantics transfers to constraint
+generation for a concrete external-input selection and satisfying assignment.
+-/
+theorem adequate {circ : Vector (LC Bool) n → Circuit α}
+    {inputs : Vector Bool n} {wit : Nat → Bool}
+    {P : Vector Bool n → α → Prop} :
+    ⦃ ⌜∀ i : Fin n, wit i.val = inputs[i]⌝ ⦄
+      interp
+        (csValuation (Semantics.CSBuilder.runWithInputs circ).2 wit)
+        (circ (Vector.ofFn fun i => ({i.val} : LC Bool)))
+    ⦃ ⇓ value => ⌜P inputs value⌝ ⦄ →
+    (∀ i : Fin n, wit i.val = inputs[i]) →
+    (Semantics.CSBuilder.runWithInputs circ).2.satisfies wit →
+    P inputs (Semantics.CSBuilder.runWithInputs circ).1 := by
+  intro htriple hinputs hsat
+  let inputWires : Vector (LC Bool) n :=
+    Vector.ofFn fun i => ({i.val} : LC Bool)
+  let initial : Semantics.CSBuilder :=
+    { result := { r1cs := #[], m := #[] }, nextWit := n }
+  simp only [Semantics.CSBuilder.runWithInputs,
+    Semantics.CSBuilder.run, Semantics.CSBuilder.run'] at htriple hsat ⊢
+  generalize hrun :
+      StateT.run (Semantics.CSBuilder.runAt (circ inputWires)) initial =
+        result at htriple hsat ⊢
   rcases result with ⟨value, sf⟩
   simp only at htriple hsat ⊢
   rw [Triple.iff] at htriple
   simp only [SPred.entails_nil, SPred.down_pure_nil, wp] at htriple
-  have hwp := htriple True.intro
+  have hwp := htriple hinputs
   have h := interp_runAt
-    (a := circ)
-    (s := default)
+    (a := circ inputWires)
+    (s := initial)
     (sf := sf)
     (wit := wit)
-    (Q := (⇓ v => ⌜P v⌝))
+    (Q := (⇓ value => ⌜P inputs value⌝))
     (by simpa [hrun] using Semantics.CSBuilder.Extends.refl sf)
     hsat
     hwp

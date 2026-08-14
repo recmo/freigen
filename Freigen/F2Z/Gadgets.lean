@@ -56,6 +56,12 @@ structure U (n : Nat) where
   bits : Word n
   intBits : Vector (LC ℤ) n
 
+instance : Inhabited (LC Bool) where
+  default := 0
+
+instance : Inhabited (LC ℤ) where
+  default := 0
+
 instance : Inhabited (U n) where
   default := {
     bits := {

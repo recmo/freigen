@@ -100,6 +100,10 @@ def run {α} (circ : Circuit α) (initial : CSBuilder): (α × CS) :=
   let (a, csb) := StateT.run (run' circ) initial
   (a, csb.result)
 
+def runWithInputs {α n} (circ : Vector (LC Bool) n → Circuit α): (α × CS) :=
+  let initial : CSBuilder := { result := { r1cs := #[], m := #[] }, nextWit := n }
+  run (circ (Vector.ofFn fun i => {i.val})) initial
+
 def Extends (s₁ s₂ : CSBuilder) : Prop :=
   s₁.result.r1cs.toList <+: s₂.result.r1cs.toList ∧
     s₁.result.m.toList <+: s₂.result.m.toList
@@ -211,46 +215,26 @@ def runAt { γ : Eff.Scope } (circ : Free Eff γ α) : RunnerM γ α :=
 def run' (circ : Circuit α) : StateT State Option α :=
   runAt circ
 
-def run (circ : Circuit α) : Option (Array Bool) := do
-  let (_, s) ← StateT.run (run' circ) default
+def run (circ : Circuit α) (initial : State) : Option (Array Bool) := do
+  let (_, s) ← StateT.run (run' circ) initial
   pure s.bools
+
+def runWithInputs {α n} (circ : Vector (LC Bool) n → Circuit α)
+    (inputs : Vector Bool n) : Option (Array Bool) := do
+  let initial : State := { bools := inputs.toArray }
+  run (circ (Vector.ofFn fun i => {i.val})) initial
 
 end Witgen
 
-namespace Ex
+structure Stats where
+  mRows : Nat
+  mCols : Nat
+  r1csRows : Nat
+deriving Repr
 
-def fromBits {n : Nat} (r : Vector (LC Bool) n) :
-    Circuit (LC ℤ) :=
-  match n with
-  | 0 => pure 0
-  | _ + 1 => do
-    let i ← fromBits r.tail
-    let b ← f2z r.head
-    pure (b + 2 • i)
-
-def toBits (n : ℕ) (i : LC ℤ) :
-    Circuit (Vector (LC Bool) n) := do
-  let r ← hint (argTps := [.z]) h![i] fun h![i] =>
-    let rawBits := i.toNat.bits.toArray
-    let padded := rawBits.take n ++ Array.replicate (n - rawBits.size) false
-    let paddedVec : Vector Bool n := ⟨padded, by grind⟩
-    pure paddedVec
-  let sum ← fromBits r
-  assertR1C sum 1 i
-  return r
-
-def smol (inp : Vector (LC Bool) 8) : Circuit Unit := do
-  let a ← fromBits inp
-  let _ ← toBits 4 a
-
-end Ex
-
--- open scoped CSBuilder in
--- def smolCS := CSBuilder.run Ex.smol
-
-def smolWit := Witgen.run (Ex.smol (#v[true, false, true, true, false, false, false, false]))
-
-#eval smolWit
--- #eval CS.satisfies' smolCS (fun i => smolWit[i]!)
+def CS.stats (cs : CS) : Stats :=
+  { mRows := cs.m.size + 1,
+    mCols := (cs.m.map (·.coeffs.maxKey!) |>.rangeMaxD 0) + 2,
+    r1csRows := cs.r1cs.size }
 
 end Freigen.F2Z.Semantics

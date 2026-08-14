@@ -337,6 +337,58 @@ theorem RelHom.vectorMapM {R : Post α} {S : Post β}
           subst i
           simpa [VectorRel] using hlastPost.2
 
+/-- `Vector.ofFnM` lifts a relational specification for each index. The
+pointwise computations are nullary `RelHom`s so they remain usable in every
+ambient relational context. -/
+theorem Rel.vectorOfFnM
+    {n : Nat} {P : Assumption} {S : Fin n → Post α}
+    {fL fR : Fin n → Circuit α}
+    (hf : ∀ i, RelHom
+      (fun leftVal rightVal (_ _ : Unit) => P leftVal rightVal) (S i)
+      (fun _ => fL i) (fun _ => fR i)) :
+    Rel (fun leftVal rightVal left right =>
+        P leftVal rightVal ∧
+          ∀ i : Fin n, S i leftVal rightVal left[i] right[i])
+      P (Vector.ofFnM fL) (Vector.ofFnM fR) := by
+  induction n with
+  | zero =>
+      rw [Vector.ofFnM_zero, Vector.ofFnM_zero]
+      exact Rel.pure fun leftVal rightVal hP =>
+        ⟨hP, fun i => Fin.elim0 i⟩
+  | succ n ih =>
+      rw [Vector.ofFnM_succ, Vector.ofFnM_succ]
+      have hprefix := ih
+        (S := fun i => S i.castSucc)
+        (fL := fun i => fL i.castSucc)
+        (fR := fun i => fR i.castSucc)
+        (fun i => hf i.castSucc)
+      apply hprefix.bind
+        (fun xs => fL (Fin.last n) >>= fun x => Pure.pure (xs.push x))
+        (fun xs => fR (Fin.last n) >>= fun x => Pure.pure (xs.push x))
+      intro A leftPrefix rightPrefix hA
+      have hlast := hf (Fin.last n) A () ()
+        (fun leftVal rightVal ha => (hA leftVal rightVal ha).1)
+      apply hlast.bind
+        (fun x => Pure.pure (leftPrefix.push x))
+        (fun x => Pure.pure (rightPrefix.push x))
+      intro B leftLast rightLast hB
+      exact Rel.pure fun leftVal rightVal hPre => by
+        have hlastPost := hB leftVal rightVal hPre
+        have hprefixPost := hA leftVal rightVal hlastPost.1
+        refine ⟨hprefixPost.1, ?_⟩
+        intro i
+        by_cases hi : i.val < n
+        · let j : Fin n := ⟨i.val, hi⟩
+          have hieq : i = j.castSucc := Fin.ext rfl
+          rw [hieq]
+          simpa using hprefixPost.2 j
+        · have hieq : i = Fin.last n := by
+            apply Fin.ext
+            simp
+            omega
+          subst i
+          simpa using hlastPost.2
+
 theorem RelHom.f2z :
     RelHom
       (fun leftVal rightVal left right =>
