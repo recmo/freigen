@@ -308,6 +308,15 @@ theorem LC.eval_sum {I : Type*} (witness : Nat → F)
   | @insert a s ha ih => simp [ha, ih]
 
 @[simp]
+theorem LC.eval_array_sum (witness : Nat → F) (xs : Array (LC F)) :
+    xs.sum.eval witness = (xs.map (LC.eval witness)).sum := by
+  rw [← Array.sum_toList, ← Array.sum_toList]
+  simp only [Array.toList_map]
+  induction xs.toList with
+  | nil => simp
+  | cons x xs ih => simp [ih]
+
+@[simp]
 theorem LC.eval_natCast (witness : Nat → F) (n : Nat) :
     (n : LC F).eval witness = n := by
   change (n • (1 : LC F)).eval witness = (n : F)

@@ -5,6 +5,7 @@ import Mathlib.Algebra.BigOperators.Fin
 import Mathlib.Data.List.Indexes
 import Mathlib.Data.Nat.Digits.Lemmas
 import Batteries.Data.Vector.Lemmas
+import Batteries.Data.BitVec.Lemmas
 
 namespace Freigen.F2Z
 
@@ -49,6 +50,88 @@ instance : HShiftRight (Word n) Nat (Word n) where
 instance : HXor (Word n) (Word n) (Word n) where
   hXor w₁ w₂ := { bitsLE := Vector.zipWith (· + ·) w₁.bitsLE w₂.bitsLE }
 
+def Word.eval (valuation : Nat → Bool) (w : Word n) : BitVec n :=
+  BitVec.ofFnLE fun i => w.bitsLE[i].eval valuation
+
+private theorem Vector.getElem_eq_mpr {m n : Nat} (h : m = n)
+    (v : Vector α m) (i : Nat) (hi : i < n) : (h ▸ v)[i] = v[i] := by
+  subst n
+  rfl
+
+private theorem Word.getElem_eq_mpr {m n : Nat} (h : m = n)
+    (v : Vector (LC Bool) m) (i : Nat) (hi : i < n) :
+    (h ▸ ({ bitsLE := v } : Word m)).bitsLE[i] = v[i] := by
+  subst n
+  rfl
+
+theorem Word.rotateRight_getElem (u : Word n) (k i : Nat) (hi : i < n) :
+    (u.rotateRight k).bitsLE[i] =
+      if h : i < n - k then u.bitsLE[k + i]
+      else u.bitsLE[i - (n - k)] := by
+  simp only [Word.rotateRight, Vector.getElem_eq_mpr,
+    Vector.getElem_append, Vector.getElem_drop, Vector.getElem_take]
+
+theorem Word.shiftRight_getElem (u : Word n) (k i : Nat) (hi : i < n) :
+    (u >>> k).bitsLE[i] =
+      if h : i < n - k then u.bitsLE[k + i] else 0 := by
+  simp only [HShiftRight.hShiftRight, Word.getElem_eq_mpr,
+    Vector.getElem_append, Vector.getElem_drop, Vector.getElem_replicate]
+
+@[simp]
+theorem Word.eval_xor (valuation : Nat → Bool) (u v : Word n) :
+    (u ^^^ v).eval valuation = u.eval valuation ^^^ v.eval valuation := by
+  apply BitVec.eq_of_getElem_eq
+  intro i hi
+  simp only [Word.eval, BitVec.getElem_ofFnLE, BitVec.getElem_xor]
+  change LC.eval valuation
+      (Vector.zipWith (· + ·) u.bitsLE v.bitsLE)[i] = _
+  rw [Vector.getElem_zipWith hi, LC.eval_add]
+  generalize LC.eval valuation u.bitsLE[i] = ub
+  generalize LC.eval valuation v.bitsLE[i] = vb
+  cases ub <;> cases vb <;> rfl
+
+theorem Word.eval_xor3 (valuation : Nat → Bool) (u v w : Word n) :
+    (u ^^^ v ^^^ w).eval valuation =
+      u.eval valuation ^^^ v.eval valuation ^^^ w.eval valuation := by
+  rw [Word.eval_xor, Word.eval_xor]
+
+@[simp]
+theorem Word.eval_rotateRight (valuation : Nat → Bool)
+    (u : Word n) (k : Nat) (hk : k < n) :
+    (u.rotateRight k).eval valuation = (u.eval valuation).rotateRight k := by
+  apply BitVec.eq_of_getElem_eq
+  intro i hi
+  rw [BitVec.getElem_rotateRight hi]
+  simp only [Nat.mod_eq_of_lt hk, Word.eval, BitVec.getElem_ofFnLE,
+    Fin.getElem_fin]
+  rw [Word.rotateRight_getElem]
+  split <;> rfl
+
+@[simp]
+theorem Word.eval_shiftRight (valuation : Nat → Bool)
+    (u : Word n) (k : Nat) :
+    (u >>> k).eval valuation = (u.eval valuation >>> k) := by
+  apply BitVec.eq_of_getElem_eq
+  intro i hi
+  rw [BitVec.getElem_ushiftRight _ _ _ hi]
+  simp only [Word.eval, BitVec.getElem_ofFnLE]
+  have hget : (u >>> k).bitsLE[i] =
+      if h : i < n - k then u.bitsLE[k + i] else 0 :=
+    Word.shiftRight_getElem u k i hi
+  calc
+    LC.eval valuation (getElem (u >>> k).bitsLE i hi) =
+        LC.eval valuation (if h : i < n - k then u.bitsLE[k + i] else 0) :=
+      congrArg (LC.eval valuation) hget
+    _ = (BitVec.ofFnLE fun i => LC.eval valuation u.bitsLE[i]).getLsbD (k + i) := by
+      split
+      · simp only [BitVec.getLsbD, BitVec.toNat_ofFnLE]
+        rw [Nat.testBit_ofBits_lt _ _ (by omega)]
+        simp only [Fin.getElem_fin]
+      · rw [LC.eval_zero]
+        simp only [BitVec.getLsbD, BitVec.toNat_ofFnLE]
+        rw [Nat.testBit_ofBits_ge _ _ (by omega)]
+        rfl
+
 instance : GetElem (Word n) (Fin n) (LC Bool) (fun _ _ => True) where
   getElem w i _ := w.bitsLE[i]
 
@@ -86,6 +169,10 @@ def U.intVal (u : U n) : LC ℤ :=
 def U.eval : U n → WF.Valuation → BitVec n := fun u ρ =>
   BitVec.ofNat n $ (u.intVal.eval ρ.int).toNat
 
+def U.takeLE (m : Nat) (h : m ≤ n) (u : U n) : U m :=
+  { bits := { bitsLE := Vector.ofFn fun i => u.bits.bitsLE[i.castLE h] }
+    intBits := Vector.ofFn fun i => u.intBits[i.castLE h] }
+
 theorem U.eval_intVal_eq_evalZ (u : U n) (h : u.Valid ρ) :
     u.intVal.eval ρ.int = u.bits.evalZ ρ := by
   unfold U.intVal Word.evalZ
@@ -95,6 +182,58 @@ theorem U.eval_intVal_eq_evalZ (u : U n) (h : u.Valid ρ) :
   intro i _
   rw [LC.eval_nsmul, h i]
   simp
+
+theorem U.eval_eq_ofFnLE (u : U n) (h : u.Valid ρ) :
+    u.eval ρ = BitVec.ofFnLE (fun i => u.bits.bitsLE[i].eval ρ.bool) := by
+  apply BitVec.toNat_inj.mp
+  simp [U.eval, U.eval_intVal_eq_evalZ u h, Word.evalZ,
+    Nat.mod_eq_of_lt (Nat.ofBits_lt_two_pow _)]
+
+theorem U.intVal_eval_eq_eval_toNat (u : U n) (h : u.Valid ρ) :
+    u.intVal.eval ρ.int = (u.eval ρ).toNat := by
+  rw [U.eval_eq_ofFnLE u h, U.eval_intVal_eq_evalZ u h]
+  simp [Word.evalZ]
+
+theorem U.eval_eq_word_eval (u : U n) (w : Word n)
+    (hvalid : u.Valid ρ) (hbits : u.bits = w) :
+    u.eval ρ = w.eval ρ.bool := by
+  rw [U.eval_eq_ofFnLE u hvalid, hbits]
+  rfl
+
+theorem U.takeLE_valid (u : U n) (hvalid : u.Valid ρ) (h : m ≤ n) :
+    (u.takeLE m h).Valid ρ := by
+  intro i
+  simpa [U.takeLE, Fin.getElem_fin] using hvalid (i.castLE h)
+
+theorem U.takeLE_eval (u : U n) (hvalid : u.Valid ρ) (h : m ≤ n) :
+    (u.takeLE m h).eval ρ = BitVec.ofNat m (u.intVal.eval ρ.int).toNat := by
+  rw [U.eval_eq_ofFnLE _ (U.takeLE_valid u hvalid h)]
+  apply BitVec.eq_of_getElem_eq
+  intro i hi
+  have hin : i < n := hi.trans_le h
+  have hu := congrArg (fun x : BitVec n => x[i]'hin)
+    (U.eval_eq_ofFnLE u hvalid)
+  simpa [U.eval, U.takeLE, Fin.getElem_fin, hi, hin,
+    BitVec.getElem_ofFnLE, BitVec.getElem_eq_testBit_toNat] using hu.symm
+
+theorem U.takeLE_eq_truncate (u : U n) (h : m ≤ n) :
+    u.takeLE m h =
+      { bits := (Nat.min_eq_left h) ▸ u.bits.take m
+        intBits := (Nat.min_eq_left h) ▸ u.intBits.take m } := by
+  cases u with
+  | mk bits intBits =>
+    apply congrArg₂ U.mk
+    · apply congrArg Word.mk
+      apply Vector.ext
+      intro i hi
+      simp only [U.takeLE, Word.take, Vector.getElem_ofFn,
+        Word.getElem_eq_mpr, Vector.getElem_take, Fin.getElem_fin]
+      rfl
+    · apply Vector.ext
+      intro i hi
+      simp only [U.takeLE, Vector.getElem_ofFn, Vector.getElem_eq_mpr,
+        Vector.getElem_take, Fin.getElem_fin]
+      rfl
 
 def U.fromInt (n : Nat) (x : LC ℤ) : Circuit (U n) := do
   let bits ← hint h![x] fun h![(x: Int)] => match x with
@@ -239,6 +378,191 @@ theorem U.fromInt_wf :
           left.bits.bitsLE[i] right.bits.bitsLE[i])) := by
   wfgen [U.fromInt]
 
--- theorem U.sum
+def U.sumValue (u : Array (U n)) (ρ : WF.Valuation) : BitVec n :=
+  BitVec.ofNat n
+    ((u.map (fun value : U n => value.intVal)).sum.eval ρ.int).toNat
+
+theorem U.intVal_nonneg (u : U n) (h : u.Valid ρ) :
+    0 ≤ u.intVal.eval ρ.int := by
+  rw [U.eval_intVal_eq_evalZ u h]
+  exact Int.natCast_nonneg _
+
+theorem U.intVal_lt_two_pow (u : U n) (h : u.Valid ρ) :
+    u.intVal.eval ρ.int < (2 ^ n : Nat) := by
+  rw [U.eval_intVal_eq_evalZ u h]
+  unfold Word.evalZ
+  exact_mod_cast Nat.ofBits_lt_two_pow _
+
+private theorem List.sum_lt_length_mul {xs : List ℤ} {bound : ℤ}
+    (hne : xs ≠ []) (h : ∀ x ∈ xs, x < bound) :
+    xs.sum < (xs.length : ℤ) * bound := by
+  cases xs with
+  | nil => contradiction
+  | cons x xs =>
+      have hx := h x (by simp)
+      have htail : xs.sum ≤ (xs.length : ℤ) * bound :=
+        List.sum_le_card_nsmul xs bound fun y hy =>
+          (h y (by simp [hy])).le
+      simp only [List.sum_cons, List.length_cons, Nat.cast_add,
+        Nat.cast_one]
+      linarith
+
+theorem U.sum_nonneg (us : Array (U n))
+    (hvalid : ∀ u ∈ us, u.Valid ρ) :
+    0 ≤ (us.map (fun value : U n => value.intVal)).sum.eval ρ.int := by
+  rw [LC.eval_array_sum, ← Array.sum_toList]
+  simp only [Array.map_map]
+  apply List.sum_nonneg
+  intro value hvalue
+  simp only [Array.toList_map, List.mem_map] at hvalue
+  obtain ⟨u, hu, rfl⟩ := hvalue
+  exact U.intVal_nonneg u (hvalid u (by simpa using hu))
+
+theorem U.sum_lt_capacity (us : Array (U n))
+    (hvalid : ∀ u ∈ us, u.Valid ρ) :
+    (us.map (fun value : U n => value.intVal)).sum.eval ρ.int <
+      2 ^ (n + Nat.clog 2 us.size) := by
+  rw [LC.eval_array_sum, ← Array.sum_toList]
+  simp only [Array.map_map]
+  by_cases hempty : us = #[]
+  · subst us
+    simp
+  · have hne : (us.map fun u => u.intVal.eval ρ.int).toList ≠ [] := by
+      simp [hempty]
+    have hsum := List.sum_lt_length_mul hne (fun value hvalue => by
+      simp only [Array.toList_map, List.mem_map] at hvalue
+      obtain ⟨u, hu, rfl⟩ := hvalue
+      exact U.intVal_lt_two_pow u (hvalid u (by simpa using hu)))
+    have hsum' :
+        (us.map fun u => u.intVal.eval ρ.int).toList.sum <
+          (us.size : ℤ) * (2 ^ n : Nat) := by
+      simpa using hsum
+    have hsize : us.size ≤ 2 ^ Nat.clog 2 us.size :=
+      Nat.le_pow_clog (by omega) _
+    have hpow : (us.size : ℤ) * (2 ^ n : Nat) ≤
+        (2 ^ (n + Nat.clog 2 us.size) : Nat) := by
+      exact_mod_cast (Nat.mul_le_mul_right (2 ^ n) hsize |>.trans_eq (by
+        rw [Nat.pow_add]
+        ac_rfl))
+    exact hsum'.trans_le hpow
+
+private theorem U.sumValue_eq_sum_list (us : List (U n))
+    (hvalid : ∀ u ∈ us, u.Valid ρ) :
+    BitVec.ofNat n
+        (us.map (fun u : U n => u.intVal.eval ρ.int)).sum.toNat =
+      (us.map fun u : U n => u.eval ρ).sum := by
+  induction us with
+  | nil => simp
+  | cons u us ih =>
+      have hu := hvalid u (by simp)
+      have hus : ∀ v ∈ us, v.Valid ρ := by
+        intro v hv
+        exact hvalid v (by simp [hv])
+      have htail : 0 ≤
+          (us.map fun u : U n => u.intVal.eval ρ.int).sum :=
+        List.sum_nonneg fun value hvalue => by
+          simp only [List.mem_map] at hvalue
+          obtain ⟨v, hv, rfl⟩ := hvalue
+          exact U.intVal_nonneg v (hus v hv)
+      simp only [List.map_cons, List.sum_cons]
+      rw [Int.toNat_add (U.intVal_nonneg u hu) htail,
+        BitVec.ofNat_add, ih hus]
+      rfl
+
+theorem U.sumValue_eq_sum (us : Array (U n))
+    (hvalid : ∀ u ∈ us, u.Valid ρ) :
+    U.sumValue us ρ = (us.map fun u : U n => u.eval ρ).sum := by
+  unfold U.sumValue
+  rw [LC.eval_array_sum]
+  rw [← Array.sum_toList, ← Array.sum_toList]
+  simp only [Array.toList_map, List.map_map]
+  change BitVec.ofNat n
+      (us.toList.map (fun u : U n => u.intVal.eval ρ.int)).sum.toNat =
+    (us.toList.map fun u : U n => u.eval ρ).sum
+  exact U.sumValue_eq_sum_list us.toList (by
+    intro u hu
+    exact hvalid u (by simpa using hu))
+
+@[spec]
+theorem U.sum_sound {us : Array (U n)}
+    (hvalid : ∀ u ∈ us, u.Valid ρ) :
+    ⦃ ⌜True⌝ ⦄ Sound.interp ρ (U.sum us)
+    ⦃ ⇓ out => ⌜out.Valid ρ ∧
+      out.eval ρ = (us.map fun u : U n => u.eval ρ).sum⌝ ⦄ := by
+  unfold U.sum
+  rw [Sound.interp_bind]
+  apply Triple.bind
+    (Q := fun wide => ⌜wide.Valid ρ ∧
+      wide.intVal.eval ρ.int =
+        (us.map (fun value : U n => value.intVal)).sum.eval ρ.int⌝)
+  case hx => exact U.fromInt_sound
+  case hf =>
+    intro wide
+    mvcgen
+    case vc1 hwide =>
+      let hle : n ≤ n + Nat.clog 2 us.size := Nat.le_add_right n _
+      rw [← U.takeLE_eq_truncate wide hle]
+      exact ⟨U.takeLE_valid wide hwide.1 hle, by
+        rw [U.takeLE_eval wide hwide.1 hle, hwide.2]
+        exact U.sumValue_eq_sum us hvalid⟩
+
+@[spec]
+theorem U.sum_complete {us : Array (U n)}
+    (hvalid : ∀ u ∈ us, u.Valid ρ) :
+    ⦃ ⌜True⌝ ⦄ Complete.interp ρ (U.sum us)
+    ⦃ ⇓ out => ⌜out.Valid ρ ∧
+      out.eval ρ = (us.map fun u : U n => u.eval ρ).sum⌝ ⦄ := by
+  unfold U.sum
+  rw [Complete.interp_bind]
+  apply Triple.bind
+    (Q := fun wide => ⌜wide.Valid ρ ∧
+      wide.intVal.eval ρ.int =
+        (us.map (fun value : U n => value.intVal)).sum.eval ρ.int⌝)
+  case hx =>
+    exact U.fromInt_complete (U.sum_nonneg us hvalid)
+      (U.sum_lt_capacity us hvalid)
+  case hf =>
+    intro wide
+    mvcgen
+    case vc1 hwide =>
+      let hle : n ≤ n + Nat.clog 2 us.size := Nat.le_add_right n _
+      rw [← U.takeLE_eq_truncate wide hle]
+      exact ⟨U.takeLE_valid wide hwide.1 hle, by
+        rw [U.takeLE_eval wide hwide.1 hle, hwide.2]
+        exact U.sumValue_eq_sum us hvalid⟩
+
+@[spec 0]
+theorem U.sum_sound_frame {us : Array (U n)}
+    (hvalid : ∀ u ∈ us, u.Valid ρ) (P : Prop) :
+    ⦃ ⌜P⌝ ⦄ Sound.interp ρ (U.sum us)
+    ⦃ ⇓ out => ⌜P ∧ out.Valid ρ ∧
+      out.eval ρ = (us.map fun u : U n => u.eval ρ).sum⌝ ⦄ := by
+  mvcgen
+  case vc1 => tauto
+  case vc2 => exact fun _ => hvalid
+
+@[spec 0]
+theorem U.sum_complete_frame {us : Array (U n)}
+    (hvalid : ∀ u ∈ us, u.Valid ρ) (P : Prop) :
+    ⦃ ⌜P⌝ ⦄ Complete.interp ρ (U.sum us)
+    ⦃ ⇓ out => ⌜P ∧ out.Valid ρ ∧
+      out.eval ρ = (us.map fun u : U n => u.eval ρ).sum⌝ ⦄ := by
+  mvcgen
+  case vc1 => tauto
+  case vc2 => exact fun _ => hvalid
+
+@[spec 0]
+theorem U.fromWord_sound_frame {ρ} {w : Word n} (P : Prop) :
+    ⦃ ⌜P⌝ ⦄ Sound.interp ρ (U.fromWord w)
+    ⦃ ⇓ u => ⌜P ∧ u.bits = w ∧ u.Valid ρ⌝ ⦄ := by
+  mvcgen
+  case vc1 => tauto
+
+@[spec 0]
+theorem U.fromWord_complete_frame {ρ} {w : Word n} (P : Prop) :
+    ⦃ ⌜P⌝ ⦄ Complete.interp ρ (U.fromWord w)
+    ⦃ ⇓ u => ⌜P ∧ u.bits = w ∧ u.Valid ρ⌝ ⦄ := by
+  mvcgen
+  case vc1 => tauto
 
 end Freigen.F2Z
