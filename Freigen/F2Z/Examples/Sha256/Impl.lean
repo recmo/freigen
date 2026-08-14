@@ -52,100 +52,6 @@ def k : Vector (BitVec 32) 64 := #v[
   0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
 ]
 
-def perm (m : Vector (BitVec 32) 16) (s : Vector (BitVec 32) 8) : Vector (BitVec 32) 8 := Id.run $ do
-  let mut w := Vector.replicate 64 (0 : BitVec 32)
-  for h:i in [0:16] do
-    w := w.set! i m[i]
-  for i in [16:64] do
-    let s0 := (w[i-15]!.rotateRight 7) ^^^ (w[i-15]!.rotateRight 18) ^^^ (w[i-15]! >>> 3)
-    let s1 := (w[i-2]!.rotateRight 17) ^^^ (w[i-2]!.rotateRight 19) ^^^ (w[i-2]! >>> 10)
-    w := w.set! i (w[i-16]! + s0 + w[i-7]! + s1)
-  let mut a := s[0]
-  let mut b := s[1]
-  let mut c := s[2]
-  let mut d := s[3]
-  let mut e := s[4]
-  let mut f := s[5]
-  let mut g := s[6]
-  let mut h := s[7]
-
-  for h:i in [0:64] do
-    let S1 := (e.rotateRight 6) ^^^ (e.rotateRight 11) ^^^ (e.rotateRight 25)
-    let ch := (e &&& f) ^^^ ((~~~e) &&& g)
-    let temp1 := h + S1 + ch + k[i] + w[i]
-    let S0 := (a.rotateRight 2) ^^^ (a.rotateRight 13) ^^^ (a.rotateRight 22)
-    let maj := (a &&& b) ^^^ (a &&& c) ^^^ (b &&& c)
-    let temp2 := S0 + maj
-
-    h := g
-    g := f
-    f := e
-    e := d + temp1
-    d := c
-    c := b
-    b := a
-    a := temp1 + temp2
-
-  #v[s[0] + a, s[1] + b, s[2] + c, s[3] + d, s[4] + e, s[5] + f, s[6] + g, s[7] + h]
-
-def perm' (m : Vector Bool 768): Vector Bool 256 :=
-  let mWords := Vector.ofFn fun i => BitVec.ofNat 32 $ Nat.ofBits fun (j : Fin 32) => m[i.val*32 + j.val]
-  let sWords := Vector.ofFn fun i => BitVec.ofNat 32 $ Nat.ofBits fun (j : Fin 32) => m[512 + i.val*32 + j.val]
-  let s' := perm mWords sWords
-  Vector.ofFn fun i => s'[i.val / 32].toNat.testBit (i % 32)
-
-/-- https://csrc.nist.gov/CSRC/media/Projects/Cryptographic-Standards-and-Guidelines/documents/examples/SHA256.pdf -/
-example : perm
-    #v[
-      0x61626380, 0x00000000, 0x00000000, 0x00000000,
-      0x00000000, 0x00000000, 0x00000000, 0x00000000,
-      0x00000000, 0x00000000, 0x00000000, 0x00000000,
-      0x00000000, 0x00000000, 0x00000000, 0x00000018
-    ]
-    #v[
-      0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-      0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19
-    ] =
-    #v[
-      0xba7816bf, 0x8f01cfea, 0x414140de, 0x5dae2223,
-      0xb00361a3, 0x96177a9c, 0xb410ff61, 0xf20015ad
-    ]
-  := by native_decide
-
-example : perm
-    #v[
-      0x61626364, 0x62636465, 0x63646566, 0x64656667,
-      0x65666768, 0x66676869, 0x6768696a, 0x68696a6b,
-      0x696a6b6c, 0x6a6b6c6d, 0x6b6c6d6e, 0x6c6d6e6f,
-      0x6d6e6f70, 0x6e6f7071, 0x80000000, 0x00000000
-    ]
-    #v[
-      0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-      0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19
-    ] =
-    #v[
-      0x85e655d6, 0x417a1795, 0x3363376a, 0x624cde5c,
-      0x76e09589, 0xcac5f811, 0xcc4b32c1, 0xf20e533a
-    ]
-  := by native_decide
-
-example : perm
-    #v[
-      0x00000000, 0x00000000, 0x00000000, 0x00000000,
-      0x00000000, 0x00000000, 0x00000000, 0x00000000,
-      0x00000000, 0x00000000, 0x00000000, 0x00000000,
-      0x00000000, 0x00000000, 0x00000000, 0x000001c0
-    ]
-    #v[
-      0x85e655d6, 0x417a1795, 0x3363376a, 0x624cde5c,
-      0x76e09589, 0xcac5f811, 0xcc4b32c1, 0xf20e533a
-    ] =
-    #v[
-      0x248d6a61, 0xd20638b8, 0xe5c02693, 0x0c3e6039,
-      0xa33ce459, 0x64ff2167, 0xf6ecedd4, 0x19db06c1
-    ]
-  := by native_decide
-
 section Circuit
 
 instance : Coe (BitVec n) (U n) where
@@ -233,10 +139,6 @@ def permCirc' (inp : Vector (LC Bool) 768): Circuit (Vector (LC Bool) 256) := do
   pure $ Vector.ofFn fun si => out[si.val / 32].bits.bitsLE[si.val % 32]
 
 abbrev sha256CS : Vector (LC Bool) 256 × Semantics.CS := Semantics.CSBuilder.runWithInputs permCirc'
-
-#eval sha256CS.2.stats
-
-#eval Semantics.Witgen.runWithInputs permCirc' (Vector.ofFn fun i => 0) |>.map (·.size)
 
 end Circuit
 
