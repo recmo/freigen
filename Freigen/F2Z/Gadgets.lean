@@ -139,6 +139,12 @@ structure U (n : Nat) where
   bits : Word n
   intBits : Vector (LC ℤ) n
 
+instance : Coe (BitVec n) (U n) where
+  coe w := {
+    bits := { bitsLE := Vector.ofFn fun i => w[i] }
+    intBits := Vector.ofFn fun i => w[i].toInt
+  }
+
 instance : Inhabited (LC Bool) where
   default := 0
 

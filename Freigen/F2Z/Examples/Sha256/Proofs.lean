@@ -12,48 +12,6 @@ abbrev chBV (u v w : BitVec n) : BitVec n :=
 abbrev majBV (u v w : BitVec n) : BitVec n :=
   (u &&& v) ^^^ (u &&& w) ^^^ (v &&& w)
 
-theorem U.valid_bitVec (w : BitVec n) : ((w : U n).Valid ρ) := by
-  intro i
-  simp only [Fin.getElem_fin, Vector.getElem_ofFn]
-  change LC.eval ρ.int (LC.ofConst w[i.val].toInt) =
-    (LC.eval ρ.bool (LC.ofConst w[i.val])).toInt
-  rw [LC.eval_ofConst, LC.eval_ofConst]
-
-theorem U.eval_bitVec (w : BitVec n) : ((w : U n).eval ρ) = w := by
-  rw [U.eval_eq_ofFnLE _ (U.valid_bitVec w)]
-  apply BitVec.eq_of_getElem_eq
-  intro i hi
-  simp only [BitVec.getElem_ofFnLE, Fin.getElem_fin, Vector.getElem_ofFn]
-  change LC.eval ρ.bool (LC.ofConst w[i]) = w[i]
-  rw [LC.eval_ofConst]
-
-theorem U.wfRel_bitVec (lv rv : WF.Valuation) (x : BitVec n) :
-    U.WFRel lv rv (x : U n) (x : U n) := by
-  have hbit (v : Nat → Bool) (j : Fin n) :
-      LC.eval v ((x : U n).bits.bitsLE[j]) = x[j] := by
-    simp only [Vector.getElem_ofFn, Fin.getElem_fin]
-    change x[j] + (∅ : Std.ExtTreeMap Nat Bool).foldMap
-      (fun i c => c * v i) = x[j]
-    have hz : (∅ : Std.ExtTreeMap Nat Bool).foldMap
-        (fun i c => c * v i) = 0 := Std.ExtTreeMap.foldMap_empty _
-    rw [hz, add_zero]
-  have hint (v : Nat → ℤ) (j : Fin n) :
-      LC.eval v ((x : U n).intBits[j]) = x[j].toInt := by
-    simp only [Vector.getElem_ofFn, Fin.getElem_fin]
-    change x[j].toInt + (∅ : Std.ExtTreeMap Nat ℤ).foldMap
-      (fun i c => c * v i) = x[j].toInt
-    have hz : (∅ : Std.ExtTreeMap Nat ℤ).foldMap
-        (fun i c => c * v i) = 0 := Std.ExtTreeMap.foldMap_empty _
-    rw [hz, add_zero]
-  unfold U.WFRel WF.LCEq U.intVal
-  constructor
-  · rw [LC.eval_sum, LC.eval_sum]
-    apply Finset.sum_congr rfl
-    intro j _
-    simp only [LC.eval_nsmul, hint]
-  · intro i
-    rw [hbit, hbit]
-
 abbrev chB (u v w : Bool) : Bool := (u && v) ^^ ((!u) && w)
 abbrev majB (u v w : Bool) : Bool := (u && v) ^^ (u && w) ^^ (v && w)
 

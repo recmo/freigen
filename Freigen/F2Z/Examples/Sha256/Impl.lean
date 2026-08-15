@@ -17,12 +17,6 @@ def k : Vector (BitVec 32) 64 := #v[
 
 section Circuit
 
-instance : Coe (BitVec n) (U n) where
-  coe w := {
-    bits := { bitsLE := Vector.ofFn fun i => w[i] }
-    intBits := Vector.ofFn fun i => w[i].toInt
-  }
-
 def U.ch (u v w : U n) : Circuit (U n) := do
   let chBits ← Vector.ofFnM (n:=n) fun i => do
     let h ← hint h![u.bits[i], v.bits[i], w.bits[i]] fun h![u, v, w] =>
