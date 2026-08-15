@@ -1,16 +1,17 @@
 import Freigen.F2Z.Examples.Sha256.Impl
-import Freigen.F2Z.Correctness.Basic
-import Freigen.F2Z.Correctness.WFGen
-import Batteries.Data.Int
-import Batteries.Data.BitVec.Lemmas
-import Mathlib.Algebra.BigOperators.Fin
+import Freigen.F2Z.Correctness.U
 
-namespace Freigen.F2Z
+namespace Freigen.F2Z.Examples
 
 open Std.Do
 open scoped Std.Do
 
-@[simp]
+abbrev chBV (u v w : BitVec n) : BitVec n :=
+  (u &&& v) ^^^ ((~~~u) &&& w)
+
+abbrev majBV (u v w : BitVec n) : BitVec n :=
+  (u &&& v) ^^^ (u &&& w) ^^^ (v &&& w)
+
 theorem U.valid_bitVec (w : BitVec n) : ((w : U n).Valid ρ) := by
   intro i
   simp only [Fin.getElem_fin, Vector.getElem_ofFn]
@@ -23,2080 +24,8 @@ theorem U.eval_bitVec (w : BitVec n) : ((w : U n).eval ρ) = w := by
   apply BitVec.eq_of_getElem_eq
   intro i hi
   simp only [BitVec.getElem_ofFnLE, Fin.getElem_fin, Vector.getElem_ofFn]
-  change LC.eval ρ.bool
-    ({ constant := w[i], coeffs := ∅, ne_zero := by simp } : LC Bool) = w[i]
-  change w[i] + (∅ : Std.ExtTreeMap Nat Bool).foldMap
-    (fun i c => c * ρ.bool i) = w[i]
-  have hempty : (∅ : Std.ExtTreeMap Nat Bool).foldMap
-      (fun i c => c * ρ.bool i) = 0 := Std.ExtTreeMap.foldMap_empty _
-  rw [hempty, add_zero]
-
-theorem U.eval_default : (default : U n).eval ρ = 0 := by
-  rw [U.eval_eq_ofFnLE _ U.valid_default]
-  apply BitVec.eq_of_getElem_eq
-  intro i hi
-  simp only [BitVec.getElem_ofFnLE]
-  change LC.eval ρ.bool (Vector.replicate n (0 : LC Bool))[i] = (0 : BitVec n)[i]
-  simp only [Vector.getElem_replicate, LC.eval_zero]
-  have hz : (0 : BitVec n) = BitVec.ofNat n 0 := rfl
-  rw [hz]
-  rw [BitVec.getElem_eq_testBit_toNat]
-  rw [BitVec.toNat_ofNat, Nat.zero_mod]
-  have hzero : (0 : Bool) = false := by rfl
-  rw [hzero]
-  simp [Nat.testBit]
-
-@[simp]
-theorem U.valid_consts (f : Fin n → Bool) :
-    ({ bits := { bitsLE := Vector.ofFn fun i => LC.ofConst (f i) }
-       intBits := Vector.ofFn fun i => LC.ofConst (f i).toInt } : U n).Valid ρ := by
-  intro i
-  simp [U.Valid]
-
-@[simp]
-theorem U.valid_vector_default (i : Fin m) :
-    (default : Vector (U n) m)[i].Valid ρ := by
-  change (Vector.replicate m (default : U n))[i].Valid ρ
-  simp only [Fin.getElem_fin, Vector.getElem_replicate]
-  exact U.valid_default
-
-@[simp]
-theorem U.valid_vector_default_nat (i : Nat) (hi : i < m) :
-    (default : Vector (U n) m)[i].Valid ρ := by
-  exact U.valid_vector_default ⟨i, hi⟩
-
-theorem U.valid_getElem! {xs : Vector (U n) m}
-    (h : ∀ i : Fin m, xs[i].Valid ρ) {i : Nat} (hi : i < m) :
-    xs[i]!.Valid ρ := by
-  rw [getElem!_pos xs i hi]
-  exact h ⟨i, hi⟩
-
-theorem U.valid_getElem {xs : Vector (U n) m}
-    (h : ∀ i : Fin m, xs[i].Valid ρ) (i : Nat) (hi : i < m) :
-    xs[i].Valid ρ := h ⟨i, hi⟩
-
-theorem U.allValid_set! {xs : Vector (U n) m} {x : U n}
-    (hxs : ∀ i : Fin m, xs[i].Valid ρ) (hx : x.Valid ρ)
-    (j : Nat) (hj : j < m) : (xs.set! i x)[j].Valid ρ := by
-  rw [show xs.set! i x = xs.setIfInBounds i x by rfl]
-  simp only [Vector.getElem_setIfInBounds hj]
-  split
-  · exact hx
-  · exact hxs ⟨j, hj⟩
-
-theorem U.valid_of_pointwise_right {xs : Vector (U n) m}
-    {P : Fin m → Prop} (h : ∀ i, P i ∧ xs[i].Valid ρ) :
-    ∀ i : Fin m, xs[i].Valid ρ := fun i => (h i).2
-
-theorem U.allValid_pair {x y : U n} (hx : x.Valid ρ) (hy : y.Valid ρ) :
-    ∀ u ∈ #[x, y], u.Valid ρ := by
-  intro u hu
-  simp only [Array.mem_def, List.mem_cons, List.mem_nil_iff, or_false] at hu
-  rcases hu with rfl | rfl <;> assumption
-
-theorem U.sumPair_eval {out x y : U n} {xv yv : BitVec n}
-    (hout : out.Valid ρ ∧ out.eval ρ =
-      (#[x, y].map (fun u => u.eval ρ)).sum)
-    (hx : x.eval ρ = xv) (hy : y.eval ρ = yv) :
-    out.Valid ρ ∧ out.eval ρ = xv + yv := by
-  refine ⟨hout.1, ?_⟩
-  rw [hout.2, ← Array.sum_toList]
-  simp only [Array.toList_map, List.map_cons, List.map_nil,
-    List.sum_cons, List.sum_nil, hx, hy]
-  simp
-
-theorem U.allValid_four {a b c d : U n} (ha : a.Valid ρ)
-    (hb : b.Valid ρ) (hc : c.Valid ρ) (hd : d.Valid ρ) :
-    ∀ u ∈ #[a, b, c, d], u.Valid ρ := by
-  intro u hu
-  simp only [Array.mem_def, List.mem_cons, List.mem_nil_iff, or_false] at hu
-  rcases hu with rfl | rfl | rfl | rfl <;> assumption
-
-
-theorem Array.mapM_push [Monad m] [LawfulMonad m]
-    (f : α → m β) (xs : Array α) (x : α) :
-    (xs.push x).mapM f = (do
-      let ys ← xs.mapM f
-      let y ← f x
-      pure (ys.push y)) := by
-  simp only [Array.mapM_eq_mapM_toList, Array.toList_push,
-    List.mapM_append, List.mapM_cons, List.mapM_nil]
-  simp
-
-theorem Vector.mapM_push [Monad m] [LawfulMonad m]
-    (f : α → m β) (xs : Vector α n) (x : α) :
-    (xs.push x).mapM f = (do
-      let ys ← xs.mapM f
-      let y ← f x
-      pure (ys.push y)) := by
-  apply Vector.map_toArray_inj.mp
-  rw [Vector.toArray_mapM, Vector.toArray_push, Array.mapM_push]
-  rw [← Vector.toArray_mapM (f := f) (xs := xs)]
-  rw [bind_map_left]
-  simp only [← bind_pure_comp, bind_assoc, pure_bind,
-    Vector.toArray_push]
-
-theorem U.fromWord_wf_full :
-    WF.GadgetSpec
-      (fun leftVal rightVal (left right : Word n) =>
-        ∀ i : Fin n,
-          WF.LCEq leftVal.bool rightVal.bool left.bitsLE[i] right.bitsLE[i])
-      U.fromWord
-      (fun leftVal rightVal left right =>
-        (∀ i : Fin n, WF.LCEq leftVal.bool rightVal.bool
-          left.bits.bitsLE[i] right.bits.bitsLE[i]) ∧
-        (∀ i : Fin n, WF.LCEq leftVal.int rightVal.int
-          left.intBits[i] right.intBits[i]) ∧
-        WF.LCEq leftVal.int rightVal.int left.intVal right.intVal) := by
-  unfold WF.GadgetSpec
-  intro left right
-  unfold U.fromWord
-  apply WF.Rel.forIn'_range_f2z_set!_bind
-  · intro leftVal rightVal hinput i
-    simp [WF.LCEq]
-  · intro i hi leftVal rightVal hinput
-    exact hinput ⟨i, by grind⟩
-  · grind
-  · intro A leftInts rightInts hA
-    apply WF.Rel.pure
-    intro leftVal rightVal hambient
-    have hpost := hA leftVal rightVal hambient
-    refine ⟨?_, hpost.2, WF.LCEq.uIntVal hpost.2⟩
-    exact hpost.1
-
-theorem U.fromInt_wf_full :
-    WF.GadgetSpec
-      (fun leftVal rightVal (left right : LC ℤ) =>
-        WF.LCEq leftVal.int rightVal.int left right)
-      (U.fromInt n)
-      (fun leftVal rightVal left right =>
-        (∀ i : Fin n, WF.LCEq leftVal.bool rightVal.bool
-          left.bits.bitsLE[i] right.bits.bitsLE[i]) ∧
-        (∀ i : Fin n, WF.LCEq leftVal.int rightVal.int
-          left.intBits[i] right.intBits[i]) ∧
-        WF.LCEq leftVal.int rightVal.int left.intVal right.intVal) := by
-  wfgen' using [U.fromWord_wf_full] unfold [U.fromInt]
-  case vc1 hrel =>
-    rcases hrel with ⟨_, values, _, _, hleft, hright⟩
-    unfold WF.LCEq
-    exact (hleft i.val i.isLt).trans (hright i.val i.isLt).symm
-  case vc2 h =>
-    unfold WF.LCEq at h
-    simp only [WF.evalArgs]
-    rw [h]
-  case vc3 h =>
-    unfold WF.ArgsEq
-    simp only [WF.evalArgs]
-    unfold WF.LCEq at h
-    exact congrArg (fun x => h![x]) h
-
-theorem U.mapM_fromWord_wf_full {n m : Nat} :
-    WF.GadgetSpec
-      (WF.VectorRel (n := m) fun lv rv (l r : Word n) =>
-        ∀ i : Fin n, WF.LCEq lv.bool rv.bool l[i] r[i])
-      (fun xs : Vector (Word n) m => xs.mapM U.fromWord)
-      (WF.VectorRel (n := m) fun lv rv l r =>
-        (∀ i : Fin n, WF.LCEq lv.bool rv.bool
-          l.bits.bitsLE[i] r.bits.bitsLE[i]) ∧
-        (∀ i : Fin n, WF.LCEq lv.int rv.int l.intBits[i] r.intBits[i]) ∧
-        WF.LCEq lv.int rv.int l.intVal r.intVal) := by
-  unfold WF.GadgetSpec
-  intro left right
-  apply WF.Rel.mono
-    (U.fromWord_wf_full.relHom.vectorMapM
-      (fun lv rv => WF.VectorRel
-        (fun lv rv (l r : Word n) => ∀ i : Fin n,
-          WF.LCEq lv.bool rv.bool l[i] r[i]) lv rv left right)
-      left right (fun _ _ h => h))
-  intro _ _ _ _ h
-  exact h.2
-
-def U.WFRel (leftVal rightVal : WF.Valuation) (left right : U n) : Prop :=
-  WF.LCEq leftVal.int rightVal.int left.intVal right.intVal ∧
-  ∀ i : Fin n, WF.LCEq leftVal.bool rightVal.bool
-    left.bits.bitsLE[i] right.bits.bitsLE[i]
-
-theorem U.fromWord_wf_rel {n : Nat} :
-    WF.GadgetSpec
-      (fun lv rv (l r : Word n) => ∀ i : Fin n,
-        WF.LCEq lv.bool rv.bool l[i] r[i])
-      U.fromWord U.WFRel := by
-  intro left right
-  apply WF.Rel.mono (U.fromWord_wf_full left right)
-  intro _ _ _ _ h
-  exact ⟨h.2.2, h.1⟩
-
-@[simp]
-theorem U.wfRel_default (leftVal rightVal : WF.Valuation) :
-    U.WFRel leftVal rightVal (default : U n) default := by
-  unfold U.WFRel WF.LCEq U.intVal
-  constructor
-  · rw [LC.eval_sum, LC.eval_sum]
-    apply Finset.sum_congr rfl
-    intro i _
-    rw [LC.eval_nsmul, LC.eval_nsmul]
-    have hz : (default : U n).intBits[i] = 0 := by
-      change (Vector.replicate n (0 : LC ℤ))[i] = 0
-      simp
-    rw [hz, LC.eval_zero, LC.eval_zero]
-  · intro i
-    have hz : (default : U n).bits.bitsLE[i] = 0 := by
-      change (Vector.replicate n (0 : LC Bool))[i] = 0
-      simp
-    change LC.eval leftVal.bool (default : U n).bits.bitsLE[i] =
-      LC.eval rightVal.bool (default : U n).bits.bitsLE[i]
-    rw [hz, LC.eval_zero, LC.eval_zero]
-
-theorem U.vector_default_get (i : Fin m) :
-    (default : Vector (U n) m)[i] = default := by
-  change (Vector.replicate m (default : U n))[i] = default
-  simp
-
-theorem U.vector_default_wfRel (leftVal rightVal : WF.Valuation) :
-    WF.VectorRel U.WFRel leftVal rightVal
-      (default : Vector (U n) m) default := by
-  intro i
-  simpa only [U.vector_default_get] using U.wfRel_default leftVal rightVal
-
-theorem WF.VectorRel.set! {R : WF.Post α}
-    {left right : Vector α n} {xL xR : α}
-    (h : WF.VectorRel R leftVal rightVal left right)
-    (hx : R leftVal rightVal xL xR) (i : Nat) :
-    WF.VectorRel R leftVal rightVal (left.set! i xL) (right.set! i xR) := by
-  intro j
-  rw [show left.set! i xL = left.setIfInBounds i xL by rfl,
-    show right.set! i xR = right.setIfInBounds i xR by rfl]
-  change R leftVal rightVal
-    (left.setIfInBounds i xL)[j.val]
-    (right.setIfInBounds i xR)[j.val]
-  rw [Vector.getElem_setIfInBounds (j := j.val) j.isLt,
-    Vector.getElem_setIfInBounds (j := j.val) j.isLt]
-  split
-  · exact hx
-  · exact h j
-
-theorem WF.VectorRel.getElem! [Inhabited α] {R : WF.Post α}
-    {left right : Vector α n}
-    (h : WF.VectorRel R leftVal rightVal left right)
-    {i : Nat} (hi : i < n) :
-    R leftVal rightVal left[i]! right[i]! := by
-  rw [getElem!_pos left i hi, getElem!_pos right i hi]
-  exact h ⟨i, hi⟩
-
-def Word.WFRel (leftVal rightVal : WF.Valuation)
-    (left right : Word n) : Prop :=
-  ∀ i : Fin n, WF.LCEq leftVal.bool rightVal.bool left[i] right[i]
-
-theorem Word.WFRel.xor {uL uR vL vR : Word n}
-    (hu : Word.WFRel leftVal rightVal uL uR)
-    (hv : Word.WFRel leftVal rightVal vL vR) :
-    Word.WFRel leftVal rightVal (uL ^^^ vL) (uR ^^^ vR) := by
-  intro i
-  unfold Word.WFRel at hu hv
-  unfold WF.LCEq at ⊢
-  change LC.eval leftVal.bool (uL ^^^ vL).bitsLE[i.val] =
-    LC.eval rightVal.bool (uR ^^^ vR).bitsLE[i.val]
-  rw [show uL ^^^ vL =
-      { bitsLE := Vector.zipWith (· + ·) uL.bitsLE vL.bitsLE } by rfl,
-    show uR ^^^ vR =
-      { bitsLE := Vector.zipWith (· + ·) uR.bitsLE vR.bitsLE } by rfl]
-  simp only [Vector.getElem_zipWith i.isLt, LC.eval_add]
-  unfold WF.LCEq at hu hv
-  have hui := hu i
-  have hvi := hv i
-  change LC.eval leftVal.bool uL.bitsLE[i.val] =
-    LC.eval rightVal.bool uR.bitsLE[i.val] at hui
-  change LC.eval leftVal.bool vL.bitsLE[i.val] =
-    LC.eval rightVal.bool vR.bitsLE[i.val] at hvi
-  rw [hui, hvi]
-
-theorem Word.WFRel.xor3
-    {uL uR vL vR wL wR : Word n}
-    (hu : Word.WFRel leftVal rightVal uL uR)
-    (hv : Word.WFRel leftVal rightVal vL vR)
-    (hw : Word.WFRel leftVal rightVal wL wR) :
-    Word.WFRel leftVal rightVal (uL ^^^ vL ^^^ wL)
-      (uR ^^^ vR ^^^ wR) :=
-  (hu.xor hv).xor hw
-
-theorem Word.WFRel.rotateRight {uL uR : Word n}
-    (h : Word.WFRel leftVal rightVal uL uR)
-    (k : Nat) : Word.WFRel leftVal rightVal
-      (uL.rotateRight k) (uR.rotateRight k) := by
-  intro i
-  unfold WF.LCEq
-  change LC.eval leftVal.bool (uL.rotateRight k).bitsLE[i.val] =
-    LC.eval rightVal.bool (uR.rotateRight k).bitsLE[i.val]
-  rw [Word.rotateRight_getElem uL k i i.isLt,
-    Word.rotateRight_getElem uR k i i.isLt]
-  split
-  · exact h ⟨_, by omega⟩
-  · exact h ⟨_, by omega⟩
-
-theorem Word.WFRel.shiftRight {uL uR : Word n}
-    (h : Word.WFRel leftVal rightVal uL uR)
-    (k : Nat) : Word.WFRel leftVal rightVal (uL >>> k) (uR >>> k) := by
-  intro i
-  unfold WF.LCEq
-  change LC.eval leftVal.bool (uL >>> k).bitsLE[i.val] =
-    LC.eval rightVal.bool (uR >>> k).bitsLE[i.val]
-  rw [Word.shiftRight_getElem uL k i i.isLt,
-    Word.shiftRight_getElem uR k i i.isLt]
-  split
-  · exact h ⟨_, by omega⟩
-  · simp
-
-def U.sumFixed (us : Vector (U n) m) : Circuit (U n) := do
-  let newZ := us.toArray.map (fun x => x.intVal) |>.sum
-  let newBits ← U.fromInt (n + Nat.clog 2 m) newZ
-  pure (newBits.takeLE n (by omega))
-
-theorem U.sum_toArray_eq_sumFixed (us : Vector (U n) m) :
-    U.sum us.toArray = U.sumFixed us := by
-  cases us with
-  | mk array hsize =>
-      cases hsize
-      unfold U.sum U.sumFixed
-      simp only
-      apply bind_congr
-      intro wide
-      apply congrArg (fun x : U n => (pure x : Circuit (U n)))
-      exact (U.takeLE_eq_truncate wide (by omega)).symm
-
-@[simp]
-theorem U.sum2_eq_sumFixed (a b : U n) :
-    U.sum #[a, b] = U.sumFixed #v[a, b] :=
-  U.sum_toArray_eq_sumFixed #v[a, b]
-
-@[simp]
-theorem U.sum4_eq_sumFixed (a b c d : U n) :
-    U.sum #[a, b, c, d] = U.sumFixed #v[a, b, c, d] :=
-  U.sum_toArray_eq_sumFixed #v[a, b, c, d]
-
-@[simp]
-theorem U.sum6_eq_sumFixed (a b c d e f : U n) :
-    U.sum #[a, b, c, d, e, f] = U.sumFixed #v[a, b, c, d, e, f] :=
-  U.sum_toArray_eq_sumFixed #v[a, b, c, d, e, f]
-
-@[simp]
-theorem U.sum7_eq_sumFixed (a b c d e f g : U n) :
-    U.sum #[a, b, c, d, e, f, g] =
-      U.sumFixed #v[a, b, c, d, e, f, g] :=
-  U.sum_toArray_eq_sumFixed #v[a, b, c, d, e, f, g]
-
-theorem U.lceq_intVal_sum {left right : Vector (U n) m}
-    (h : WF.VectorRel U.WFRel leftVal rightVal left right) :
-    WF.LCEq leftVal.int rightVal.int
-      (left.toArray.map (fun x => x.intVal)).sum
-      (right.toArray.map (fun x => x.intVal)).sum := by
-  unfold WF.LCEq
-  rw [LC.eval_array_sum, LC.eval_array_sum]
-  apply congrArg Array.sum
-  apply Array.ext
-  · simp
-  · intro i hiLeft hiRight
-    simp only [Array.getElem_map]
-    exact (h ⟨i, by simpa using hiLeft⟩).1
-
-theorem U.sumFixed_wf {n m : Nat} :
-    WF.GadgetSpec (WF.VectorRel (U.WFRel (n := n)))
-      (U.sumFixed (n := n) (m := m)) U.WFRel := by
-  unfold WF.GadgetSpec
-  intro left right
-  unfold U.sumFixed
-  apply WF.GadgetSpec.bind_rule U.fromInt_wf_full
-  · intro leftVal rightVal h
-    exact U.lceq_intVal_sum h
-  · intro B outL outR hpost
-    apply WF.Rel.pure
-    intro leftVal rightVal hB
-    have h := hpost leftVal rightVal hB
-    let hle : n ≤ n + Nat.clog 2 m := by omega
-    unfold U.WFRel
-    constructor
-    · apply WF.LCEq.uIntVal
-      intro i
-      simpa [U.takeLE, Fin.getElem_fin] using h.2.2.1 (i.castLE hle)
-    · intro i
-      simpa [U.takeLE, Fin.getElem_fin] using h.2.1 (i.castLE hle)
-
-end Freigen.F2Z
-
-namespace Freigen.F2Z.Examples
-
-namespace VectorMapM
-
-open Std.Do
-open scoped Std.Do
-
-def vectorToArrayPost {β : Type u} {n : Nat} {ps : PostShape}
-    (Q : PostCond (Vector β n) ps) : PostCond (Array β) ps :=
-  (spred(fun a => ∀ v, ⌜v.toArray = a⌝ → Q.1 v), Q.2)
-
-@[spec]
-theorem vectorMapM_of_array [Monad m] [WPMonad m ps]
-    {f : α → m β} {xs : Vector α n}
-    {P : Assertion ps} {Q : PostCond (Vector β n) ps}
-    (h : Triple (xs.toArray.mapM f) P (vectorToArrayPost Q)) :
-    Triple (xs.mapM f) P Q := by
-  rw [← Vector.toArray_mapM] at h
-  apply Triple.iff.mpr
-  have hwp := Triple.iff.mp h
-  rw [WPMonad.wp_map] at hwp
-  apply hwp.trans
-  apply (wp (xs.mapM f)).mono
-  simp only [PostCond.entails]
-  constructor
-  · intro v
-    simp only [PredTrans.apply, vectorToArrayPost]
-    refine (SPred.forall_elim v).trans ?_
-    simpa using
-      (SPred.true_imp.mp : (spred(⌜True⌝ → Q.1 v) ⊢ₛ Q.1 v))
-  · exact ExceptConds.entails.refl _
-
-end VectorMapM
-
-section Sound
-
-open Std.Do
-
-abbrev chB (u v w : Bool) : Bool := (u && v) ^^ ((!u) && w)
-abbrev chBV (u v w : BitVec n) : BitVec n := (u &&& v) ^^^ ((~~~u) &&& w)
-abbrev majB (u v w : Bool) : Bool := (u && v) ^^ (u && w) ^^ (v && w)
-abbrev majBV (u v w : BitVec n) : BitVec n :=
-  (u &&& v) ^^^ (u &&& w) ^^^ (v &&& w)
-
-private theorem natCast_ofBits_eq_sum (f : Fin n → Bool) :
-    (Nat.ofBits f : Int) =
-      ∑ k : Fin n, 2 ^ k.val * (f k).toInt := by
-  induction n with
-  | zero => simp
-  | succ n ih =>
-      rw [Nat.ofBits_succ, Nat.cast_add, Nat.cast_mul, Fin.sum_univ_succ]
-      simp only [Nat.cast_ofNat, Fin.val_zero, pow_zero, one_mul,
-        Fin.val_succ, pow_succ]
-      rw [ih, Finset.mul_sum]
-      have hf : ((f 0).toNat : Int) = (f 0).toInt := by
-        cases f 0 <;> rfl
-      rw [hf, add_comm]
-      congr 1
-      apply Finset.sum_congr rfl
-      intro i _
-      simp only [Function.comp_apply]
-      ring
-
-private theorem bitVec_toNat_eq_sum (x : BitVec n) :
-    (x.toNat : Int) =
-      ∑ k : Fin n, 2 ^ k.val * (x[k.val]).toInt := by
-  rw [← natCast_ofBits_eq_sum]
-  congr 1
-  rw [show (fun i : Fin n => x[i.val]) =
-      (fun i => x.toNat.testBit i.val) by
-    funext i
-    exact BitVec.getElem_eq_testBit_toNat x i.val i.isLt]
-  exact (Nat.ofBits_testBit x.toNat n |>.trans
-    (Nat.mod_eq_of_lt x.isLt)).symm
-
-private theorem ch_arith (u v w : BitVec n) :
-    (v.toNat : Int) + w.toNat - (u ^^^ v).toNat + (u ^^^ w).toNat =
-      2 * ((chBV u v w).toNat : Int) := by
-  rw [bitVec_toNat_eq_sum, bitVec_toNat_eq_sum,
-    bitVec_toNat_eq_sum, bitVec_toNat_eq_sum,
-    bitVec_toNat_eq_sum, Finset.mul_sum]
-  rw [← Finset.sum_add_distrib, ← Finset.sum_sub_distrib,
-    ← Finset.sum_add_distrib]
-  apply Finset.sum_congr rfl
-  intro i _
-  simp only [chBV, BitVec.getElem_xor, BitVec.getElem_and,
-    BitVec.getElem_not]
-  generalize u[i.val] = ub
-  generalize v[i.val] = vb
-  generalize w[i.val] = wb
-  cases ub <;> cases vb <;> cases wb <;> norm_num <;> ring
-
-private theorem maj_arith (u v w : BitVec n) :
-    (u.toNat : Int) + v.toNat + w.toNat - (u ^^^ v ^^^ w).toNat =
-      2 * ((majBV u v w).toNat : Int) := by
-  rw [bitVec_toNat_eq_sum, bitVec_toNat_eq_sum,
-    bitVec_toNat_eq_sum, bitVec_toNat_eq_sum,
-    bitVec_toNat_eq_sum, Finset.mul_sum]
-  rw [← Finset.sum_add_distrib, ← Finset.sum_add_distrib,
-    ← Finset.sum_sub_distrib]
-  apply Finset.sum_congr rfl
-  intro i _
-  simp only [majBV, BitVec.getElem_xor, BitVec.getElem_and]
-  generalize u[i.val] = ub
-  generalize v[i.val] = vb
-  generalize w[i.val] = wb
-  cases ub <;> cases vb <;> cases wb <;> norm_num <;> ring
-
-private theorem U.eval_eq_ofFnLE_of_valid (u : U n) (h : u.Valid ρ) :
-    u.eval ρ = BitVec.ofFnLE (fun i => u.bits.bitsLE[i].eval ρ.bool) := by
-  apply BitVec.toNat_inj.mp
-  simp [U.eval, U.eval_intVal_eq_evalZ u h, Word.evalZ,
-    Nat.mod_eq_of_lt (Nat.ofBits_lt_two_pow _)]
-
-private theorem U.intVal_eval_eq_eval_toNat (u : U n) (h : u.Valid ρ) :
-    u.intVal.eval ρ.int = (u.eval ρ).toNat := by
-  rw [U.eval_eq_ofFnLE_of_valid u h, U.eval_intVal_eq_evalZ u h]
-  simp [Word.evalZ]
-
-private theorem U.eval_eq_xor_of_bits_eq (out u v : U n)
-    (hout : out.Valid ρ) (hu : u.Valid ρ) (hv : v.Valid ρ)
-    (hbits : out.bits = u.bits ^^^ v.bits) :
-    out.eval ρ = u.eval ρ ^^^ v.eval ρ := by
-  rw [U.eval_eq_ofFnLE_of_valid out hout,
-    U.eval_eq_ofFnLE_of_valid u hu,
-    U.eval_eq_ofFnLE_of_valid v hv]
-  apply BitVec.eq_of_getElem_eq
-  intro i hi
-  simp only [BitVec.getElem_ofFnLE, BitVec.getElem_xor]
-  rw [hbits]
-  change LC.eval ρ.bool
-      (Vector.zipWith (· + ·) u.bits.bitsLE v.bits.bitsLE)[i] = _
-  rw [Vector.getElem_zipWith hi, LC.eval_add]
-  generalize LC.eval ρ.bool u.bits.bitsLE[i] = ub
-  generalize LC.eval ρ.bool v.bits.bitsLE[i] = vb
-  cases ub <;> cases vb <;> rfl
-
-private theorem U.eval_eq_chBV_of_bits (out u v w : U n)
-    (hout : out.Valid ρ) (hu : u.Valid ρ) (hv : v.Valid ρ)
-    (hw : w.Valid ρ)
-    (hbits : ∀ i : Fin n, out.bits[i].eval ρ.bool =
-      chB (u.bits[i].eval ρ.bool) (v.bits[i].eval ρ.bool)
-        (w.bits[i].eval ρ.bool)) :
-    out.eval ρ = chBV (u.eval ρ) (v.eval ρ) (w.eval ρ) := by
-  rw [U.eval_eq_ofFnLE_of_valid out hout,
-    U.eval_eq_ofFnLE_of_valid u hu,
-    U.eval_eq_ofFnLE_of_valid v hv,
-    U.eval_eq_ofFnLE_of_valid w hw]
-  apply BitVec.eq_of_getElem_eq
-  intro i hi
-  simp only [BitVec.getElem_ofFnLE, chBV, BitVec.getElem_xor,
-    BitVec.getElem_and, BitVec.getElem_not]
-  exact hbits ⟨i, hi⟩
-
-private theorem U.eval_eq_xor3_of_bits_eq (out u v w : U n)
-    (hout : out.Valid ρ) (hu : u.Valid ρ) (hv : v.Valid ρ)
-    (hw : w.Valid ρ)
-    (hbits : out.bits = u.bits ^^^ v.bits ^^^ w.bits) :
-    out.eval ρ = u.eval ρ ^^^ v.eval ρ ^^^ w.eval ρ := by
-  rw [U.eval_eq_ofFnLE out hout, U.eval_eq_ofFnLE u hu,
-    U.eval_eq_ofFnLE v hv, U.eval_eq_ofFnLE w hw]
-  apply BitVec.eq_of_getElem_eq
-  intro i hi
-  simp only [BitVec.getElem_ofFnLE, BitVec.getElem_xor]
-  rw [hbits]
-  change LC.eval ρ.bool
-      (Vector.zipWith (· + ·)
-        (Vector.zipWith (· + ·) u.bits.bitsLE v.bits.bitsLE)
-        w.bits.bitsLE)[i] = _
-  rw [Vector.getElem_zipWith hi, Vector.getElem_zipWith hi,
-    LC.eval_add, LC.eval_add]
-  generalize LC.eval ρ.bool u.bits.bitsLE[i] = ub
-  generalize LC.eval ρ.bool v.bits.bitsLE[i] = vb
-  generalize LC.eval ρ.bool w.bits.bitsLE[i] = wb
-  cases ub <;> cases vb <;> cases wb <;> rfl
-
-private theorem U.eval_eq_majBV_of_bits (out u v w : U n)
-    (hout : out.Valid ρ) (hu : u.Valid ρ) (hv : v.Valid ρ)
-    (hw : w.Valid ρ)
-    (hbits : ∀ i : Fin n, out.bits[i].eval ρ.bool =
-      majB (u.bits[i].eval ρ.bool) (v.bits[i].eval ρ.bool)
-        (w.bits[i].eval ρ.bool)) :
-    out.eval ρ = majBV (u.eval ρ) (v.eval ρ) (w.eval ρ) := by
-  rw [U.eval_eq_ofFnLE out hout, U.eval_eq_ofFnLE u hu,
-    U.eval_eq_ofFnLE v hv, U.eval_eq_ofFnLE w hw]
-  apply BitVec.eq_of_getElem_eq
-  intro i hi
-  simp only [BitVec.getElem_ofFnLE, majBV, BitVec.getElem_xor,
-    BitVec.getElem_and]
-  exact hbits ⟨i, hi⟩
-
-private theorem Word.lceq_xor (leftVal rightVal : Nat → Bool)
-    (leftU rightU leftV rightV : Word n) (i : Fin n)
-    (hu : WF.LCEq leftVal rightVal leftU[i] rightU[i])
-    (hv : WF.LCEq leftVal rightVal leftV[i] rightV[i]) :
-    WF.LCEq leftVal rightVal
-      (leftU ^^^ leftV).bitsLE[i] (rightU ^^^ rightV).bitsLE[i] := by
-  unfold WF.LCEq at hu hv ⊢
-  rw [show leftU ^^^ leftV =
-      { bitsLE := Vector.zipWith (· + ·) leftU.bitsLE leftV.bitsLE } by rfl,
-    show rightU ^^^ rightV =
-      { bitsLE := Vector.zipWith (· + ·) rightU.bitsLE rightV.bitsLE } by rfl]
-  simp only [Fin.getElem_fin, Vector.getElem_zipWith i.isLt, LC.eval_add]
-  change LC.eval leftVal leftU.bitsLE[i] =
-    LC.eval rightVal rightU.bitsLE[i] at hu
-  change LC.eval leftVal leftV.bitsLE[i] =
-    LC.eval rightVal rightV.bitsLE[i] at hv
-  simp only [Fin.getElem_fin] at hu hv
-  rw [hu, hv]
-
-private theorem Word.lceq_xor3 (leftVal rightVal : Nat → Bool)
-    (leftU rightU leftV rightV leftW rightW : Word n) (i : Fin n)
-    (hu : WF.LCEq leftVal rightVal leftU[i] rightU[i])
-    (hv : WF.LCEq leftVal rightVal leftV[i] rightV[i])
-    (hw : WF.LCEq leftVal rightVal leftW[i] rightW[i]) :
-    WF.LCEq leftVal rightVal
-      (leftU ^^^ leftV ^^^ leftW).bitsLE[i]
-      (rightU ^^^ rightV ^^^ rightW).bitsLE[i] := by
-  exact Word.lceq_xor leftVal rightVal
-    (leftU ^^^ leftV) (rightU ^^^ rightV) leftW rightW i
-    (Word.lceq_xor leftVal rightVal leftU rightU leftV rightV i hu hv) hw
-
-private theorem ch_argsEq (leftVal rightVal : WF.Valuation)
-    (uL uR vL vR wL wR : U n) (i : Fin n)
-    (hu : WF.LCEq leftVal.bool rightVal.bool uL.bits[i] uR.bits[i])
-    (hv : WF.LCEq leftVal.bool rightVal.bool vL.bits[i] vR.bits[i])
-    (hw : WF.LCEq leftVal.bool rightVal.bool wL.bits[i] wR.bits[i]) :
-    WF.ArgsEq leftVal rightVal h![uL.bits[i], vL.bits[i], wL.bits[i]]
-      h![uR.bits[i], vR.bits[i], wR.bits[i]] := by
-  unfold WF.ArgsEq
-  simp only [WF.evalArgs]
-  unfold WF.LCEq at hu hv hw
-  rw [hu, hv, hw]
-
-@[spec]
-theorem U.ch_sound {u v w : U n} { hu : u.Valid ρ } { hv : v.Valid ρ } { hw : w.Valid ρ } :
-    ⦃⌜True⌝⦄ Sound.interp ρ (U.ch u v w) ⦃ ⇓ r => ⌜r.Valid ρ ∧ r.eval ρ = chBV (u.eval ρ) (v.eval ρ) (w.eval ρ)⌝ ⦄ := by
-  mvcgen [U.ch] invariants
-  · fun _ _ _ => ⌜True⌝
-  case vc1 => simp
-  case vc3 =>
-    rename_i chBits ch hch uv huv uw huw hass
-    rcases hch with ⟨_, hchValid⟩
-    rcases huv with ⟨huvBits, huvValid⟩
-    rcases huw with ⟨huwBits, huwValid⟩
-    refine ⟨hchValid, ?_⟩
-    have huvEval := U.eval_eq_xor_of_bits_eq uv u v huvValid hu hv huvBits
-    have huwEval := U.eval_eq_xor_of_bits_eq uw u w huwValid hu hw huwBits
-    have harith := ch_arith (u.eval ρ) (v.eval ρ) (w.eval ρ)
-    rw [← huvEval, ← huwEval,
-      ← U.intVal_eval_eq_eval_toNat v hv,
-      ← U.intVal_eval_eq_eval_toNat w hw,
-      ← U.intVal_eval_eq_eval_toNat uv huvValid,
-      ← U.intVal_eval_eq_eval_toNat uw huwValid] at harith
-    simp only [LC.eval_zero, zero_mul, LC.eval_add, LC.eval_sub,
-      two_nsmul] at hass
-    have hchValue :
-        ch.intVal.eval ρ.int =
-          ((chBV (u.eval ρ) (v.eval ρ) (w.eval ρ)).toNat : Int) := by
-      linarith
-    rw [show ch.eval ρ = BitVec.ofNat n (ch.intVal.eval ρ.int).toNat by rfl]
-    rw [hchValue]
-    change BitVec.ofNat n
-      (chBV (u.eval ρ) (v.eval ρ) (w.eval ρ)).toNat = _
-    simpa using BitVec.ofNat_toNat n
-      (chBV (u.eval ρ) (v.eval ρ) (w.eval ρ))
-
-@[spec]
-theorem U.ch_complete {u v w : U n} {hu : u.Valid ρ}
-    {hv : v.Valid ρ} {hw : w.Valid ρ} :
-    ⦃⌜True⌝⦄ Complete.interp ρ (U.ch u v w)
-    ⦃ ⇓ r => ⌜r.Valid ρ ∧
-      r.eval ρ = chBV (u.eval ρ) (v.eval ρ) (w.eval ρ)⌝ ⦄ := by
-  unfold U.ch
-  rw [Complete.interp_bind]
-  apply Triple.bind (Q := fun chBits => ⌜∀ i : Fin n,
-    chBits[i].eval ρ.bool = chB
-      (u.bits[i].eval ρ.bool) (v.bits[i].eval ρ.bool)
-      (w.bits[i].eval ρ.bool)⌝)
-  case hx =>
-    mvcgen invariants
-    · fun i hi xs => ⌜∀ j : Fin i,
-        xs[j].eval ρ.bool = chB
-          (u.bits[j.castLE hi].eval ρ.bool)
-          (v.bits[j.castLE hi].eval ρ.bool)
-          (w.bits[j.castLE hi].eval ρ.bool)⌝
-    case vc1 =>
-      rename_i i hi xs
-      simp only [WF.evalArgs, WF.interpHint, Free.interp_pure]
-      intro hprefix
-      let ix : Fin n := ⟨i, hi⟩
-      refine ⟨#v[chB (u.bits[ix].eval ρ.bool)
-        (v.bits[ix].eval ρ.bool) (w.bits[ix].eval ρ.bool)], by rfl, ?_⟩
-      change ∀ j : Fin (i + 1), _
-      intro j
-      by_cases hj : j.val < i
-      · have hcast :
-            (⟨j.val, hj⟩ : Fin i).castLE (Nat.le_of_lt hi) =
-              j.castLE (Nat.succ_le_of_lt hi) := Fin.ext rfl
-        have hold := hprefix ⟨j.val, hj⟩
-        rw [hcast] at hold
-        simpa [Vector.getElem_push, hj] using hold
-      · have hjEq : j.val = i := by omega
-        have hcast : j.castLE (Nat.succ_le_of_lt hi) = ix := Fin.ext hjEq
-        rw [hcast]
-        simp [hjEq, ix]
-    case vc2 => simp
-    case vc3 => simp
-  case hf =>
-    intro chBits
-    mvcgen
-    case vc1 =>
-      rename_i hbits ch hch uv huv uw huw
-      rcases hch with ⟨hchBits, hchValid⟩
-      rcases huv with ⟨huvBits, huvValid⟩
-      rcases huw with ⟨huwBits, huwValid⟩
-      have hchEval :
-          ch.eval ρ = chBV (u.eval ρ) (v.eval ρ) (w.eval ρ) := by
-        apply U.eval_eq_chBV_of_bits ch u v w hchValid hu hv hw
-        intro i
-        rw [hchBits]
-        exact hbits i
-      have huvEval := U.eval_eq_xor_of_bits_eq uv u v huvValid hu hv huvBits
-      have huwEval := U.eval_eq_xor_of_bits_eq uw u w huwValid hu hw huwBits
-      have harith := ch_arith (u.eval ρ) (v.eval ρ) (w.eval ρ)
-      rw [← huvEval, ← huwEval,
-        ← U.intVal_eval_eq_eval_toNat v hv,
-        ← U.intVal_eval_eq_eval_toNat w hw,
-        ← U.intVal_eval_eq_eval_toNat uv huvValid,
-        ← U.intVal_eval_eq_eval_toNat uw huwValid] at harith
-      have hchInt := U.intVal_eval_eq_eval_toNat ch hchValid
-      rw [hchEval] at hchInt
-      constructor
-      · simp only [LC.eval_zero, zero_mul, LC.eval_add, LC.eval_sub,
-          two_nsmul]
-        linarith
-      · change ch.Valid ρ ∧
-          ch.eval ρ = chBV (u.eval ρ) (v.eval ρ) (w.eval ρ)
-        exact ⟨hchValid, hchEval⟩
-
-@[spec]
-theorem U.maj_sound {u v w : U n} {hu : u.Valid ρ}
-    {hv : v.Valid ρ} {hw : w.Valid ρ} :
-    ⦃⌜True⌝⦄ Sound.interp ρ (U.maj u v w)
-    ⦃ ⇓ r => ⌜r.Valid ρ ∧
-      r.eval ρ = majBV (u.eval ρ) (v.eval ρ) (w.eval ρ)⌝ ⦄ := by
-  mvcgen [U.maj] invariants
-  · fun _ _ _ => ⌜True⌝
-  case vc1 => simp
-  case vc3 =>
-    rename_i majBits maj hmaj uvw huvw hass
-    rcases hmaj with ⟨_, hmajValid⟩
-    rcases huvw with ⟨huvwBits, huvwValid⟩
-    refine ⟨hmajValid, ?_⟩
-    have huvwEval := U.eval_eq_xor3_of_bits_eq uvw u v w
-      huvwValid hu hv hw huvwBits
-    have harith := maj_arith (u.eval ρ) (v.eval ρ) (w.eval ρ)
-    rw [← huvwEval,
-      ← U.intVal_eval_eq_eval_toNat u hu,
-      ← U.intVal_eval_eq_eval_toNat v hv,
-      ← U.intVal_eval_eq_eval_toNat w hw,
-      ← U.intVal_eval_eq_eval_toNat uvw huvwValid] at harith
-    simp only [LC.eval_zero, zero_mul, LC.eval_add, LC.eval_sub,
-      two_nsmul] at hass
-    have hmajValue :
-        maj.intVal.eval ρ.int =
-          ((majBV (u.eval ρ) (v.eval ρ) (w.eval ρ)).toNat : Int) := by
-      linarith
-    rw [show maj.eval ρ =
-      BitVec.ofNat n (maj.intVal.eval ρ.int).toNat by rfl, hmajValue]
-    change BitVec.ofNat n
-      (majBV (u.eval ρ) (v.eval ρ) (w.eval ρ)).toNat = _
-    simpa using BitVec.ofNat_toNat n
-      (majBV (u.eval ρ) (v.eval ρ) (w.eval ρ))
-
-@[spec]
-theorem U.maj_complete {u v w : U n} {hu : u.Valid ρ}
-    {hv : v.Valid ρ} {hw : w.Valid ρ} :
-    ⦃⌜True⌝⦄ Complete.interp ρ (U.maj u v w)
-    ⦃ ⇓ r => ⌜r.Valid ρ ∧
-      r.eval ρ = majBV (u.eval ρ) (v.eval ρ) (w.eval ρ)⌝ ⦄ := by
-  unfold U.maj
-  rw [Complete.interp_bind]
-  apply Triple.bind (Q := fun majBits => ⌜∀ i : Fin n,
-    majBits[i].eval ρ.bool = majB
-      (u.bits[i].eval ρ.bool) (v.bits[i].eval ρ.bool)
-      (w.bits[i].eval ρ.bool)⌝)
-  case hx =>
-    mvcgen invariants
-    · fun i hi xs => ⌜∀ j : Fin i,
-        xs[j].eval ρ.bool = majB
-          (u.bits[j.castLE hi].eval ρ.bool)
-          (v.bits[j.castLE hi].eval ρ.bool)
-          (w.bits[j.castLE hi].eval ρ.bool)⌝
-    case vc1 =>
-      rename_i i hi xs
-      simp only [WF.evalArgs, WF.interpHint, Free.interp_pure]
-      intro hprefix
-      let ix : Fin n := ⟨i, hi⟩
-      refine ⟨#v[majB (u.bits[ix].eval ρ.bool)
-        (v.bits[ix].eval ρ.bool) (w.bits[ix].eval ρ.bool)], by rfl, ?_⟩
-      intro j
-      by_cases hj : j.val < i
-      · have hcast :
-            (⟨j.val, hj⟩ : Fin i).castLE (Nat.le_of_lt hi) =
-              j.castLE (Nat.succ_le_of_lt hi) := Fin.ext rfl
-        have hold := hprefix ⟨j.val, hj⟩
-        rw [hcast] at hold
-        simpa [Vector.getElem_push, hj] using hold
-      · have hjEq : j.val = i := by omega
-        have hcast : j.castLE (Nat.succ_le_of_lt hi) = ix := Fin.ext hjEq
-        rw [hcast]
-        simp [hjEq, ix]
-    case vc2 => simp
-    case vc3 => simp
-  case hf =>
-    intro majBits
-    mvcgen
-    case vc1 =>
-      rename_i hbits maj hmaj uvw huvw
-      rcases hmaj with ⟨hmajBits, hmajValid⟩
-      rcases huvw with ⟨huvwBits, huvwValid⟩
-      have hmajEval :
-          maj.eval ρ = majBV (u.eval ρ) (v.eval ρ) (w.eval ρ) := by
-        apply U.eval_eq_majBV_of_bits maj u v w hmajValid hu hv hw
-        intro i
-        rw [hmajBits]
-        exact hbits i
-      have huvwEval := U.eval_eq_xor3_of_bits_eq uvw u v w
-        huvwValid hu hv hw huvwBits
-      have harith := maj_arith (u.eval ρ) (v.eval ρ) (w.eval ρ)
-      rw [← huvwEval,
-        ← U.intVal_eval_eq_eval_toNat u hu,
-        ← U.intVal_eval_eq_eval_toNat v hv,
-        ← U.intVal_eval_eq_eval_toNat w hw,
-        ← U.intVal_eval_eq_eval_toNat uvw huvwValid] at harith
-      have hmajInt := U.intVal_eval_eq_eval_toNat maj hmajValid
-      rw [hmajEval] at hmajInt
-      constructor
-      · simp only [LC.eval_zero, zero_mul, LC.eval_add, LC.eval_sub,
-          two_nsmul]
-        linarith
-      · exact ⟨hmajValid, hmajEval⟩
-
-theorem U.ch_wf :
-    WF.GadgetSpec
-      (fun leftVal rightVal
-          (left right : U n × U n × U n) =>
-        (WF.LCEq leftVal.int rightVal.int
-            left.1.intVal right.1.intVal ∧
-          ∀ i : Fin n, WF.LCEq leftVal.bool rightVal.bool
-            left.1.bits[i] right.1.bits[i]) ∧
-        (WF.LCEq leftVal.int rightVal.int
-            left.2.1.intVal right.2.1.intVal ∧
-          ∀ i : Fin n, WF.LCEq leftVal.bool rightVal.bool
-            left.2.1.bits[i] right.2.1.bits[i]) ∧
-        (WF.LCEq leftVal.int rightVal.int
-            left.2.2.intVal right.2.2.intVal ∧
-          ∀ i : Fin n, WF.LCEq leftVal.bool rightVal.bool
-            left.2.2.bits[i] right.2.2.bits[i]))
-      (fun x => U.ch x.1 x.2.1 x.2.2)
-      (fun leftVal rightVal left right =>
-        WF.LCEq leftVal.int rightVal.int left.intVal right.intVal ∧
-        ∀ i : Fin n, WF.LCEq leftVal.bool rightVal.bool
-          left.bits[i] right.bits[i]) := by
-  unfold WF.GadgetSpec
-  intro left right
-  dsimp only
-  unfold U.ch
-  apply (WF.Rel.vectorOfFnM
-    (S := fun i leftVal rightVal leftOut rightOut =>
-      WF.LCEq leftVal.bool rightVal.bool leftOut rightOut) ?_).bind
-  ·
-    wfgen' using [U.fromWord_wf]
-    all_goals apply Word.lceq_xor <;> grind
-  · intro i P _ _ hP
-    wfgen'
-    case vc1 hrel =>
-      rcases hrel with ⟨_, values, _, _, hleft, hright⟩
-      unfold WF.LCEq
-      simp only [Fin.getElem_fin]
-      exact (hleft j.val j.isLt).trans (hright j.val j.isLt).symm
-    case vc2 => exact ⟨Nat.le_refl 0, Nat.zero_lt_one, rfl⟩
-    case vc3 hambient =>
-      have hinput := hP leftVal rightVal hambient
-      have hargs := ch_argsEq leftVal rightVal
-        left.1 right.1 left.2.1 right.2.1 left.2.2 right.2.2 i
-        (hinput.1.2 i) (hinput.2.1.2 i) (hinput.2.2.2 i)
-      unfold WF.ArgsEq at hargs
-      rw [hargs]
-    case vc4 hambient =>
-      have hinput := hP leftVal rightVal hambient
-      exact ch_argsEq leftVal rightVal
-        left.1 right.1 left.2.1 right.2.1 left.2.2 right.2.2 i
-        (hinput.1.2 i) (hinput.2.1.2 i) (hinput.2.2.2 i)
-
-theorem U.maj_wf :
-    WF.GadgetSpec
-      (fun leftVal rightVal
-          (left right : U n × U n × U n) =>
-        (WF.LCEq leftVal.int rightVal.int
-            left.1.intVal right.1.intVal ∧
-          ∀ i : Fin n, WF.LCEq leftVal.bool rightVal.bool
-            left.1.bits[i] right.1.bits[i]) ∧
-        (WF.LCEq leftVal.int rightVal.int
-            left.2.1.intVal right.2.1.intVal ∧
-          ∀ i : Fin n, WF.LCEq leftVal.bool rightVal.bool
-            left.2.1.bits[i] right.2.1.bits[i]) ∧
-        (WF.LCEq leftVal.int rightVal.int
-            left.2.2.intVal right.2.2.intVal ∧
-          ∀ i : Fin n, WF.LCEq leftVal.bool rightVal.bool
-            left.2.2.bits[i] right.2.2.bits[i]))
-      (fun x => U.maj x.1 x.2.1 x.2.2)
-      (fun leftVal rightVal left right =>
-        WF.LCEq leftVal.int rightVal.int left.intVal right.intVal ∧
-        ∀ i : Fin n, WF.LCEq leftVal.bool rightVal.bool
-          left.bits[i] right.bits[i]) := by
-  unfold WF.GadgetSpec
-  intro left right
-  dsimp only
-  unfold U.maj
-  apply (WF.Rel.vectorOfFnM
-    (S := fun i leftVal rightVal leftOut rightOut =>
-      WF.LCEq leftVal.bool rightVal.bool leftOut rightOut) ?_).bind
-  · wfgen' using [U.fromWord_wf]
-    all_goals apply Word.lceq_xor3 <;> grind
-  · intro i P _ _ hP
-    wfgen'
-    case vc1 hrel =>
-      rcases hrel with ⟨_, values, _, _, hleft, hright⟩
-      unfold WF.LCEq
-      simp only [Fin.getElem_fin]
-      exact (hleft j.val j.isLt).trans (hright j.val j.isLt).symm
-    case vc2 => exact ⟨Nat.le_refl 0, Nat.zero_lt_one, rfl⟩
-    case vc3 hambient =>
-      have hinput := hP leftVal rightVal hambient
-      have hargs := ch_argsEq leftVal rightVal
-        left.1 right.1 left.2.1 right.2.1 left.2.2 right.2.2 i
-        (hinput.1.2 i) (hinput.2.1.2 i) (hinput.2.2.2 i)
-      unfold WF.ArgsEq at hargs
-      rw [hargs]
-    case vc4 hambient =>
-      have hinput := hP leftVal rightVal hambient
-      exact ch_argsEq leftVal rightVal
-        left.1 right.1 left.2.1 right.2.1 left.2.2 right.2.2 i
-        (hinput.1.2 i) (hinput.2.1.2 i) (hinput.2.2.2 i)
-
-@[spec 0]
-theorem U.ch_sound_frame {u v w : U n} (hu : u.Valid ρ)
-    (hv : v.Valid ρ) (hw : w.Valid ρ) (P : Prop) :
-    ⦃⌜P⌝⦄ Sound.interp ρ (U.ch u v w)
-    ⦃ ⇓ r => ⌜P ∧ r.Valid ρ ∧
-      r.eval ρ = chBV (u.eval ρ) (v.eval ρ) (w.eval ρ)⌝ ⦄ := by
-  mvcgen
-  case vc1 => tauto
-  case vc2 => exact fun _ => hu
-  case vc3 => exact fun _ => hv
-  case vc4 => exact fun _ => hw
-
-@[spec 0]
-theorem U.ch_complete_frame {u v w : U n} (hu : u.Valid ρ)
-    (hv : v.Valid ρ) (hw : w.Valid ρ) (P : Prop) :
-    ⦃⌜P⌝⦄ Complete.interp ρ (U.ch u v w)
-    ⦃ ⇓ r => ⌜P ∧ r.Valid ρ ∧
-      r.eval ρ = chBV (u.eval ρ) (v.eval ρ) (w.eval ρ)⌝ ⦄ := by
-  mvcgen
-  case vc1 => tauto
-  case vc2 => exact fun _ => hu
-  case vc3 => exact fun _ => hv
-  case vc4 => exact fun _ => hw
-
-@[spec 0]
-theorem U.maj_sound_frame {u v w : U n} (hu : u.Valid ρ)
-    (hv : v.Valid ρ) (hw : w.Valid ρ) (P : Prop) :
-    ⦃⌜P⌝⦄ Sound.interp ρ (U.maj u v w)
-    ⦃ ⇓ r => ⌜P ∧ r.Valid ρ ∧
-      r.eval ρ = majBV (u.eval ρ) (v.eval ρ) (w.eval ρ)⌝ ⦄ := by
-  mvcgen
-  case vc1 => tauto
-  case vc2 => exact fun _ => hu
-  case vc3 => exact fun _ => hv
-  case vc4 => exact fun _ => hw
-
-@[spec 0]
-theorem U.maj_complete_frame {u v w : U n} (hu : u.Valid ρ)
-    (hv : v.Valid ρ) (hw : w.Valid ρ) (P : Prop) :
-    ⦃⌜P⌝⦄ Complete.interp ρ (U.maj u v w)
-    ⦃ ⇓ r => ⌜P ∧ r.Valid ρ ∧
-      r.eval ρ = majBV (u.eval ρ) (v.eval ρ) (w.eval ρ)⌝ ⦄ := by
-  mvcgen
-  case vc1 => tauto
-  case vc2 => exact fun _ => hu
-  case vc3 => exact fun _ => hv
-  case vc4 => exact fun _ => hw
-
-end Sound
-
-instance instInhabitedWord : Inhabited (Word n) :=
-  ⟨{ bitsLE := Vector.replicate n (0 : LC Bool) }⟩
-
-open Std.Do
-open scoped Std.Do
-
-def scheduleStep (i : Nat) (w : Vector (U 32) 64) : Circuit (U 32) := do
-  let wi15 := w[i - 15]!.bits
-  let s0 ← U.fromWord $
-    wi15.rotateRight 7 ^^^ wi15.rotateRight 18 ^^^ (wi15 >>> 3)
-  let wi2 := w[i - 2]!.bits
-  let s1 ← U.fromWord $
-    wi2.rotateRight 17 ^^^ wi2.rotateRight 19 ^^^ (wi2 >>> 10)
-  U.sumFixed #v[w[i - 16]!, s0, w[i - 7]!, s1]
-
-@[simp]
-theorem scheduleLoopBody_eq (i : Nat) (h : i ∈ [16:64])
-    (w : Vector (U 32) 64) :
-    (do
-      let wi15 := w[i - 15]!.bits
-      let s0 ← U.fromWord $
-        wi15.rotateRight 7 ^^^ wi15.rotateRight 18 ^^^ (wi15 >>> 3)
-      let wi2 := w[i - 2]!.bits
-      let s1 ← U.fromWord $
-        wi2.rotateRight 17 ^^^ wi2.rotateRight 19 ^^^ (wi2 >>> 10)
-      let out ← U.sumFixed #v[w[i - 16]!, s0, w[i - 7]!, s1]
-      pure (ForInStep.yield (w.set! i out))) =
-    (do
-      let out ← scheduleStep i w
-      pure (ForInStep.yield (w.set! i out))) := by
-  rfl
-
-theorem scheduleStep_wf (i : Nat) (hi : i ∈ [16:64]) :
-    WF.GadgetSpec (WF.VectorRel U.WFRel) (scheduleStep i) U.WFRel := by
-  unfold WF.GadgetSpec
-  intro left right
-  unfold scheduleStep
-  apply WF.GadgetSpec.bind_rule U.fromWord_wf_rel
-  · intro leftVal rightVal h
-    have hword := h.getElem! (i := i - 15) (by grind) |>.2
-    change Word.WFRel leftVal rightVal _ _ at hword
-    exact ((hword.rotateRight 7).xor (hword.rotateRight 18)).xor
-      (hword.shiftRight 3)
-  · intro B s0L s0R hs0
-    apply WF.GadgetSpec.bind_rule U.fromWord_wf_rel
-    · intro leftVal rightVal hB
-      have hvec := (hs0 leftVal rightVal hB).1
-      have hword := hvec.getElem! (i := i - 2) (by grind) |>.2
-      change Word.WFRel leftVal rightVal _ _ at hword
-      exact ((hword.rotateRight 17).xor (hword.rotateRight 19)).xor
-        (hword.shiftRight 10)
-    · intro C s1L s1R hs1
-      apply WF.Rel.mono ((U.sumFixed_wf
-        #v[left[i - 16]!, s0L, left[i - 7]!, s1L]
-        #v[right[i - 16]!, s0R, right[i - 7]!, s1R]).frame (by
-        intro leftVal rightVal hC
-        have h0 := hs1 leftVal rightVal hC
-        have h1 := hs0 leftVal rightVal h0.1
-        have hvec := h1.1
-        intro j
-        fin_cases j
-        · simpa using hvec.getElem! (i := i - 16) (by grind)
-        · simpa using h1.2
-        · simpa using hvec.getElem! (i := i - 7) (by grind)
-        · simpa using h0.2))
-      intro _ _ _ _ h
-      exact h.2
-
-abbrev RoundState :=
-  MProd (U 32) (MProd (U 32) (MProd (U 32) (MProd (U 32)
-    (MProd (U 32) (MProd (U 32) (MProd (U 32) (U 32)))))))
-
-def roundStep (i : Nat) (w : Vector (U 32) 64)
-    (r : RoundState) : Circuit RoundState := do
-  let S1 ← U.fromWord $ r.2.2.2.2.1.bits.rotateRight 6 ^^^
-    r.2.2.2.2.1.bits.rotateRight 11 ^^^ r.2.2.2.2.1.bits.rotateRight 25
-  let ch ← U.ch r.2.2.2.2.1 r.2.2.2.2.2.1 r.2.2.2.2.2.2.1
-  let S0 ← U.fromWord $ r.1.bits.rotateRight 2 ^^^
-    r.1.bits.rotateRight 13 ^^^ r.1.bits.rotateRight 22
-  let maj ← U.maj r.1 r.2.1 r.2.2.1
-  let newE ← U.sumFixed #v[
-    r.2.2.2.1, r.2.2.2.2.2.2.2, S1, ch, k[i]!, w[i]!]
-  let newA ← U.sumFixed #v[
-    r.2.2.2.2.2.2.2, S1, ch, k[i]!, w[i]!, S0, maj]
-  pure ⟨newA, r.1, r.2.1, r.2.2.1, newE,
-    r.2.2.2.2.1, r.2.2.2.2.2.1, r.2.2.2.2.2.2.1⟩
-
-def roundStepBounded (i : Nat) (hi : i ∈ [0:64])
-    (w : Vector (U 32) 64) (r : RoundState) : Circuit RoundState := do
-  let S1 ← U.fromWord $ r.2.2.2.2.1.bits.rotateRight 6 ^^^
-    r.2.2.2.2.1.bits.rotateRight 11 ^^^ r.2.2.2.2.1.bits.rotateRight 25
-  let ch ← U.ch r.2.2.2.2.1 r.2.2.2.2.2.1 r.2.2.2.2.2.2.1
-  let S0 ← U.fromWord $ r.1.bits.rotateRight 2 ^^^
-    r.1.bits.rotateRight 13 ^^^ r.1.bits.rotateRight 22
-  let maj ← U.maj r.1 r.2.1 r.2.2.1
-  let newE ← U.sumFixed #v[
-    r.2.2.2.1, r.2.2.2.2.2.2.2, S1, ch, k[i], w[i]]
-  let newA ← U.sumFixed #v[
-    r.2.2.2.2.2.2.2, S1, ch, k[i], w[i], S0, maj]
-  pure ⟨newA, r.1, r.2.1, r.2.2.1, newE,
-    r.2.2.2.2.1, r.2.2.2.2.2.1, r.2.2.2.2.2.2.1⟩
-
-theorem roundStepBounded_eq (i : Nat) (hi : i ∈ [0:64])
-    (w : Vector (U 32) 64) (r : RoundState) :
-    roundStepBounded i hi w r = roundStep i w r := by
-  simp only [roundStepBounded, roundStep,
-    getElem!_pos k i (by grind), getElem!_pos w i (by grind)]
-
-abbrev BVState :=
-  BitVec 32 × BitVec 32 × BitVec 32 × BitVec 32 ×
-    BitVec 32 × BitVec 32 × BitVec 32 × BitVec 32
-
-def scheduleStepBV (i : Nat) (w : Vector (BitVec 32) 64) :
-    Vector (BitVec 32) 64 :=
-  let s0 := w[i - 15]!.rotateRight 7 ^^^ w[i - 15]!.rotateRight 18 ^^^
-    (w[i - 15]! >>> 3)
-  let s1 := w[i - 2]!.rotateRight 17 ^^^ w[i - 2]!.rotateRight 19 ^^^
-    (w[i - 2]! >>> 10)
-  w.set! i (w[i - 16]! + s0 + w[i - 7]! + s1)
-
-def roundStepBV (i : Nat) (w : Vector (BitVec 32) 64)
-    (r : BVState) : BVState :=
-  let S1 := r.2.2.2.2.1.rotateRight 6 ^^^ r.2.2.2.2.1.rotateRight 11 ^^^
-    r.2.2.2.2.1.rotateRight 25
-  let ch := chBV r.2.2.2.2.1 r.2.2.2.2.2.1 r.2.2.2.2.2.2.1
-  let S0 := r.1.rotateRight 2 ^^^ r.1.rotateRight 13 ^^^ r.1.rotateRight 22
-  let maj := majBV r.1 r.2.1 r.2.2.1
-  let newE := r.2.2.2.1 + r.2.2.2.2.2.2.2 + S1 + ch + k[i]! + w[i]!
-  let newA := r.2.2.2.2.2.2.2 + S1 + ch + k[i]! + w[i]! + S0 + maj
-  ⟨newA, r.1, r.2.1, r.2.2.1, newE,
-    r.2.2.2.2.1, r.2.2.2.2.2.1, r.2.2.2.2.2.2.1⟩
-
-def scheduleBV (m : Vector (BitVec 32) 16) : Vector (BitVec 32) 64 :=
-  let init := ([0:16].toList).foldl
-    (fun w i => w.set! i m[i]!) default
-  ([16:64].toList).foldl (fun w i => scheduleStepBV i w) init
-
-def permScheduleStepBV (i : Nat) (w : Vector (BitVec 32) 64) :=
-  w.set! i
-    (w[i - 16]! +
-      (w[i - 15]!.rotateRight 7 ^^^ w[i - 15]!.rotateRight 18 ^^^
-        (w[i - 15]! >>> 3)) + w[i - 7]! +
-      (w[i - 2]!.rotateRight 17 ^^^ w[i - 2]!.rotateRight 19 ^^^
-        (w[i - 2]! >>> 10)))
-
-abbrev MBVState :=
-  MProd (BitVec 32) (MProd (BitVec 32) (MProd (BitVec 32)
-    (MProd (BitVec 32) (MProd (BitVec 32) (MProd (BitVec 32)
-      (MProd (BitVec 32) (BitVec 32)))))))
-
-def MBVState.toBV (r : MBVState) : BVState :=
-  ⟨r.1, r.2.1, r.2.2.1, r.2.2.2.1, r.2.2.2.2.1,
-    r.2.2.2.2.2.1, r.2.2.2.2.2.2.1, r.2.2.2.2.2.2.2⟩
-
-def addStateBV (s : Vector (BitVec 32) 8) (r : BVState) :
-    Vector (BitVec 32) 8 :=
-  #v[s[0] + r.1, s[1] + r.2.1, s[2] + r.2.2.1,
-    s[3] + r.2.2.2.1, s[4] + r.2.2.2.2.1,
-    s[5] + r.2.2.2.2.2.1, s[6] + r.2.2.2.2.2.2.1,
-    s[7] + r.2.2.2.2.2.2.2]
-
-theorem addStateBV_mprod (s : Vector (BitVec 32) 8) (r : MBVState)
-    (v : BVState) (h : r.toBV = v) :
-    #v[s[0] + r.1, s[1] + r.2.1, s[2] + r.2.2.1,
-      s[3] + r.2.2.2.1, s[4] + r.2.2.2.2.1,
-      s[5] + r.2.2.2.2.2.1, s[6] + r.2.2.2.2.2.2.1,
-      s[7] + r.2.2.2.2.2.2.2] = addStateBV s v := by
-  subst v
-  rfl
-
-def permRoundStepBV (i : Nat) (hi : i ∈ [0:64])
-    (w : Vector (BitVec 32) 64) (r : MBVState) : MBVState :=
-  ⟨r.2.2.2.2.2.2.2 +
-      (r.2.2.2.2.1.rotateRight 6 ^^^ r.2.2.2.2.1.rotateRight 11 ^^^
-        r.2.2.2.2.1.rotateRight 25) +
-      chBV r.2.2.2.2.1 r.2.2.2.2.2.1 r.2.2.2.2.2.2.1 + k[i] + w[i] +
-      ((r.1.rotateRight 2 ^^^ r.1.rotateRight 13 ^^^ r.1.rotateRight 22) +
-        majBV r.1 r.2.1 r.2.2.1),
-    r.1, r.2.1, r.2.2.1,
-    r.2.2.2.1 + (r.2.2.2.2.2.2.2 +
-      (r.2.2.2.2.1.rotateRight 6 ^^^ r.2.2.2.2.1.rotateRight 11 ^^^
-        r.2.2.2.2.1.rotateRight 25) +
-      chBV r.2.2.2.2.1 r.2.2.2.2.2.1 r.2.2.2.2.2.2.1 + k[i] + w[i]),
-    r.2.2.2.2.1, r.2.2.2.2.2.1, r.2.2.2.2.2.2.1⟩
-
-def permRoundStepBVUnchecked (i : Nat) (w : Vector (BitVec 32) 64)
-    (r : MBVState) : MBVState :=
-  ⟨r.2.2.2.2.2.2.2 +
-      (r.2.2.2.2.1.rotateRight 6 ^^^ r.2.2.2.2.1.rotateRight 11 ^^^
-        r.2.2.2.2.1.rotateRight 25) +
-      chBV r.2.2.2.2.1 r.2.2.2.2.2.1 r.2.2.2.2.2.2.1 + k[i]! + w[i]! +
-      ((r.1.rotateRight 2 ^^^ r.1.rotateRight 13 ^^^ r.1.rotateRight 22) +
-        majBV r.1 r.2.1 r.2.2.1),
-    r.1, r.2.1, r.2.2.1,
-    r.2.2.2.1 + (r.2.2.2.2.2.2.2 +
-      (r.2.2.2.2.1.rotateRight 6 ^^^ r.2.2.2.2.1.rotateRight 11 ^^^
-        r.2.2.2.2.1.rotateRight 25) +
-      chBV r.2.2.2.2.1 r.2.2.2.2.2.1 r.2.2.2.2.2.2.1 + k[i]! + w[i]!),
-    r.2.2.2.2.1, r.2.2.2.2.2.1, r.2.2.2.2.2.2.1⟩
-
-theorem permScheduleStepBV_eq (i : Nat) (w : Vector (BitVec 32) 64) :
-    permScheduleStepBV i w = scheduleStepBV i w := by
-  unfold permScheduleStepBV scheduleStepBV
-  congr 1 <;> ac_rfl
-
-theorem permRoundStepBV_eq (i : Nat) (hi : i ∈ [0:64])
-    (w : Vector (BitVec 32) 64) (r : MBVState) :
-    (permRoundStepBV i hi w r).toBV = roundStepBV i w r.toBV := by
-  unfold permRoundStepBV MBVState.toBV roundStepBV
-  simp only [getElem!_pos k i (by grind), getElem!_pos w i (by grind)]
-  congr 1 <;> ac_rfl
-
-theorem permRoundStepBV_eq_unchecked (i : Nat) (hi : i ∈ [0:64])
-    (w : Vector (BitVec 32) 64) (r : MBVState) :
-    permRoundStepBV i hi w r = permRoundStepBVUnchecked i w r := by
-  unfold permRoundStepBV permRoundStepBVUnchecked
-  simp only [getElem!_pos k i (by grind), getElem!_pos w i (by grind)]
-
-theorem permRoundStepBVUnchecked_toBV (i : Nat)
-    (w : Vector (BitVec 32) 64) (r : MBVState) :
-    (permRoundStepBVUnchecked i w r).toBV = roundStepBV i w r.toBV := by
-  unfold permRoundStepBVUnchecked MBVState.toBV roundStepBV
-  congr 1 <;> ac_rfl
-
-theorem MBVState.toBV_fold_permRoundStepBV (xs : List Nat)
-    (w : Vector (BitVec 32) 64) (r : MBVState) :
-    (xs.foldl (fun r i => permRoundStepBVUnchecked i w r) r).toBV =
-      xs.foldl (fun r i => roundStepBV i w r) r.toBV := by
-  induction xs generalizing r with
-  | nil => rfl
-  | cons i xs ih =>
-      simp only [List.foldl_cons]
-      rw [ih, permRoundStepBVUnchecked_toBV]
-
-/-- Proof-facing copy of the executable permutation.  The public golden model is
-declared in `Correctness`; keeping this private-facing name avoids an import cycle. -/
-def permModel (m : Vector (BitVec 32) 16)
-    (s : Vector (BitVec 32) 8) : Vector (BitVec 32) 8 := Id.run $ do
-  let mut w := Vector.replicate 64 (0 : BitVec 32)
-  for h:i in [0:16] do
-    w := w.set! i m[i]
-  for i in [16:64] do
-    let s0 := (w[i-15]!.rotateRight 7) ^^^
-      (w[i-15]!.rotateRight 18) ^^^ (w[i-15]! >>> 3)
-    let s1 := (w[i-2]!.rotateRight 17) ^^^
-      (w[i-2]!.rotateRight 19) ^^^ (w[i-2]! >>> 10)
-    w := w.set! i (w[i-16]! + s0 + w[i-7]! + s1)
-  let mut a := s[0]
-  let mut b := s[1]
-  let mut c := s[2]
-  let mut d := s[3]
-  let mut e := s[4]
-  let mut f := s[5]
-  let mut g := s[6]
-  let mut h := s[7]
-
-  for h:i in [0:64] do
-    let S1 := (e.rotateRight 6) ^^^ (e.rotateRight 11) ^^^
-      (e.rotateRight 25)
-    let ch := (e &&& f) ^^^ ((~~~e) &&& g)
-    let temp1 := h + S1 + ch + k[i] + w[i]
-    let S0 := (a.rotateRight 2) ^^^ (a.rotateRight 13) ^^^
-      (a.rotateRight 22)
-    let maj := (a &&& b) ^^^ (a &&& c) ^^^ (b &&& c)
-    let temp2 := S0 + maj
-
-    h := g
-    g := f
-    f := e
-    e := d + temp1
-    d := c
-    c := b
-    b := a
-    a := temp1 + temp2
-
-  #v[s[0] + a, s[1] + b, s[2] + c, s[3] + d,
-    s[4] + e, s[5] + f, s[6] + g, s[7] + h]
-
-theorem List.id_forIn'_yield (xs : List α) (init : β) (f : β → α → β) :
-    (forIn' xs init fun x _ acc =>
-      (pure (ForInStep.yield (f acc x)) : Id (ForInStep β))) =
-    (pure (xs.foldl f init) : Id β) := by
-  induction xs generalizing init with
-  | nil => rfl
-  | cons x xs ih =>
-      rw [List.forIn'_cons]
-      change (forIn' xs (f init x) fun x _ acc =>
-        (pure (ForInStep.yield (f acc x)) : Id (ForInStep β))) = _
-      exact ih (f init x)
-
-theorem Range.id_forIn'_yield (xs : Std.Legacy.Range) (init : β)
-    (f : β → Nat → β) :
-    (forIn' xs init fun i _ acc =>
-      (pure (ForInStep.yield (f acc i)) : Id (ForInStep β))) =
-    (pure (xs.toList.foldl f init) : Id β) := by
-  rw [Std.Legacy.Range.forIn'_eq_forIn'_range']
-  exact List.id_forIn'_yield _ _ _
-
-theorem Range.id_forIn'_yield_congr (xs : Std.Legacy.Range) (init : β)
-    (f : (i : Nat) → i ∈ xs → β → β) (g : β → Nat → β)
-    (h : ∀ i hi acc, f i hi acc = g acc i) :
-    (forIn' xs init fun i hi acc =>
-      (pure (ForInStep.yield (f i hi acc)) : Id (ForInStep β))) =
-    (pure (xs.toList.foldl g init) : Id β) := by
-  rw [Std.Legacy.Range.forIn'_eq_forIn'_range']
-  calc
-    (forIn' xs.toList init fun i hi acc =>
-      (pure (ForInStep.yield (f i (xs.mem_of_mem_range' hi) acc)) :
-        Id (ForInStep β))) =
-        forIn' xs.toList init (fun i _ acc =>
-          pure (ForInStep.yield (g acc i))) := by
-            apply List.forIn'_congr rfl rfl
-            intro i hi acc
-            rw [h]
-    _ = pure (xs.toList.foldl g init) := List.id_forIn'_yield _ _ _
-
-theorem permModel_eq_steps (m : Vector (BitVec 32) 16)
-    (s : Vector (BitVec 32) 8) :
-    permModel m s =
-      let w := scheduleBV m
-      let r := ([0:64].toList).foldl (fun r i => roundStepBV i w r)
-        ⟨s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7]⟩
-      addStateBV s r := by
-  unfold permModel scheduleBV
-  simp only [Id.run, forIn_eq_forIn', pure_bind]
-  have hinit :
-      (forIn' [0:16] (Vector.replicate 64 (0 : BitVec 32)) fun i hi w =>
-        (pure (ForInStep.yield (w.set! i m[i])) : Id _)) =
-      pure (([0:16].toList).foldl (fun w i => w.set! i m[i]!) default) := by
-    apply Range.id_forIn'_yield_congr
-    intro i hi w
-    rw [getElem!_pos m i (by grind)]
-  conv_lhs =>
-    enter [1]
-    rw [hinit]
-  simp only [pure_bind]
-  let init := ([0:16].toList).foldl (fun w i => w.set! i m[i]!)
-    (default : Vector (BitVec 32) 64)
-  have hschedule :
-      (forIn' [16:64] init fun i _ w =>
-        (pure (ForInStep.yield (permScheduleStepBV i w)) : Id _)) =
-      pure (([16:64].toList).foldl (fun w i => scheduleStepBV i w) init) := by
-    apply Range.id_forIn'_yield_congr
-    intro i hi w
-    exact permScheduleStepBV_eq i w
-  have hscheduleRaw := hschedule
-  dsimp only [permScheduleStepBV] at hscheduleRaw
-  conv_lhs =>
-    enter [1]
-    rw [hscheduleRaw]
-  simp only [pure_bind]
-  let w := ([16:64].toList).foldl (fun w i => scheduleStepBV i w) init
-  have hround :
-      (forIn' [0:64] ⟨s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7]⟩
-        fun i hi r => (pure (ForInStep.yield (permRoundStepBV i hi w r)) : Id _)) =
-      pure (([0:64].toList).foldl
-        (fun r i => permRoundStepBVUnchecked i w r)
-        ⟨s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7]⟩) := by
-    apply Range.id_forIn'_yield_congr
-    intro i hi r
-    exact permRoundStepBV_eq_unchecked i hi w r
-  have hroundRaw := hround
-  dsimp only [permRoundStepBV, chBV, majBV] at hroundRaw
-  dsimp only [w] at hroundRaw
-  conv_lhs =>
-    enter [1]
-    exact hroundRaw
-  simp only [pure_bind]
-  have hfold := MBVState.toBV_fold_permRoundStepBV ([0:64].toList) w
-    ⟨s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7]⟩
-  dsimp only [w, init] at hfold ⊢
-  exact addStateBV_mprod s _ _ hfold
-
-def permModel' (input : Vector Bool 768) : Vector Bool 256 :=
-  let m := Vector.ofFn fun i => BitVec.ofNat 32 $
-    Nat.ofBits fun (j : Fin 32) => input[i.val * 32 + j.val]
-  let s := Vector.ofFn fun i => BitVec.ofNat 32 $
-    Nat.ofBits fun (j : Fin 32) => input[512 + i.val * 32 + j.val]
-  let out := permModel m s
-  Vector.ofFn fun i => out[i.val / 32].toNat.testBit (i % 32)
-
-@[spec]
-theorem U.sumFixed_sound {us : Vector (U n) m}
-    (hvalid : ∀ i : Fin m, us[i].Valid ρ) :
-    ⦃⌜True⌝⦄ Sound.interp ρ (U.sumFixed us)
-    ⦃ ⇓ out => ⌜out.Valid ρ ∧
-      out.eval ρ = (us.toArray.map fun u => u.eval ρ).sum⌝⦄ := by
-  rw [← U.sum_toArray_eq_sumFixed]
-  apply U.sum_sound
-  intro u hu
-  rw [Array.mem_iff_getElem] at hu
-  obtain ⟨i, hi, rfl⟩ := hu
-  exact hvalid ⟨i, by simpa using hi⟩
-
-def scheduleValueBV (i : Nat) (w : Vector (BitVec 32) 64) : BitVec 32 :=
-  let s0 := w[i - 15]!.rotateRight 7 ^^^ w[i - 15]!.rotateRight 18 ^^^
-    (w[i - 15]! >>> 3)
-  let s1 := w[i - 2]!.rotateRight 17 ^^^ w[i - 2]!.rotateRight 19 ^^^
-    (w[i - 2]! >>> 10)
-  w[i - 16]! + s0 + w[i - 7]! + s1
-
-@[simp]
-theorem Vector.getElem!_map [Inhabited α] [Inhabited β]
-    (xs : Vector α n) (f : α → β)
-    (i : Nat) (hi : i < n) : (xs.map f)[i]! = f (xs[i]!) := by
-  rw [getElem!_pos (xs.map f) i (by simpa), getElem!_pos xs i hi,
-    Vector.getElem_map f hi]
-
-@[spec]
-theorem scheduleStep_sound (i : Nat) (hi : i ∈ [16:64])
-    {w : Vector (U 32) 64} (hvalid : ∀ j : Fin 64, w[j].Valid ρ) :
-    ⦃⌜True⌝⦄ Sound.interp ρ (scheduleStep i w)
-    ⦃ ⇓ out => ⌜out.Valid ρ ∧ out.eval ρ =
-      scheduleValueBV i (w.map (fun u => u.eval ρ))⌝⦄ := by
-  unfold scheduleStep scheduleValueBV
-  mvcgen
-  case vc1 =>
-    rename_i s0 hs0 s1 hs1 out
-    intro houtValid houtEval
-    refine ⟨houtValid, ?_⟩
-    rw [houtEval]
-    have heval0 := U.eval_eq_word_eval s0 _ hs0.2 hs0.1
-    have heval1 := U.eval_eq_word_eval s1 _ hs1.2 hs1.1
-    simp only [Word.eval_xor, Word.eval_rotateRight,
-      Word.eval_shiftRight] at heval0 heval1
-    rw [Word.eval_rotateRight _ _ 7 (by decide),
-      Word.eval_rotateRight _ _ 18 (by decide)] at heval0
-    rw [Word.eval_rotateRight _ _ 17 (by decide),
-      Word.eval_rotateRight _ _ 19 (by decide)] at heval1
-    have heval15 := U.eval_eq_word_eval w[i - 15]! _
-      (U.valid_getElem! hvalid (by grind)) rfl
-    have heval2 := U.eval_eq_word_eval w[i - 2]! _
-      (U.valid_getElem! hvalid (by grind)) rfl
-    rw [← heval15] at heval0
-    rw [← heval2] at heval1
-    simp [heval0, heval1,
-      Vector.getElem!_map w (fun u => u.eval ρ) (i - 16) (by grind),
-      Vector.getElem!_map w (fun u => u.eval ρ) (i - 15) (by grind),
-      Vector.getElem!_map w (fun u => u.eval ρ) (i - 7) (by grind),
-      Vector.getElem!_map w (fun u => u.eval ρ) (i - 2) (by grind)]
-    ac_rfl
-  case vc2 =>
-    intro _ h2 j
-    fin_cases j
-    · exact U.valid_getElem! hvalid (by grind)
-    · simp_all
-    · exact U.valid_getElem! hvalid (by grind)
-    · exact h2
-
-def RoundEvalRel (r : RoundState) (v : BVState) (ρ : WF.Valuation) : Prop :=
-  r.1.Valid ρ ∧ r.1.eval ρ = v.1 ∧
-  r.2.1.Valid ρ ∧ r.2.1.eval ρ = v.2.1 ∧
-  r.2.2.1.Valid ρ ∧ r.2.2.1.eval ρ = v.2.2.1 ∧
-  r.2.2.2.1.Valid ρ ∧ r.2.2.2.1.eval ρ = v.2.2.2.1 ∧
-  r.2.2.2.2.1.Valid ρ ∧ r.2.2.2.2.1.eval ρ = v.2.2.2.2.1 ∧
-  r.2.2.2.2.2.1.Valid ρ ∧ r.2.2.2.2.2.1.eval ρ = v.2.2.2.2.2.1 ∧
-  r.2.2.2.2.2.2.1.Valid ρ ∧ r.2.2.2.2.2.2.1.eval ρ = v.2.2.2.2.2.2.1 ∧
-  r.2.2.2.2.2.2.2.Valid ρ ∧ r.2.2.2.2.2.2.2.eval ρ = v.2.2.2.2.2.2.2
-
-theorem RoundEvalRel.step {r : RoundState} {v : BVState}
-    (hr : RoundEvalRel r v ρ) (i : Nat)
-    {wi : U 32} {wv : Vector (BitVec 32) 64}
-    (hwi : wi.eval ρ = wv[i]!)
-    {S1 ch S0 maj newE newA : U 32}
-    (hS1 : S1.bits = r.2.2.2.2.1.bits.rotateRight 6 ^^^
-      r.2.2.2.2.1.bits.rotateRight 11 ^^^
-      r.2.2.2.2.1.bits.rotateRight 25 ∧ S1.Valid ρ)
-    (hch : ch.Valid ρ ∧ ch.eval ρ =
-      chBV (r.2.2.2.2.1.eval ρ) (r.2.2.2.2.2.1.eval ρ)
-        (r.2.2.2.2.2.2.1.eval ρ))
-    (hS0 : S0.bits = r.1.bits.rotateRight 2 ^^^
-      r.1.bits.rotateRight 13 ^^^ r.1.bits.rotateRight 22 ∧ S0.Valid ρ)
-    (hmaj : maj.Valid ρ ∧ maj.eval ρ =
-      majBV (r.1.eval ρ) (r.2.1.eval ρ) (r.2.2.1.eval ρ))
-    (hnewE : newE.Valid ρ ∧ newE.eval ρ =
-      (#[r.2.2.2.1, r.2.2.2.2.2.2.2, S1, ch, (k[i]! : U 32), wi].map
-        (fun u => u.eval ρ)).sum)
-    (hnewA : newA.Valid ρ ∧ newA.eval ρ =
-      (#[r.2.2.2.2.2.2.2, S1, ch, (k[i]! : U 32), wi, S0, maj].map
-        (fun u => u.eval ρ)).sum) :
-    RoundEvalRel ⟨newA, r.1, r.2.1, r.2.2.1, newE,
-      r.2.2.2.2.1, r.2.2.2.2.2.1, r.2.2.2.2.2.2.1⟩
-      (roundStepBV i wv v) ρ := by
-  have hS1eval := U.eval_eq_word_eval S1 _ hS1.2 hS1.1
-  have hS0eval := U.eval_eq_word_eval S0 _ hS0.2 hS0.1
-  simp only [Word.eval_xor,
-    Word.eval_rotateRight (n := 32) _ _ 6 (by decide),
-    Word.eval_rotateRight (n := 32) _ _ 11 (by decide),
-    Word.eval_rotateRight (n := 32) _ _ 25 (by decide)] at hS1eval
-  simp only [Word.eval_xor,
-    Word.eval_rotateRight (n := 32) _ _ 2 (by decide),
-    Word.eval_rotateRight (n := 32) _ _ 13 (by decide),
-    Word.eval_rotateRight (n := 32) _ _ 22 (by decide)] at hS0eval
-  rcases hr with ⟨haV, haE, hbV, hbE, hcV, hcE, hdV, hdE,
-    heV, heE, hfV, hfE, hgV, hgE, hhV, hhE⟩
-  have heWord := U.eval_eq_word_eval r.2.2.2.2.1 _ heV rfl
-  have haWord := U.eval_eq_word_eval r.1 _ haV rfl
-  rw [← heWord, heE] at hS1eval
-  rw [← haWord, haE] at hS0eval
-  unfold RoundEvalRel
-  simp only [roundStepBV, Prod.fst, Prod.snd]
-  refine ⟨hnewA.1, ?_, haV, haE, hbV, hbE, hcV, hcE,
-    hnewE.1, ?_, heV, heE, hfV, hfE, hgV, hgE⟩
-  · rw [hnewA.2, ← Array.sum_toList]
-    simp only [Array.toList_map, List.map_cons, List.map_nil,
-      List.sum_cons, List.sum_nil, hS1eval, hS0eval, hch.2, hmaj.2,
-      U.eval_bitVec, hwi, haE, hbE, hcE,
-      heE, hfE, hgE, hhE]
-    ac_rfl
-
-  · rw [hnewE.2, ← Array.sum_toList]
-    simp only [Array.toList_map, List.map_cons, List.map_nil,
-      List.sum_cons, List.sum_nil, hS1eval, hch.2, U.eval_bitVec, hwi,
-      hdE, heE, hfE, hgE, hhE]
-    ac_rfl
-
-@[spec]
-theorem roundStep_sound (i : Nat) (hi : i ∈ [0:64])
-    {w : Vector (U 32) 64} {r : RoundState}
-    (hw : ∀ j : Fin 64, w[j].Valid ρ)
-    (hr : RoundEvalRel r v ρ) :
-    ⦃⌜True⌝⦄ Sound.interp ρ (roundStep i w r)
-    ⦃ ⇓ out => ⌜RoundEvalRel out
-      (roundStepBV i (w.map (fun u => u.eval ρ)) v) ρ⌝⦄ := by
-  unfold roundStep roundStepBV
-  mvcgen
-  case vc1 | vc2 | vc3 | vc4 | vc5 | vc6 =>
-    simp_all only [RoundEvalRel]
-  case vc7 | vc8 =>
-    have hwi : w[i]!.Valid ρ := U.valid_getElem! hw (by grind)
-    have hki : ((k[i]!) : U 32).Valid ρ := U.valid_bitVec _
-    intro j
-    fin_cases j <;> simp_all [RoundEvalRel]
-  case vc9 =>
-    rename_i S1 hS1 ch hch S0 hS0 maj hmaj newE hnewE newA hnewA
-    apply RoundEvalRel.step hr i
-      (Vector.getElem!_map w (fun u => u.eval ρ) i (by grind)).symm
-      hS1 hch hS0 hmaj hnewE hnewA
-
-def VectorEvalRel (us : Vector (U n) m) (vs : Vector (BitVec n) m)
-    (ρ : WF.Valuation) : Prop :=
-  ∀ i : Fin m, us[i].Valid ρ ∧ us[i].eval ρ = vs[i]
-
-theorem RoundEvalRel.stepIndexed {r : RoundState} {v : BVState}
-    {w : Vector (U 32) 64} {wv : Vector (BitVec 32) 64}
-    (hr : RoundEvalRel r v ρ) (hw : VectorEvalRel w wv ρ)
-    (i : Nat) (hi : i < 64)
-    {S1 ch S0 maj newE newA : U 32}
-    (hS1 : S1.bits = r.2.2.2.2.1.bits.rotateRight 6 ^^^
-      r.2.2.2.2.1.bits.rotateRight 11 ^^^
-      r.2.2.2.2.1.bits.rotateRight 25 ∧ S1.Valid ρ)
-    (hch : ch.Valid ρ ∧ ch.eval ρ =
-      chBV (r.2.2.2.2.1.eval ρ) (r.2.2.2.2.2.1.eval ρ)
-        (r.2.2.2.2.2.2.1.eval ρ))
-    (hS0 : S0.bits = r.1.bits.rotateRight 2 ^^^
-      r.1.bits.rotateRight 13 ^^^ r.1.bits.rotateRight 22 ∧ S0.Valid ρ)
-    (hmaj : maj.Valid ρ ∧ maj.eval ρ =
-      majBV (r.1.eval ρ) (r.2.1.eval ρ) (r.2.2.1.eval ρ))
-    (hnewE : newE.Valid ρ ∧ newE.eval ρ =
-      (#[r.2.2.2.1, r.2.2.2.2.2.2.2, S1, ch, (k[i] : U 32), w[i]].map
-        (fun u => u.eval ρ)).sum)
-    (hnewA : newA.Valid ρ ∧ newA.eval ρ =
-      (#[r.2.2.2.2.2.2.2, S1, ch, (k[i] : U 32), w[i], S0, maj].map
-        (fun u => u.eval ρ)).sum) :
-    RoundEvalRel ⟨newA, r.1, r.2.1, r.2.2.1, newE,
-      r.2.2.2.2.1, r.2.2.2.2.2.1, r.2.2.2.2.2.2.1⟩
-      (roundStepBV i wv v) ρ := by
-  apply RoundEvalRel.step hr i
-  · simpa only [getElem!_pos w i hi, getElem!_pos wv i hi,
-      Fin.getElem_fin] using (hw ⟨i, hi⟩).2
-  · exact hS1
-  · exact hch
-  · exact hS0
-  · exact hmaj
-  · simpa only [getElem!_pos k i hi, getElem!_pos w i hi,
-      Fin.getElem_fin] using hnewE
-  · simpa only [getElem!_pos k i hi, getElem!_pos w i hi,
-      Fin.getElem_fin] using hnewA
-
-theorem RoundEvalRel.ofVector {us : Vector (U 32) 8}
-    {vs : Vector (BitVec 32) 8} (h : VectorEvalRel us vs ρ) :
-    RoundEvalRel ⟨us[0], us[1], us[2], us[3], us[4], us[5], us[6], us[7]⟩
-      ⟨vs[0], vs[1], vs[2], vs[3], vs[4], vs[5], vs[6], vs[7]⟩ ρ := by
-  exact ⟨(h 0).1, (h 0).2, (h 1).1, (h 1).2,
-    (h 2).1, (h 2).2, (h 3).1, (h 3).2,
-    (h 4).1, (h 4).2, (h 5).1, (h 5).2,
-    (h 6).1, (h 6).2, (h 7).1, (h 7).2⟩
-
-theorem VectorEvalRel.allValid8 {us : Vector (U n) 8}
-    {vs : Vector (BitVec n) 8} (h : VectorEvalRel us vs ρ) :
-    us[0].Valid ρ ∧ us[1].Valid ρ ∧ us[2].Valid ρ ∧ us[3].Valid ρ ∧
-      us[4].Valid ρ ∧ us[5].Valid ρ ∧ us[6].Valid ρ ∧ us[7].Valid ρ :=
-  ⟨(h 0).1, (h 1).1, (h 2).1, (h 3).1,
-    (h 4).1, (h 5).1, (h 6).1, (h 7).1⟩
-
-theorem VectorEvalRel.set! (h : VectorEvalRel us vs ρ)
-    (hx : x.Valid ρ ∧ x.eval ρ = y) (i : Nat) :
-    VectorEvalRel (us.set! i x) (vs.set! i y) ρ := by
-  intro j
-  rw [show us.set! i x = us.setIfInBounds i x by rfl,
-    show vs.set! i y = vs.setIfInBounds i y by rfl]
-  change (us.setIfInBounds i x)[j.val].Valid ρ ∧
-    (us.setIfInBounds i x)[j.val].eval ρ =
-      (vs.setIfInBounds i y)[j.val]
-  rw [Vector.getElem_setIfInBounds (xs := us) (x := x) j.isLt,
-    Vector.getElem_setIfInBounds (xs := vs) (x := y) j.isLt]
-  split
-  · exact hx
-  · exact h j
-
-theorem VectorEvalRel.getElem! {us : Vector (U n) len}
-    {vs : Vector (BitVec n) len} (h : VectorEvalRel us vs ρ)
-    (i : Nat) (hi : i < len) :
-    us[i]!.Valid ρ ∧ us[i]!.eval ρ = vs[i]! := by
-  rw [getElem!_pos us i hi, getElem!_pos vs i hi]
-  exact h ⟨i, hi⟩
-
-def messageEvalBV (m : Vector (Word 32) 16) (ρ : WF.Valuation) :=
-  m.map (Word.eval ρ.bool)
-
-def scheduleEvalBV (m : Vector (Word 32) 16) (ρ : WF.Valuation) :=
-  scheduleBV (messageEvalBV m ρ)
-
-theorem List.foldl_congr_of_mem {xs : List α} {f g : β → α → β}
-    (h : ∀ x ∈ xs, ∀ acc, f acc x = g acc x) (init : β) :
-    xs.foldl f init = xs.foldl g init := by
-  induction xs generalizing init with
-  | nil => rfl
-  | cons x xs ih =>
-      simp only [List.foldl_cons]
-      rw [h x (by simp) init]
-      apply ih
-      intro y hy
-      exact h y (by simp [hy])
-
-theorem scheduleBV_eq_raw (m : Vector (Word 32) 16) (ρ : WF.Valuation) :
-    scheduleBV (m.map (Word.eval ρ.bool)) =
-      (([16:64].toList).foldl (fun w i => scheduleStepBV i w)
-        (([0:16].toList).foldl
-          (fun w i => w.set! i ((m[i]!).eval ρ.bool)) default)) := by
-  unfold scheduleBV
-  apply congrArg (([16:64].toList).foldl fun w i => scheduleStepBV i w)
-  apply List.foldl_congr_of_mem
-  intro i hi w
-  have hi' : i < 16 := by grind
-  rw [Vector.getElem!_map m (Word.eval ρ.bool) i hi']
-
-def initialRoundEvalBV (su : Vector (U 32) 8) (ρ : WF.Valuation) : BVState :=
-  ⟨(su[0]).eval ρ, (su[1]).eval ρ, (su[2]).eval ρ,
-    (su[3]).eval ρ, (su[4]).eval ρ, (su[5]).eval ρ,
-    (su[6]).eval ρ, (su[7]).eval ρ⟩
-
-theorem RoundEvalRel.ofVectorEval {us : Vector (U 32) 8}
-    {vs : Vector (BitVec 32) 8} (h : VectorEvalRel us vs ρ) :
-    RoundEvalRel ⟨us[0], us[1], us[2], us[3], us[4], us[5], us[6], us[7]⟩
-      (initialRoundEvalBV us ρ) ρ := by
-  exact ⟨(h 0).1, rfl, (h 1).1, rfl, (h 2).1, rfl, (h 3).1, rfl,
-    (h 4).1, rfl, (h 5).1, rfl, (h 6).1, rfl, (h 7).1, rfl⟩
-
-def roundsEvalBV (xs : List Nat) (m : Vector (Word 32) 16)
-    (su : Vector (U 32) 8) (ρ : WF.Valuation) : BVState :=
-  xs.foldl (fun r i => roundStepBV i
-      (scheduleBV (m.map (Word.eval ρ.bool))) r)
-    (initialRoundEvalBV su ρ)
-
-@[simp]
-theorem roundsEvalBV_nil : roundsEvalBV [] m su ρ = initialRoundEvalBV su ρ :=
-  rfl
-
-theorem roundsEvalBV_append_singleton :
-    roundsEvalBV (xs ++ [i]) m su ρ =
-      roundStepBV i
-        (([16:64].toList).foldl (fun w i => scheduleStepBV i w)
-          (([0:16].toList).foldl
-            (fun w i => w.set! i ((m[i]!).eval ρ.bool)) default))
-        (roundsEvalBV xs m su ρ) := by
-  simp only [roundsEvalBV, List.foldl_append, List.foldl_cons, List.foldl_nil]
-  rw [scheduleBV_eq_raw]
-
-theorem scheduleEvalBV_eq :
-    scheduleEvalBV m ρ = scheduleBV (m.map (Word.eval ρ.bool)) := rfl
-
-attribute [irreducible] roundsEvalBV
-
-@[spec]
-theorem Vector.mapM_fromWord_sound {s : Vector (Word width) n} :
-    ⦃⌜True⌝⦄ Sound.interp ρ (s.mapM U.fromWord)
-    ⦃ ⇓ us => ⌜VectorEvalRel us (s.map (Word.eval ρ.bool)) ρ⌝⦄ := by
-  induction n with
-  | zero =>
-      rw [show s = #v[] from Vector.eq_empty]
-      simp [VectorEvalRel]
-      mvcgen
-  | succ n ih =>
-      obtain ⟨init, last, rfl⟩ := Vector.exists_push (xs := s)
-      rw [Sound.interp_mapM, Vector.mapM_push]
-      apply Triple.bind
-        (Q := fun us => ⌜VectorEvalRel us (init.map (Word.eval ρ.bool)) ρ⌝)
-      case hx => simpa [Sound.interp_mapM] using ih (s := init)
-      case hf =>
-        intro us
-        apply Triple.bind
-          (Q := fun u => ⌜VectorEvalRel us (init.map (Word.eval ρ.bool)) ρ ∧
-            u.Valid ρ ∧ u.eval ρ = last.eval ρ.bool⌝)
-        case hx =>
-          mvcgen
-          case vc1 =>
-            intro hbits hvalid
-            exact ⟨by assumption, hvalid,
-              U.eval_eq_word_eval _ _ hvalid hbits⟩
-        case hf =>
-          intro u
-          apply Triple.pure
-          simp only [SPred.entails_nil]
-          intro h
-          intro i
-          by_cases hi : i.val < n
-          · simpa [Vector.getElem_push, hi, VectorEvalRel] using h.1 ⟨i, hi⟩
-          · have hieq : i = Fin.last n := by ext; simp; omega
-            subst i
-            simpa using h.2
-
-theorem permCircuit_sound {m : Vector (Word 32) 16}
-    {s : Vector (Word 32) 8} :
-    ⦃⌜True⌝⦄ Sound.interp ρ (permCircuit m s)
-    ⦃ ⇓ out => ⌜VectorEvalRel out
-      (permModel (m.map (Word.eval ρ.bool)) (s.map (Word.eval ρ.bool))) ρ⌝⦄ := by
-  unfold permCircuit
-  rw [Sound.interp_bind]
-  apply Triple.bind
-    (Q := fun us => ⌜VectorEvalRel us (s.map (Word.eval ρ.bool)) ρ⌝)
-  case hx => exact Vector.mapM_fromWord_sound
-  case hf =>
-    intro su
-    mvcgen invariants
-    · ⇓⟨cur, w⟩ => ⌜VectorEvalRel w
-        (cur.prefix.foldl
-          (fun w i => w.set! i ((m[i]!).eval ρ.bool)) default) ρ⌝
-    case vc1 =>
-      rename_i pref cur suff hrange ws hws out hout
-      have hcur : cur < 16 := by grind
-      have houtEval : out.eval ρ = (m[cur]!).eval ρ.bool := by
-        rw [U.eval_eq_word_eval out _ hout.2 hout.1]
-        simp only [getElem!_pos m cur hcur]
-      simpa [List.foldl_append] using hws.set! ⟨hout.2, houtEval⟩ cur
-    case vc2 =>
-      intro j
-      refine ⟨U.valid_vector_default j, ?_⟩
-      rw [U.vector_default_get]
-      rw [List.foldl_nil]
-      have hz : (default : Vector (BitVec 32) 64)[j] = 0 := by
-        change (Vector.replicate 64 (0 : BitVec 32))[j] = 0
-        simp
-      rw [hz]
-      exact U.eval_default
-    case vc3 =>
-      simp only [forIn_eq_forIn']
-      mvcgen -trivial invariants
-      · ⇓⟨cur, w⟩ => ⌜VectorEvalRel w
-          (cur.prefix.foldl (fun w i => scheduleStepBV i w)
-            (([0:16].toList).foldl
-              (fun w i => w.set! i ((m[i]!).eval ρ.bool)) default)) ρ⌝
-      · ⇓⟨cur, ⟨a, b, c, d, e, f, g, h⟩⟩ =>
-          ⌜RoundEvalRel ⟨a, b, c, d, e, f, g, h⟩
-          (roundsEvalBV cur.prefix m su ρ) ρ⌝
-      case vc1.hvalid =>
-        apply U.allValid_four
-        · apply U.valid_getElem!
-          · intro j; exact (show VectorEvalRel _ _ ρ from by assumption) j |>.1
-          · grind
-        · grind
-        · apply U.valid_getElem!
-          · intro j; exact (show VectorEvalRel _ _ ρ from by assumption) j |>.1
-          · grind
-        · grind
-      case vc2 =>
-        rename_i pref cur suff hrange w hw s0 hs0 s1 hs1 out hout
-        simp only [List.foldl_append, List.foldl_cons, List.foldl_nil]
-        apply hw.set!
-        refine ⟨hout.1, ?_⟩
-        rw [hout.2, ← Array.sum_toList]
-        have heval0 := U.eval_eq_word_eval s0 _ hs0.2 hs0.1
-        have heval1 := U.eval_eq_word_eval s1 _ hs1.2 hs1.1
-        simp only [Word.eval_xor, Word.eval_shiftRight] at heval0 heval1
-        rw [Word.eval_rotateRight _ _ 7 (by decide),
-          Word.eval_rotateRight _ _ 18 (by decide)] at heval0
-        rw [Word.eval_rotateRight _ _ 17 (by decide),
-          Word.eval_rotateRight _ _ 19 (by decide)] at heval1
-        have heval15 := U.eval_eq_word_eval w[cur - 15]! _
-          (U.valid_getElem! (fun j => (hw j).1) (by grind)) rfl
-        have heval2 := U.eval_eq_word_eval w[cur - 2]! _
-          (U.valid_getElem! (fun j => (hw j).1) (by grind)) rfl
-        have hw16 := hw.getElem! (cur - 16) (by grind)
-        have hw15 := hw.getElem! (cur - 15) (by grind)
-        have hw7 := hw.getElem! (cur - 7) (by grind)
-        have hw2 := hw.getElem! (cur - 2) (by grind)
-        rw [← heval15] at heval0
-        rw [← heval2] at heval1
-        simp only [Array.toList_map, List.map_cons, List.map_nil,
-          List.sum_cons, List.sum_nil, List.foldl_append, List.foldl_cons,
-          scheduleStepBV,
-          heval0, heval1, hw16.2, hw15.2, hw7.2, hw2.2,
-          Vector.getElem!_map w (fun u => u.eval ρ) (cur - 16) (by grind),
-          Vector.getElem!_map w (fun u => u.eval ρ) (cur - 15) (by grind),
-          Vector.getElem!_map w (fun u => u.eval ρ) (cur - 7) (by grind),
-          Vector.getElem!_map w (fun u => u.eval ρ) (cur - 2) (by grind)]
-        ac_rfl
-      case vc3.h.pre => simpa using (show VectorEvalRel _ _ ρ from by assumption)
-      case vc4.hu | vc5.hv | vc6.hw | vc7.hu | vc8.hv | vc9.hw =>
-        simp_all only [RoundEvalRel]
-      case vc10.hvalid =>
-        intro u hu
-        simp only [Array.mem_def, List.mem_cons, List.mem_nil_iff, or_false] at hu
-        rcases hu with rfl | rfl | rfl | rfl | rfl | rfl
-        · simp_all [RoundEvalRel]
-        · simp_all [RoundEvalRel]
-        · grind
-        · grind
-        · exact U.valid_bitVec _
-        · apply U.valid_getElem (i := _)
-          · intro j
-            exact ((show VectorEvalRel _ _ ρ from by assumption) j).1
-      case vc11.hvalid =>
-        intro u hu
-        simp only [Array.mem_def, List.mem_cons, List.mem_nil_iff, or_false] at hu
-        rcases hu with rfl | rfl | rfl | rfl | rfl | rfl | rfl
-        · simp_all [RoundEvalRel]
-        · grind
-        · grind
-        · exact U.valid_bitVec _
-        · apply U.valid_getElem (i := _)
-          · intro j
-            exact ((show VectorEvalRel _ _ ρ from by assumption) j).1
-        · grind
-        · grind
-      case vc12 =>
-        rename_i hsu wInit hInit w hw pref cur suff hrange r hr
-          S1 hS1 ch hch S0 hS0 maj hmaj newE hnewE newA hnewA
-        rw [roundsEvalBV_append_singleton]
-        have hcur : cur < 64 := by grind
-        have hwi : w[cur]!.eval ρ =
-            (([16:64].toList).foldl (fun w i => scheduleStepBV i w)
-              (([0:16].toList).foldl
-                (fun w i => w.set! i ((m[i]!).eval ρ.bool)) default))[cur]! := by
-          rw [getElem!_pos w cur hcur,
-            getElem!_pos _ cur hcur]
-          exact (hw ⟨cur, hcur⟩).2
-        have hnewE' : newE.Valid ρ ∧ newE.eval ρ =
-            (#[r.2.2.2.1, r.2.2.2.2.2.2.2, S1, ch,
-              (k[cur]! : U 32), w[cur]!].map (fun u => u.eval ρ)).sum := by
-          rw [getElem!_pos k cur hcur, getElem!_pos w cur hcur]
-          exact hnewE
-        have hnewA' : newA.Valid ρ ∧ newA.eval ρ =
-            (#[r.2.2.2.2.2.2.2, S1, ch, (k[cur]! : U 32), w[cur]!,
-              S0, maj].map (fun u => u.eval ρ)).sum := by
-          rw [getElem!_pos k cur hcur, getElem!_pos w cur hcur]
-          exact hnewA
-        exact RoundEvalRel.step hr cur hwi hS1 hch hS0 hmaj hnewE' hnewA'
-      case vc13.h.pre =>
-        have hsu := show VectorEvalRel su _ ρ from by assumption
-        rw [roundsEvalBV_nil]
-        exact RoundEvalRel.ofVectorEval hsu
-      case vc14.hvalid =>
-        exact U.allValid_pair
-          ((show VectorEvalRel su _ ρ from by assumption) 0).1
-          (show RoundEvalRel _ _ ρ from by assumption).1
-      case vc15.hvalid =>
-        exact U.allValid_pair
-          ((show VectorEvalRel su _ ρ from by assumption) 1).1
-          (show RoundEvalRel _ _ ρ from by assumption).2.2.1
-      case vc16.hvalid =>
-        exact U.allValid_pair
-          ((show VectorEvalRel su _ ρ from by assumption) 2).1
-          (show RoundEvalRel _ _ ρ from by assumption).2.2.2.2.1
-      case vc17.hvalid =>
-        exact U.allValid_pair
-          ((show VectorEvalRel su _ ρ from by assumption) 3).1
-          (show RoundEvalRel _ _ ρ from by assumption).2.2.2.2.2.2.1
-      case vc18.hvalid =>
-        exact U.allValid_pair
-          ((show VectorEvalRel su _ ρ from by assumption) 4).1
-          (show RoundEvalRel _ _ ρ from by assumption).2.2.2.2.2.2.2.2.1
-      case vc19.hvalid =>
-        exact U.allValid_pair
-          ((show VectorEvalRel su _ ρ from by assumption) 5).1
-          (show RoundEvalRel _ _ ρ from by assumption).2.2.2.2.2.2.2.2.2.2.1
-      case vc20.hvalid =>
-        exact U.allValid_pair
-          ((show VectorEvalRel su _ ρ from by assumption) 6).1
-          (show RoundEvalRel _ _ ρ from by assumption).2.2.2.2.2.2.2.2.2.2.2.2.1
-      case vc21.hvalid =>
-        exact U.allValid_pair
-          ((show VectorEvalRel su _ ρ from by assumption) 7).1
-          (show RoundEvalRel _ _ ρ from by assumption).2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
-      case vc22.success =>
-        intro j
-        have hsu := show VectorEvalRel su (s.map (Word.eval ρ.bool)) ρ from
-          by assumption
-        have hr := show RoundEvalRel _ (roundsEvalBV [0:64].toList m su ρ) ρ from
-          by assumption
-        have hinit : initialRoundEvalBV su ρ =
-            ⟨(s.map (Word.eval ρ.bool))[0], (s.map (Word.eval ρ.bool))[1],
-              (s.map (Word.eval ρ.bool))[2], (s.map (Word.eval ρ.bool))[3],
-              (s.map (Word.eval ρ.bool))[4], (s.map (Word.eval ρ.bool))[5],
-              (s.map (Word.eval ρ.bool))[6], (s.map (Word.eval ρ.bool))[7]⟩ := by
-          unfold initialRoundEvalBV
-          apply Prod.ext
-          · exact (hsu 0).2
-          · apply Prod.ext
-            · exact (hsu 1).2
-            · apply Prod.ext
-              · exact (hsu 2).2
-              · apply Prod.ext
-                · exact (hsu 3).2
-                · apply Prod.ext
-                  · exact (hsu 4).2
-                  · apply Prod.ext
-                    · exact (hsu 5).2
-                    · apply Prod.ext <;> first | exact (hsu 6).2 | exact (hsu 7).2
-        unfold roundsEvalBV at hr
-        rw [hinit] at hr
-        rw [permModel_eq_steps]
-        fin_cases j
-        · simpa [addStateBV] using
-            U.sumPair_eval (by assumption) (hsu 0).2 hr.2.1
-        · simpa [addStateBV] using
-            U.sumPair_eval (by assumption) (hsu 1).2 hr.2.2.2.1
-        · simpa [addStateBV] using
-            U.sumPair_eval (by assumption) (hsu 2).2 hr.2.2.2.2.2.1
-        · simpa [addStateBV] using
-            U.sumPair_eval (by assumption) (hsu 3).2 hr.2.2.2.2.2.2.2.1
-        · simpa [addStateBV] using
-            U.sumPair_eval (by assumption) (hsu 4).2 hr.2.2.2.2.2.2.2.2.2.1
-        · simpa [addStateBV] using
-            U.sumPair_eval (by assumption) (hsu 5).2 hr.2.2.2.2.2.2.2.2.2.2.2.1
-        · simpa [addStateBV] using
-            U.sumPair_eval (by assumption) (hsu 6).2
-              hr.2.2.2.2.2.2.2.2.2.2.2.2.2.1
-        · simpa [addStateBV] using
-            U.sumPair_eval (by assumption) (hsu 7).2
-              hr.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2
-
-@[spec]
-theorem Vector.mapM_fromWord_complete {s : Vector (Word width) n} :
-    ⦃⌜True⌝ ⦄
-      Complete.interp ρ (s.mapM U.fromWord)
-    ⦃ ⇓ us => ⌜∀ i : Fin n,
-      us[i].bits = s[i] ∧ us[i].Valid ρ⌝ ⦄ := by
-  induction n with
-  | zero =>
-      rw [show s = #v[] from Vector.eq_empty]
-      simp
-      mvcgen
-  | succ n ih =>
-      obtain ⟨init, last, rfl⟩ := Vector.exists_push (xs := s)
-      rw [Complete.interp_mapM, Vector.mapM_push]
-      apply Triple.bind
-        (Q := fun us => ⌜∀ i : Fin n,
-          us[i].bits = init[i] ∧ us[i].Valid ρ⌝)
-      case hx => simpa [Complete.interp_mapM] using ih (s := init)
-      case hf =>
-        intro us
-        apply Triple.bind
-          (Q := fun u => ⌜(∀ i : Fin n,
-            us[i].bits = init[i] ∧ us[i].Valid ρ) ∧
-            u.bits = last ∧ u.Valid ρ⌝)
-        case hx => exact U.fromWord_complete_frame _
-        case hf =>
-          intro u
-          apply Triple.pure
-          simp only [SPred.entails_nil]
-          intro hpair i
-          rcases hpair with ⟨hinit, hlast⟩
-          by_cases hi : i.val < n
-          · simpa [Vector.getElem_push, hi] using hinit ⟨i, hi⟩
-          · have hieq : i = Fin.last n := by
-              apply Fin.ext
-              simp
-              omega
-            subst i
-            simpa using hlast
-
-theorem permCircuit_complete {m : Vector (Word 32) 16}
-    {s : Vector (Word 32) 8} :
-    ⦃⌜True⌝ ⦄ Complete.interp ρ (permCircuit m s)
-    ⦃ ⇓ out => ⌜∀ i : Fin 8, out[i].Valid ρ⌝ ⦄ := by
-  unfold permCircuit
-  rw [Complete.interp_bind]
-  apply Triple.bind (Q := fun us => ⌜∀ i : Fin 8,
-    us[i].bits = s[i] ∧ us[i].Valid ρ⌝)
-  case hx => exact Vector.mapM_fromWord_complete
-  case hf =>
-    intro su
-    mvcgen invariants
-    · ⇓⟨_, w⟩ => ⌜∀ i : Fin 64, w[i].Valid ρ⌝
-    case vc1 pref cur suff hsplit w hvalid out hout =>
-      intro i
-      rw [show w.set! cur out = w.setIfInBounds cur out by rfl]
-      simp only [Fin.getElem_fin, Vector.getElem_setIfInBounds i.isLt]
-      split
-      · exact hout.2
-      · exact hvalid i
-    case vc2.h.pre =>
-      simp
-    case vc3 =>
-      simp only [forIn_eq_forIn']
-      mvcgen invariants
-      · ⇓⟨_, w⟩ => ⌜∀ i : Fin 64, w[i].Valid ρ⌝
-      · ⇓⟨_, st⟩ => ⌜st.1.Valid ρ ∧ st.2.1.Valid ρ ∧
-          st.2.2.1.Valid ρ ∧ st.2.2.2.1.Valid ρ ∧
-          st.2.2.2.2.1.Valid ρ ∧ st.2.2.2.2.2.1.Valid ρ ∧
-          st.2.2.2.2.2.2.1.Valid ρ ∧ st.2.2.2.2.2.2.2.Valid ρ⌝
-      case vc2 =>
-        intro j
-        apply U.allValid_set!
-        · assumption
-        · grind
-      case vc10.hvalid =>
-        intro u hu
-        simp only [Array.mem_def, Array.toList_append, Array.toList_push,
-          Array.toList_empty, List.mem_append, List.mem_cons,
-          List.mem_singleton, List.mem_nil_iff, or_false] at hu
-        rcases hu with rfl | rfl | rfl | rfl | rfl | rfl
-        · grind
-        · grind
-        · grind
-        · grind
-        · exact U.valid_bitVec _
-        · apply U.valid_getElem
-          · assumption
-      case vc11.hvalid =>
-        intro u hu
-        simp only [Array.mem_def, Array.toList_append, Array.toList_push,
-          Array.toList_empty, List.mem_append, List.mem_cons,
-          List.mem_singleton, List.mem_nil_iff, or_false] at hu
-        rcases hu with rfl | rfl | rfl | rfl | rfl | rfl | rfl
-        · grind
-        · grind
-        · grind
-        · exact U.valid_bitVec _
-        · apply U.valid_getElem
-          · assumption
-        · grind
-        · grind
-      case vc1.hvalid =>
-        apply U.allValid_four
-        · apply U.valid_getElem! <;> first | assumption | grind
-        · grind
-        · apply U.valid_getElem! <;> first | assumption | grind
-        · grind
-      case vc12 => grind
-      case vc13.h.pre =>
-        have hsu : ∀ i : Fin 8, su[i].Valid ρ := by
-          apply U.valid_of_pointwise_right
-          assumption
-        repeat' apply And.intro
-        all_goals apply U.valid_getElem hsu <;> omega
-      case vc14.hvalid | vc15.hvalid | vc16.hvalid | vc17.hvalid |
-          vc18.hvalid | vc19.hvalid | vc20.hvalid | vc21.hvalid =>
-        apply U.allValid_pair
-        · apply U.valid_getElem
-          apply U.valid_of_pointwise_right
-          assumption
-        · grind
-      case vc22.success =>
-        intro i
-        fin_cases i <;> simp_all
-      all_goals simp_all only [not_or, not_not]
-
-def RoundWFRel (lv rv : WF.Valuation) (l r : RoundState) : Prop :=
-  U.WFRel lv rv l.1 r.1 ∧
-  U.WFRel lv rv l.2.1 r.2.1 ∧
-  U.WFRel lv rv l.2.2.1 r.2.2.1 ∧
-  U.WFRel lv rv l.2.2.2.1 r.2.2.2.1 ∧
-  U.WFRel lv rv l.2.2.2.2.1 r.2.2.2.2.1 ∧
-  U.WFRel lv rv l.2.2.2.2.2.1 r.2.2.2.2.2.1 ∧
-  U.WFRel lv rv l.2.2.2.2.2.2.1 r.2.2.2.2.2.2.1 ∧
-  U.WFRel lv rv l.2.2.2.2.2.2.2 r.2.2.2.2.2.2.2
+  change LC.eval ρ.bool (LC.ofConst w[i]) = w[i]
+  rw [LC.eval_ofConst]
 
 theorem U.wfRel_bitVec (lv rv : WF.Valuation) (x : BitVec n) :
     U.WFRel lv rv (x : U n) (x : U n) := by
@@ -2122,82 +51,863 @@ theorem U.wfRel_bitVec (lv rv : WF.Valuation) (x : BitVec n) :
     apply Finset.sum_congr rfl
     intro j _
     simp only [LC.eval_nsmul, hint]
-  · intro j
+  · intro i
     rw [hbit, hbit]
 
-theorem U.ch_wf_rel :
+abbrev chB (u v w : Bool) : Bool := (u && v) ^^ ((!u) && w)
+abbrev majB (u v w : Bool) : Bool := (u && v) ^^ (u && w) ^^ (v && w)
+
+private theorem ch_arith (u v w : BitVec n) :
+    (v.toNat : Int) + w.toNat - (u ^^^ v).toNat + (u ^^^ w).toNat =
+      2 * ((chBV u v w).toNat : Int) := by
+  rw [BitVec.intCast_toNat_eq_sum, BitVec.intCast_toNat_eq_sum,
+    BitVec.intCast_toNat_eq_sum, BitVec.intCast_toNat_eq_sum,
+    BitVec.intCast_toNat_eq_sum, Finset.mul_sum]
+  rw [← Finset.sum_add_distrib, ← Finset.sum_sub_distrib,
+    ← Finset.sum_add_distrib]
+  apply Finset.sum_congr rfl
+  intro i _
+  simp only [chBV, BitVec.getElem_xor, BitVec.getElem_and,
+    BitVec.getElem_not]
+  generalize u[i.val] = ub
+  generalize v[i.val] = vb
+  generalize w[i.val] = wb
+  cases ub <;> cases vb <;> cases wb <;> norm_num <;> ring
+
+private theorem maj_arith (u v w : BitVec n) :
+    (u.toNat : Int) + v.toNat + w.toNat - (u ^^^ v ^^^ w).toNat =
+      2 * ((majBV u v w).toNat : Int) := by
+  rw [BitVec.intCast_toNat_eq_sum, BitVec.intCast_toNat_eq_sum,
+    BitVec.intCast_toNat_eq_sum, BitVec.intCast_toNat_eq_sum,
+    BitVec.intCast_toNat_eq_sum, Finset.mul_sum]
+  rw [← Finset.sum_add_distrib, ← Finset.sum_add_distrib,
+    ← Finset.sum_sub_distrib]
+  apply Finset.sum_congr rfl
+  intro i _
+  simp only [majBV, BitVec.getElem_xor, BitVec.getElem_and]
+  generalize u[i.val] = ub
+  generalize v[i.val] = vb
+  generalize w[i.val] = wb
+  cases ub <;> cases vb <;> cases wb <;> norm_num <;> ring
+
+private theorem ch_eq (u v w : U n) : U.ch u v w = (do
+    let bits ← U.ternaryHints chB u v w
+    let out ← U.fromWord { bitsLE := bits }
+    let uv ← U.fromWord (u.bits ^^^ v.bits)
+    let uw ← U.fromWord (u.bits ^^^ w.bits)
+    assertR1C 0 0
+      (v.intVal + w.intVal - uv.intVal + uw.intVal - 2 • out.intVal)
+    pure out) := rfl
+
+private theorem maj_eq (u v w : U n) : U.maj u v w = (do
+    let bits ← U.ternaryHints majB u v w
+    let out ← U.fromWord { bitsLE := bits }
+    let uvw ← U.fromWord (u.bits ^^^ v.bits ^^^ w.bits)
+    assertR1C 0 0
+      (u.intVal + v.intVal + w.intVal - uvw.intVal - 2 • out.intVal)
+    pure out) := rfl
+
+private theorem ch_constraint {u v w ch uv uw : U n}
+    (hu : u.Valid ρ) (hv : v.Valid ρ) (hw : w.Valid ρ)
+    (hch : ch.Valid ρ)
+    (huv : U.Rel ρ uv (Word.eval ρ.bool (u.bits ^^^ v.bits)))
+    (huw : U.Rel ρ uw (Word.eval ρ.bool (u.bits ^^^ w.bits))) :
+    (v.intVal + w.intVal - uv.intVal + uw.intVal - 2 • ch.intVal).eval
+        ρ.int = 0 ↔
+      ch.eval ρ = chBV (u.eval ρ) (v.eval ρ) (w.eval ρ) := by
+  simp only [LC.eval_add, LC.eval_sub, two_nsmul]
+  rw [
+    U.intVal_eval_eq_eval_toNat v hv, U.intVal_eval_eq_eval_toNat w hw,
+    U.Rel.intVal huv, U.Rel.intVal huw,
+    U.intVal_eval_eq_eval_toNat ch hch]
+  simp only [Word.eval_xor, U.Rel.word_eval (U.Rel.refl hu),
+    U.Rel.word_eval (U.Rel.refl hv), U.Rel.word_eval (U.Rel.refl hw)]
+  constructor
+  · intro h
+    apply BitVec.toNat_inj.mp
+    linarith [ch_arith (u.eval ρ) (v.eval ρ) (w.eval ρ)]
+  · intro h
+    have := congrArg BitVec.toNat h
+    linarith [ch_arith (u.eval ρ) (v.eval ρ) (w.eval ρ)]
+
+private theorem maj_constraint {u v w maj uvw : U n}
+    (hu : u.Valid ρ) (hv : v.Valid ρ) (hw : w.Valid ρ)
+    (hmaj : maj.Valid ρ)
+    (huvw : U.Rel ρ uvw
+      (Word.eval ρ.bool (u.bits ^^^ v.bits ^^^ w.bits))) :
+    (u.intVal + v.intVal + w.intVal - uvw.intVal - 2 • maj.intVal).eval
+        ρ.int = 0 ↔
+      maj.eval ρ = majBV (u.eval ρ) (v.eval ρ) (w.eval ρ) := by
+  simp only [LC.eval_add, LC.eval_sub, two_nsmul]
+  rw [
+    U.intVal_eval_eq_eval_toNat u hu, U.intVal_eval_eq_eval_toNat v hv,
+    U.intVal_eval_eq_eval_toNat w hw, U.Rel.intVal huvw,
+    U.intVal_eval_eq_eval_toNat maj hmaj]
+  simp only [Word.eval_xor, U.Rel.word_eval (U.Rel.refl hu),
+    U.Rel.word_eval (U.Rel.refl hv), U.Rel.word_eval (U.Rel.refl hw)]
+  constructor
+  · intro h
+    apply BitVec.toNat_inj.mp
+    linarith [maj_arith (u.eval ρ) (v.eval ρ) (w.eval ρ)]
+  · intro h
+    have := congrArg BitVec.toNat h
+    linarith [maj_arith (u.eval ρ) (v.eval ρ) (w.eval ρ)]
+
+private theorem chBV_eq (u v w : BitVec n) :
+    (BitVec.ofFnLE fun i => chB u[i] v[i] w[i]) = chBV u v w := by
+  apply BitVec.eq_of_getElem_eq
+  intro i hi
+  simp [chBV, chB]
+
+private theorem majBV_eq (u v w : BitVec n) :
+    (BitVec.ofFnLE fun i => majB u[i] v[i] w[i]) = majBV u v w := by
+  apply BitVec.eq_of_getElem_eq
+  intro i hi
+  simp [majBV, majB]
+
+@[spec] theorem U.ch_sound {u v w : U n} (hu : u.Valid ρ)
+    (hv : v.Valid ρ) (hw : w.Valid ρ) :
+    ⦃⌜True⌝⦄ Sound.interp ρ (U.ch u v w)
+    ⦃⇓ r => ⌜r.Valid ρ ∧ r.eval ρ = chBV (u.eval ρ) (v.eval ρ) (w.eval ρ)⌝⦄ := by
+  mvcgen [U.ch] invariants
+  · fun _ _ _ => ⌜True⌝
+  case vc1 => simp
+  case vc3 =>
+    rename_i _ ch hch _ huv _ huw hass
+    refine ⟨hch.1, (ch_constraint hu hv hw hch.1 huv huw).mp ?_⟩
+    simpa only [LC.eval_zero, zero_mul] using hass.symm
+
+@[spec] theorem U.ch_complete {u v w : U n} (hu : u.Valid ρ)
+    (hv : v.Valid ρ) (hw : w.Valid ρ) :
+    ⦃⌜True⌝⦄ Complete.interp ρ (U.ch u v w)
+    ⦃⇓ r => ⌜r.Valid ρ ∧ r.eval ρ = chBV (u.eval ρ) (v.eval ρ) (w.eval ρ)⌝⦄ := by
+  rw [ch_eq]
+  rw [Complete.interp_bind]
+  apply Triple.bind (Q := fun bits => ⌜∀ i : Fin n, bits[i].eval ρ.bool =
+    chB (u.bits[i].eval ρ.bool) (v.bits[i].eval ρ.bool)
+      (w.bits[i].eval ρ.bool)⌝)
+  case hx => exact U.ternaryHints_complete _ _ _ _
+  case hf =>
+    intro bits
+    mvcgen
+    case vc1 =>
+      rename_i hbits ch hch _ huv _ huw
+      have hch' := U.Rel.ternary chB hu hv hw hbits hch
+      rw [chBV_eq] at hch'
+      refine ⟨?_, hch'⟩
+      have := (ch_constraint hu hv hw hch.1 huv huw).mpr hch'.2
+      simpa only [LC.eval_zero, zero_mul] using this.symm
+
+@[spec] theorem U.maj_sound {u v w : U n} (hu : u.Valid ρ)
+    (hv : v.Valid ρ) (hw : w.Valid ρ) :
+    ⦃⌜True⌝⦄ Sound.interp ρ (U.maj u v w)
+    ⦃⇓ r => ⌜r.Valid ρ ∧ r.eval ρ = majBV (u.eval ρ) (v.eval ρ) (w.eval ρ)⌝⦄ := by
+  mvcgen [U.maj] invariants
+  · fun _ _ _ => ⌜True⌝
+  case vc1 => simp
+  case vc3 =>
+    rename_i _ maj hmaj _ huvw hass
+    refine ⟨hmaj.1, (maj_constraint hu hv hw hmaj.1 huvw).mp ?_⟩
+    simpa only [LC.eval_zero, zero_mul] using hass.symm
+
+@[spec] theorem U.maj_complete {u v w : U n} (hu : u.Valid ρ)
+    (hv : v.Valid ρ) (hw : w.Valid ρ) :
+    ⦃⌜True⌝⦄ Complete.interp ρ (U.maj u v w)
+    ⦃⇓ r => ⌜r.Valid ρ ∧ r.eval ρ = majBV (u.eval ρ) (v.eval ρ) (w.eval ρ)⌝⦄ := by
+  rw [maj_eq]
+  rw [Complete.interp_bind]
+  apply Triple.bind (Q := fun bits => ⌜∀ i : Fin n, bits[i].eval ρ.bool =
+    majB (u.bits[i].eval ρ.bool) (v.bits[i].eval ρ.bool)
+      (w.bits[i].eval ρ.bool)⌝)
+  case hx => exact U.ternaryHints_complete _ _ _ _
+  case hf =>
+    intro bits
+    mvcgen
+    case vc1 =>
+      rename_i hbits maj hmaj _ huvw
+      have hmaj' := U.Rel.ternary majB hu hv hw hbits hmaj
+      rw [majBV_eq] at hmaj'
+      refine ⟨?_, hmaj'⟩
+      have := (maj_constraint hu hv hw hmaj.1 huvw).mpr hmaj'.2
+      simpa only [LC.eval_zero, zero_mul] using this.symm
+
+theorem U.ch_wf :
     WF.GadgetSpec
       (fun lv rv (l r : U n × U n × U n) =>
         U.WFRel lv rv l.1 r.1 ∧ U.WFRel lv rv l.2.1 r.2.1 ∧
           U.WFRel lv rv l.2.2 r.2.2)
       (fun x => U.ch x.1 x.2.1 x.2.2) U.WFRel := by
-  exact U.ch_wf
+  unfold WF.GadgetSpec
+  intro left right
+  dsimp only
+  rw [ch_eq, ch_eq]
+  apply WF.GadgetSpec.bind_rule (U.ternaryHints_wf chB)
+  · exact fun _ _ h => h
+  · intro _ _ _ _
+    wfgen' using [U.fromWord_wf_rel]
+    all_goals
+      exact (Word.WFRel.xor (U.WFRel.bits (by grind))
+        (U.WFRel.bits (by grind))) i
 
-theorem U.maj_wf_rel :
+theorem U.maj_wf :
     WF.GadgetSpec
       (fun lv rv (l r : U n × U n × U n) =>
         U.WFRel lv rv l.1 r.1 ∧ U.WFRel lv rv l.2.1 r.2.1 ∧
           U.WFRel lv rv l.2.2 r.2.2)
       (fun x => U.maj x.1 x.2.1 x.2.2) U.WFRel := by
-  exact U.maj_wf
+  unfold WF.GadgetSpec
+  intro left right
+  dsimp only
+  rw [maj_eq, maj_eq]
+  apply WF.GadgetSpec.bind_rule (U.ternaryHints_wf majB)
+  · exact fun _ _ h => h
+  · intro _ _ _ _
+    wfgen' using [U.fromWord_wf_rel]
+    all_goals
+      exact (Word.WFRel.xor
+        (Word.WFRel.xor (U.WFRel.bits (by grind))
+          (U.WFRel.bits (by grind))) (U.WFRel.bits (by grind))) i
+
+@[spec 0] theorem U.ch_sound_frame {u v w : U n} (hu : u.Valid ρ)
+    (hv : v.Valid ρ) (hw : w.Valid ρ) (P : Prop) :
+    ⦃⌜P⌝⦄ Sound.interp ρ (U.ch u v w)
+    ⦃⇓ r => ⌜P ∧ r.Valid ρ ∧ r.eval ρ =
+      chBV (u.eval ρ) (v.eval ρ) (w.eval ρ)⌝⦄ :=
+  Sound.frame (U.ch_sound hu hv hw) P
+
+@[spec 0] theorem U.ch_complete_frame {u v w : U n} (hu : u.Valid ρ)
+    (hv : v.Valid ρ) (hw : w.Valid ρ) (P : Prop) :
+    ⦃⌜P⌝⦄ Complete.interp ρ (U.ch u v w)
+    ⦃⇓ r => ⌜P ∧ r.Valid ρ ∧ r.eval ρ =
+      chBV (u.eval ρ) (v.eval ρ) (w.eval ρ)⌝⦄ :=
+  Complete.frame (U.ch_complete hu hv hw) P
+
+@[spec 0] theorem U.maj_sound_frame {u v w : U n} (hu : u.Valid ρ)
+    (hv : v.Valid ρ) (hw : w.Valid ρ) (P : Prop) :
+    ⦃⌜P⌝⦄ Sound.interp ρ (U.maj u v w)
+    ⦃⇓ r => ⌜P ∧ r.Valid ρ ∧ r.eval ρ =
+      majBV (u.eval ρ) (v.eval ρ) (w.eval ρ)⌝⦄ :=
+  Sound.frame (U.maj_sound hu hv hw) P
+
+@[spec 0] theorem U.maj_complete_frame {u v w : U n} (hu : u.Valid ρ)
+    (hv : v.Valid ρ) (hw : w.Valid ρ) (P : Prop) :
+    ⦃⌜P⌝⦄ Complete.interp ρ (U.maj u v w)
+    ⦃⇓ r => ⌜P ∧ r.Valid ρ ∧ r.eval ρ =
+      majBV (u.eval ρ) (v.eval ρ) (w.eval ρ)⌝⦄ :=
+  Complete.frame (U.maj_complete hu hv hw) P
+
+abbrev RoundState (α : Type) :=
+  MProd α (MProd α (MProd α (MProd α (MProd α (MProd α (MProd α α))))))
+
+def roundVector (r : RoundState α) : Vector α 8 :=
+  #v[r.1, r.2.1, r.2.2.1, r.2.2.2.1, r.2.2.2.2.1,
+    r.2.2.2.2.2.1, r.2.2.2.2.2.2.1, r.2.2.2.2.2.2.2]
+
+def scheduleStep (i : Nat) (w : Vector (U 32) 64) : Circuit (U 32) := do
+  let wi15 := w[i - 15]!.bits
+  let s0 ← U.fromWord $
+    wi15.rotateRight 7 ^^^ wi15.rotateRight 18 ^^^ (wi15 >>> 3)
+  let wi2 := w[i - 2]!.bits
+  let s1 ← U.fromWord $
+    wi2.rotateRight 17 ^^^ wi2.rotateRight 19 ^^^ (wi2 >>> 10)
+  U.sum #[w[i - 16]!, s0, w[i - 7]!, s1]
+
+def roundStep (i : Nat) (hi : i ∈ [0:64])
+    (x : Vector (U 32) 64 × RoundState (U 32)) : Circuit (RoundState (U 32)) := do
+  let w := x.1
+  let r := x.2
+  let S1 ← U.fromWord $ r.2.2.2.2.1.bits.rotateRight 6 ^^^
+    r.2.2.2.2.1.bits.rotateRight 11 ^^^ r.2.2.2.2.1.bits.rotateRight 25
+  let ch ← U.ch r.2.2.2.2.1 r.2.2.2.2.2.1 r.2.2.2.2.2.2.1
+  let S0 ← U.fromWord $ r.1.bits.rotateRight 2 ^^^
+    r.1.bits.rotateRight 13 ^^^ r.1.bits.rotateRight 22
+  let maj ← U.maj r.1 r.2.1 r.2.2.1
+  let newE ← U.sum #[r.2.2.2.1, r.2.2.2.2.2.2.2, S1, ch, k[i], w[i]]
+  let newA ← U.sum #[r.2.2.2.2.2.2.2, S1, ch, k[i], w[i], S0, maj]
+  pure ⟨newA, r.1, r.2.1, r.2.2.1, newE,
+    r.2.2.2.2.1, r.2.2.2.2.2.1, r.2.2.2.2.2.2.1⟩
+
+def finish (x : Vector (U 32) 8 × RoundState (U 32)) :
+    Circuit (Vector (U 32) 8) := do
+  let s := x.1
+  let r := x.2
+  pure #v[
+    ←U.sum #[s[0], r.1],
+    ←U.sum #[s[1], r.2.1],
+    ←U.sum #[s[2], r.2.2.1],
+    ←U.sum #[s[3], r.2.2.2.1],
+    ←U.sum #[s[4], r.2.2.2.2.1],
+    ←U.sum #[s[5], r.2.2.2.2.2.1],
+    ←U.sum #[s[6], r.2.2.2.2.2.2.1],
+    ←U.sum #[s[7], r.2.2.2.2.2.2.2]]
+
+def structured (m : Vector (Word 32) 16) (s : Vector (Word 32) 8) :
+    Circuit (Vector (U 32) 8) := do
+  let su ← s.mapM U.fromWord
+  let mut w : Vector (U 32) 64 := default
+  for h:i in [0:16] do
+    w := w.set! i $ ←U.fromWord m[i]
+  for hi:i in [16:64] do
+    w := w.set! i $ ←scheduleStep i w
+  let mut r : RoundState (U 32) :=
+    ⟨su[0], su[1], su[2], su[3], su[4], su[5], su[6], su[7]⟩
+  for hi:i in [0:64] do
+    r ← roundStep i hi (w, r)
+  finish (su, r)
+
+theorem structured_eq (m : Vector (Word 32) 16) (s : Vector (Word 32) 8) :
+    structured m s = permCircuit m s := by
+  unfold structured permCircuit scheduleStep roundStep finish
+  rfl
+
+def RoundState.eval (ρ : WF.Valuation) (r : RoundState (U n)) :
+    RoundState (BitVec n) :=
+  ⟨r.1.eval ρ, r.2.1.eval ρ, r.2.2.1.eval ρ, r.2.2.2.1.eval ρ,
+    r.2.2.2.2.1.eval ρ, r.2.2.2.2.2.1.eval ρ,
+    r.2.2.2.2.2.2.1.eval ρ, r.2.2.2.2.2.2.2.eval ρ⟩
+
+def RoundState.Valid (ρ : WF.Valuation) (r : RoundState (U n)) : Prop :=
+  r.1.Valid ρ ∧ r.2.1.Valid ρ ∧ r.2.2.1.Valid ρ ∧ r.2.2.2.1.Valid ρ ∧
+  r.2.2.2.2.1.Valid ρ ∧ r.2.2.2.2.2.1.Valid ρ ∧
+  r.2.2.2.2.2.2.1.Valid ρ ∧ r.2.2.2.2.2.2.2.Valid ρ
+
+def RoundState.Rel (ρ : WF.Valuation) (us : RoundState (U n))
+    (xs : RoundState (BitVec n)) : Prop :=
+  us.Valid ρ ∧ us.eval ρ = xs
+
+theorem RoundState.Rel.eval_eq {n : Nat} {r : RoundState (U n)}
+    {rv : RoundState (BitVec n)} (h : RoundState.Rel ρ r rv) :
+    r.eval ρ = rv := h.2
+
+theorem RoundState.Rel.refl {n : Nat} {r : RoundState (U n)} (h : r.Valid ρ) :
+    RoundState.Rel ρ r (r.eval ρ) := ⟨h, rfl⟩
+
+theorem RoundState.Rel.a (h : RoundState.Rel ρ r rv) : U.Rel ρ r.1 rv.1 :=
+  ⟨h.1.1, congrArg (fun x => x.1) h.2⟩
+
+theorem RoundState.Rel.b (h : RoundState.Rel ρ r rv) : U.Rel ρ r.2.1 rv.2.1 :=
+  ⟨h.1.2.1, congrArg (fun x => x.2.1) h.2⟩
+
+theorem RoundState.Rel.c (h : RoundState.Rel ρ r rv) : U.Rel ρ r.2.2.1 rv.2.2.1 :=
+  ⟨h.1.2.2.1, congrArg (fun x => x.2.2.1) h.2⟩
+
+theorem RoundState.Rel.d (h : RoundState.Rel ρ r rv) : U.Rel ρ r.2.2.2.1 rv.2.2.2.1 :=
+  ⟨h.1.2.2.2.1, congrArg (fun x => x.2.2.2.1) h.2⟩
+
+theorem RoundState.Rel.e (h : RoundState.Rel ρ r rv) : U.Rel ρ r.2.2.2.2.1 rv.2.2.2.2.1 :=
+  ⟨h.1.2.2.2.2.1, congrArg (fun x => x.2.2.2.2.1) h.2⟩
+
+theorem RoundState.Rel.f (h : RoundState.Rel ρ r rv) : U.Rel ρ r.2.2.2.2.2.1 rv.2.2.2.2.2.1 :=
+  ⟨h.1.2.2.2.2.2.1, congrArg (fun x => x.2.2.2.2.2.1) h.2⟩
+
+theorem RoundState.Rel.g (h : RoundState.Rel ρ r rv) : U.Rel ρ r.2.2.2.2.2.2.1 rv.2.2.2.2.2.2.1 :=
+  ⟨h.1.2.2.2.2.2.2.1, congrArg (fun x => x.2.2.2.2.2.2.1) h.2⟩
+
+theorem RoundState.Rel.h (h : RoundState.Rel ρ r rv) : U.Rel ρ r.2.2.2.2.2.2.2 rv.2.2.2.2.2.2.2 :=
+  ⟨h.1.2.2.2.2.2.2.2, congrArg (fun x => x.2.2.2.2.2.2.2) h.2⟩
+
+theorem RoundState.Rel.vector (h : RoundState.Rel ρ r rv) :
+    Vector.Rel ρ (roundVector r) (roundVector rv) := by
+  intro i
+  fin_cases i <;>
+    first | exact h.a | exact h.b | exact h.c | exact h.d |
+      exact h.e | exact h.f | exact h.g | exact h.h
+
+def scheduleStepBV (i : Nat) (w : Vector (BitVec 32) 64) : BitVec 32 :=
+  let s0 := w[i - 15]!.rotateRight 7 ^^^ w[i - 15]!.rotateRight 18 ^^^
+    (w[i - 15]! >>> 3)
+  let s1 := w[i - 2]!.rotateRight 17 ^^^ w[i - 2]!.rotateRight 19 ^^^
+    (w[i - 2]! >>> 10)
+  #[w[i - 16]!, s0, w[i - 7]!, s1].sum
+
+def roundStepBV (i : Nat)
+    (w : Vector (BitVec 32) 64) (r : RoundState (BitVec 32)) :
+    RoundState (BitVec 32) :=
+  let S1 := r.2.2.2.2.1.rotateRight 6 ^^^ r.2.2.2.2.1.rotateRight 11 ^^^
+    r.2.2.2.2.1.rotateRight 25
+  let ch := chBV r.2.2.2.2.1 r.2.2.2.2.2.1 r.2.2.2.2.2.2.1
+  let S0 := r.1.rotateRight 2 ^^^ r.1.rotateRight 13 ^^^ r.1.rotateRight 22
+  let maj := majBV r.1 r.2.1 r.2.2.1
+  let newE := #[r.2.2.2.1, r.2.2.2.2.2.2.2, S1, ch, k[i]!, w[i]!].sum
+  let newA := #[r.2.2.2.2.2.2.2, S1, ch, k[i]!, w[i]!, S0, maj].sum
+  ⟨newA, r.1, r.2.1, r.2.2.1, newE,
+    r.2.2.2.2.1, r.2.2.2.2.2.1, r.2.2.2.2.2.2.1⟩
+
+private theorem scheduleResult {w : Vector (U 32) 64}
+    {wv : Vector (BitVec 32) 64} (hw : Vector.Rel ρ w wv)
+    (i : Nat) (hi : i ∈ [16:64]) {s0 s1 out : U 32}
+    (hs0 : U.Rel ρ s0 (Word.eval ρ.bool
+      (w[i - 15]!.bits.rotateRight 7 ^^^
+        w[i - 15]!.bits.rotateRight 18 ^^^ (w[i - 15]!.bits >>> 3))))
+    (hs1 : U.Rel ρ s1 (Word.eval ρ.bool
+      (w[i - 2]!.bits.rotateRight 17 ^^^
+        w[i - 2]!.bits.rotateRight 19 ^^^ (w[i - 2]!.bits >>> 10))))
+    (hout : U.Rel ρ out
+      (#[w[i - 16]!, s0, w[i - 7]!, s1].map (·.eval ρ)).sum) :
+    U.Rel ρ out (scheduleStepBV i wv) := by
+  have hs0' := (hw.getElem! (i := i - 15) (by grind)).rotateXorShift
+    (by decide) (by decide) hs0
+  have hs1' := (hw.getElem! (i := i - 2) (by grind)).rotateXorShift
+    (by decide) (by decide) hs1
+  refine ⟨hout.1, ?_⟩
+  unfold scheduleStepBV
+  rw [hout.2, ← Array.sum_toList, ← Array.sum_toList]
+  simp only [Array.toList_map, List.map_cons, List.map_nil, hs0'.2, hs1'.2,
+    (hw.getElem! (i := i - 16) (by grind)).2,
+    (hw.getElem! (i := i - 7) (by grind)).2]
+
+@[spec] theorem scheduleStep_sound {w : Vector (U 32) 64}
+    (hw : ∀ i : Fin 64, w[i].Valid ρ) (i : Nat) (hi : i ∈ [16:64]) :
+    ⦃⌜True⌝⦄ Sound.interp ρ (scheduleStep i w)
+    ⦃⇓ out => ⌜U.Rel ρ out (scheduleStepBV i (w.map (·.eval ρ)))⌝⦄ := by
+  unfold scheduleStep
+  mvcgen
+  case vc1.success.success =>
+    intro hvalid heval
+    exact scheduleResult (Vector.Rel.refl hw) i hi
+      (by assumption) (by assumption) ⟨hvalid, heval⟩
+  case vc2 =>
+    intro hs1 u hu
+    simp only [Array.mem_def, List.mem_cons, List.mem_nil_iff, or_false] at hu
+    rcases hu with rfl | rfl | rfl | rfl
+    · exact U.valid_getElem! hw (by grind)
+    · exact (by assumption : U.Rel ρ u _).1
+    · exact U.valid_getElem! hw (by grind)
+    · exact hs1.1
+
+@[spec] theorem scheduleStep_complete {w : Vector (U 32) 64}
+    (hw : ∀ i : Fin 64, w[i].Valid ρ) (i : Nat) (hi : i ∈ [16:64]) :
+    ⦃⌜True⌝⦄ Complete.interp ρ (scheduleStep i w)
+    ⦃⇓ out => ⌜U.Rel ρ out (scheduleStepBV i (w.map (·.eval ρ)))⌝⦄ := by
+  unfold scheduleStep
+  mvcgen
+  case vc1.success.success =>
+    intro hvalid heval
+    exact scheduleResult (Vector.Rel.refl hw) i hi
+      (by assumption) (by assumption) ⟨hvalid, heval⟩
+  case vc2 =>
+    intro hs1 u hu
+    simp only [Array.mem_def, List.mem_cons, List.mem_nil_iff, or_false] at hu
+    rcases hu with rfl | rfl | rfl | rfl
+    · exact U.valid_getElem! hw (by grind)
+    · exact (by assumption : U.Rel ρ u _).1
+    · exact U.valid_getElem! hw (by grind)
+    · exact hs1.1
+
+private theorem roundResult {w : Vector (U 32) 64}
+    {wv : Vector (BitVec 32) 64} (hw : Vector.Rel ρ w wv)
+    {r : RoundState (U 32)} {rv : RoundState (BitVec 32)}
+    (hr : RoundState.Rel ρ r rv) (i : Nat) (hi : i ∈ [0:64])
+    {S1 ch S0 maj newE newA : U 32}
+    (hS1 : U.Rel ρ S1 (Word.eval ρ.bool
+      (r.2.2.2.2.1.bits.rotateRight 6 ^^^
+        r.2.2.2.2.1.bits.rotateRight 11 ^^^
+        r.2.2.2.2.1.bits.rotateRight 25)))
+    (hch : U.Rel ρ ch (chBV (r.2.2.2.2.1.eval ρ)
+      (r.2.2.2.2.2.1.eval ρ) (r.2.2.2.2.2.2.1.eval ρ)))
+    (hS0 : U.Rel ρ S0 (Word.eval ρ.bool
+      (r.1.bits.rotateRight 2 ^^^ r.1.bits.rotateRight 13 ^^^
+        r.1.bits.rotateRight 22)))
+    (hmaj : U.Rel ρ maj
+      (majBV (r.1.eval ρ) (r.2.1.eval ρ) (r.2.2.1.eval ρ)))
+    (hE : U.Rel ρ newE
+      (#[r.2.2.2.1, r.2.2.2.2.2.2.2, S1, ch, (k[i] : U 32), w[i]].map
+        (·.eval ρ)).sum)
+    (hA : U.Rel ρ newA
+      (#[r.2.2.2.2.2.2.2, S1, ch, (k[i] : U 32), w[i], S0, maj].map
+        (·.eval ρ)).sum) :
+    RoundState.Rel ρ
+      ⟨newA, r.1, r.2.1, r.2.2.1, newE,
+        r.2.2.2.2.1, r.2.2.2.2.2.1, r.2.2.2.2.2.2.1⟩
+      (roundStepBV i wv rv) := by
+  have ha := hr.a
+  have hb := hr.b
+  have hc := hr.c
+  have hd := hr.d
+  have he := hr.e
+  have hf := hr.f
+  have hg := hr.g
+  have hh := hr.h
+  have hS1' := he.rotateXor3 (by decide) (by decide) (by decide) hS1
+  have hS0' := ha.rotateXor3 (by decide) (by decide) (by decide) hS0
+  have hchEval := hch.2
+  rw [he.2, hf.2, hg.2] at hchEval
+  have hmajEval := hmaj.2
+  rw [ha.2, hb.2, hc.2] at hmajEval
+  have hwi : w[i].eval ρ = wv[i] := by
+    simpa only [Fin.getElem_fin] using (hw ⟨i, by grind⟩).2
+  have hAeval := hA.2
+  have hEeval := hE.2
+  rw [← Array.sum_toList] at hAeval hEeval
+  simp only [Array.toList_map, List.map_cons, List.map_nil,
+    hS1'.2, hS0'.2, hchEval, hmajEval, U.eval_bitVec, hwi, hh.2,
+    hd.2] at hAeval hEeval
+  refine ⟨⟨hA.1, ha.1, hb.1, hc.1, hE.1, he.1, hf.1, hg.1⟩, ?_⟩
+  unfold RoundState.eval roundStepBV
+  simp only [getElem!_pos k i (by grind), getElem!_pos wv i (by grind)]
+  rw [hAeval, ha.2, hb.2, hc.2, hEeval, he.2, hf.2, hg.2]
+  simp only [← Array.sum_toList]
+
+theorem roundStep_sound_rel {w : Vector (U 32) 64}
+    {wv : Vector (BitVec 32) 64} (hw : Vector.Rel ρ w wv)
+    {r : RoundState (U 32)} {rv : RoundState (BitVec 32)}
+    (hr : RoundState.Rel ρ r rv) (i : Nat) (hi : i ∈ [0:64]) :
+    ⦃⌜True⌝⦄ Sound.interp ρ (roundStep i hi (w, r))
+    ⦃⇓ out => ⌜RoundState.Rel ρ out (roundStepBV i wv rv)⌝⦄ := by
+  have hwi : w[i].Valid ρ := (hw ⟨i, by grind⟩).1
+  unfold roundStep
+  mvcgen
+  case vc1.hu | vc2.hv | vc3.hw | vc4.hu | vc5.hv | vc6.hw =>
+    first | exact hr.a.1 | exact hr.b.1 | exact hr.c.1 |
+      exact hr.e.1 | exact hr.f.1 | exact hr.g.1
+  case vc7.hvalid =>
+    intro u hu
+    simp only [Array.mem_def, List.mem_cons, List.mem_nil_iff, or_false] at hu
+    rcases hu with rfl | rfl | rfl | rfl | rfl | rfl
+    · exact hr.d.1
+    · exact hr.h.1
+    · grind [U.Rel]
+    · grind [U.Rel]
+    · exact U.valid_bitVec _
+    · exact hwi
+  case vc8.hvalid =>
+    intro u hu
+    simp only [Array.mem_def, List.mem_cons, List.mem_nil_iff, or_false] at hu
+    rcases hu with rfl | rfl | rfl | rfl | rfl | rfl | rfl
+    · exact hr.h.1
+    · grind [U.Rel]
+    · grind [U.Rel]
+    · exact U.valid_bitVec _
+    · exact hwi
+    · grind [U.Rel]
+    · grind [U.Rel]
+  case vc9.success =>
+    rename_i S1 hS1 ch hch S0 hS0 maj hmaj E hE A hA
+    exact roundResult hw hr i hi hS1 hch hS0 hmaj hE hA
+
+@[spec] theorem roundStep_sound {w : Vector (U 32) 64}
+    (hw : ∀ i : Fin 64, w[i].Valid ρ) {r : RoundState (U 32)}
+    (hr : r.Valid ρ) (i : Nat) (hi : i ∈ [0:64]) :
+    ⦃⌜True⌝⦄ Sound.interp ρ (roundStep i hi (w, r))
+    ⦃⇓ out => ⌜RoundState.Rel ρ out
+      (roundStepBV i (w.map (·.eval ρ)) (r.eval ρ))⌝⦄ :=
+  roundStep_sound_rel (Vector.Rel.refl hw) (RoundState.Rel.refl hr) i hi
+
+@[spec] theorem roundStep_complete {w : Vector (U 32) 64}
+    (hw : ∀ i : Fin 64, w[i].Valid ρ) {r : RoundState (U 32)}
+    (hr : r.Valid ρ) (i : Nat) (hi : i ∈ [0:64]) :
+    ⦃⌜True⌝⦄ Complete.interp ρ (roundStep i hi (w, r))
+    ⦃⇓ out => ⌜out.Valid ρ⌝⦄ := by
+  have hwi : w[i].Valid ρ := hw ⟨i, by grind⟩
+  unfold roundStep
+  mvcgen
+  case vc1.hu | vc2.hv | vc3.hw | vc4.hu | vc5.hv | vc6.hw =>
+    first | exact hr.1 | exact hr.2.1 | exact hr.2.2.1 |
+      exact hr.2.2.2.2.1 | exact hr.2.2.2.2.2.1 |
+      exact hr.2.2.2.2.2.2.1
+  case vc7.hvalid =>
+    intro u hu
+    simp only [Array.mem_def, List.mem_cons, List.mem_nil_iff, or_false] at hu
+    rcases hu with rfl | rfl | rfl | rfl | rfl | rfl
+    · exact hr.2.2.2.1
+    · exact hr.2.2.2.2.2.2.2
+    · grind [U.Rel]
+    · grind [U.Rel]
+    · exact U.valid_bitVec _
+    · exact hwi
+  case vc8.hvalid =>
+    intro u hu
+    simp only [Array.mem_def, List.mem_cons, List.mem_nil_iff, or_false] at hu
+    rcases hu with rfl | rfl | rfl | rfl | rfl | rfl | rfl
+    · exact hr.2.2.2.2.2.2.2
+    · grind [U.Rel]
+    · grind [U.Rel]
+    · exact U.valid_bitVec _
+    · exact hwi
+    · grind [U.Rel]
+    · grind [U.Rel]
+  case vc9.success => grind [RoundState.Valid, U.Rel]
+
+def finishBV (s : Vector (BitVec 32) 8) (r : RoundState (BitVec 32)) :
+    Vector (BitVec 32) 8 :=
+  #v[s[0] + r.1, s[1] + r.2.1, s[2] + r.2.2.1,
+    s[3] + r.2.2.2.1, s[4] + r.2.2.2.2.1,
+    s[5] + r.2.2.2.2.2.1, s[6] + r.2.2.2.2.2.2.1,
+    s[7] + r.2.2.2.2.2.2.2]
+
+theorem finishBV_get (s : Vector (BitVec 32) 8)
+    (r : RoundState (BitVec 32)) (i : Fin 8) :
+    (finishBV s r)[i] = s[i] + (roundVector r)[i] := by
+  fin_cases i <;> rfl
+
+theorem finish_eq (s : Vector (U 32) 8) (r : RoundState (U 32)) :
+    finish (s, r) = Vector.ofFnM (fun i =>
+      U.sumFixed #v[s[i], (roundVector r)[i]]) := by
+  simp [finish, Vector.ofFnM_succ, Vector.ofFnM_zero, roundVector,
+    U.sum2_eq_sumFixed]
+
+@[spec] theorem finish_sound {s : Vector (U 32) 8}
+    {sv : Vector (BitVec 32) 8} (hs : Vector.Rel ρ s sv)
+    {r : RoundState (U 32)} {rv : RoundState (BitVec 32)}
+    (hr : RoundState.Rel ρ r rv) :
+    ⦃⌜True⌝⦄ Sound.interp ρ (finish (s, r))
+    ⦃⇓ out => ⌜Vector.Rel ρ out (finishBV sv rv)⌝⦄ := by
+  rw [finish_eq]
+  apply Sound.vectorOfFnM
+    (R := fun i out => U.Rel ρ out (finishBV sv rv)[i])
+  intro i
+  rw [finishBV_get]
+  exact U.sumPair_sound (hs i) (hr.vector i)
+
+@[spec] theorem finish_complete {s : Vector (U 32) 8}
+    (hs : ∀ i : Fin 8, s[i].Valid ρ)
+    {r : RoundState (U 32)} (hr : r.Valid ρ) :
+    ⦃⌜True⌝⦄ Complete.interp ρ (finish (s, r))
+    ⦃⇓ out => ⌜∀ i : Fin 8, out[i].Valid ρ⌝⦄ := by
+  rw [finish_eq]
+  apply Complete.vectorOfFnM
+    (f := fun i : Fin 8 => U.sumFixed #v[s[i], (roundVector r)[i]])
+    (R := fun (_ : Fin 8) out => out.Valid ρ)
+  intro i
+  exact Triple.iff_conseq.mp
+    (U.sumPair_complete (U.Rel.refl (hs i))
+      ((RoundState.Rel.refl hr).vector i)) (by simp) (by
+        simp only [PostCond.entails, SPred.entails_nil]
+        exact ⟨fun _ h => h.1, ExceptConds.entails.refl _⟩)
+
+def initialSchedule (m : Vector (BitVec 32) 16) : Vector (BitVec 32) 64 :=
+  ([0:16].toList).foldl (fun w i => w.set! i m[i]!) default
+
+theorem initialSchedule_words {ρ : WF.Valuation} (m : Vector (Word 32) 16) :
+    ([0:16].toList).foldl
+        (fun w i => w.set! i ((m[i]!).eval ρ.bool)) default =
+      initialSchedule (m.map (Word.eval ρ.bool)) := by
+  unfold initialSchedule
+  apply List.foldl_congr_of_mem
+  intro i hi w
+  rw [Vector.getElem!_map m (Word.eval ρ.bool) i (by grind)]
+
+def scheduleBV (m : Vector (BitVec 32) 16) : Vector (BitVec 32) 64 :=
+  ([16:64].toList).foldl (fun w i => w.set! i (scheduleStepBV i w))
+    (initialSchedule m)
+
+theorem scheduleBV_eq (m : Vector (BitVec 32) 16) :
+    ([16:64].toList).foldl
+        (fun w i => w.set! i (scheduleStepBV i w)) (initialSchedule m) =
+      scheduleBV m := rfl
+
+def initialRound (s : Vector (BitVec 32) 8) : RoundState (BitVec 32) :=
+  ⟨s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7]⟩
+
+theorem initialRound_eval (s : Vector (U 32) 8) :
+    (show RoundState (U 32) from
+      ⟨s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7]⟩).eval ρ =
+      initialRound (s.map (·.eval ρ)) := by
+  unfold RoundState.eval initialRound
+  simp only [Vector.getElem_map]
+
+def roundsBV (w : Vector (BitVec 32) 64) (s : Vector (BitVec 32) 8) :
+    RoundState (BitVec 32) :=
+  ([0:64].toList).foldl (fun r i => roundStepBV i w r) (initialRound s)
+
+theorem roundsBV_eq (w : Vector (BitVec 32) 64)
+    (s : Vector (BitVec 32) 8) :
+    ([0:64].toList).foldl (fun r i => roundStepBV i w r) (initialRound s) =
+      roundsBV w s := rfl
+
+def model (m : Vector (BitVec 32) 16) (s : Vector (BitVec 32) 8) :
+    Vector (BitVec 32) 8 :=
+  finishBV s (roundsBV (scheduleBV m) s)
+
+@[spec] theorem structured_sound {m : Vector (Word 32) 16}
+    {s : Vector (Word 32) 8} :
+    ⦃⌜True⌝⦄ Sound.interp ρ (structured m s)
+    ⦃⇓ out => ⌜Vector.Rel ρ out
+      (model (m.map (Word.eval ρ.bool)) (s.map (Word.eval ρ.bool)))⌝⦄ := by
+  unfold structured
+  rw [Sound.interp_bind]
+  apply Triple.bind (Q := fun su =>
+    ⌜Vector.Rel ρ su (s.map (Word.eval ρ.bool))⌝)
+  case hx => exact U.mapM_fromWord_sound
+  case hf =>
+    intro su
+    mvcgen -trivial invariants
+    · ⇓⟨cur, w⟩ => ⌜Vector.Rel ρ w
+        (cur.prefix.foldl
+          (fun w i => w.set! i ((m[i]!).eval ρ.bool)) default)⌝
+    · ⇓⟨cur, w⟩ => ⌜Vector.Rel ρ w
+        (cur.prefix.foldl (fun w i => w.set! i (scheduleStepBV i w))
+          (initialSchedule (m.map (Word.eval ρ.bool))))⌝
+    · ⇓⟨cur, r⟩ => ⌜RoundState.Rel ρ r
+        (cur.prefix.foldl
+          (fun r i => roundStepBV i (scheduleBV (m.map (Word.eval ρ.bool))) r)
+          (initialRound (s.map (Word.eval ρ.bool))))⌝
+    case vc1 =>
+      rename_i pref cur suff hsplit w hw out hout
+      simpa [List.foldl_append, getElem!_pos m cur (by grind)]
+        using hw.set! hout cur
+    case vc2.h.pre => simpa using (Vector.Rel.default (valuation := ρ) (n := 32) (m := 64))
+    case vc3.hw => exact fun i => (by assumption : Vector.Rel ρ _ _) i |>.1
+    case vc4.hi =>
+      apply Std.Legacy.Range.mem_of_mem_range'
+      apply List.mem_of_range'_eq_append_cons
+      assumption
+    case vc5 =>
+      rename_i _ cur _ _ w hw out hout
+      rw [Vector.Rel.eval_eq hw] at hout
+      simpa [List.foldl_append] using hw.set! hout cur
+    case vc6.h.pre =>
+      rename_i w hw
+      rw [initialSchedule_words] at hw
+      simpa only [List.foldl_nil] using hw
+    case vc7.hw =>
+      exact Vector.Rel.valid (by assumption)
+    case vc8.hr =>
+      exact (by assumption : RoundState.Rel ρ _ _).1
+    case vc9 =>
+      rename_i hsu w0 hw0 w hw pref cur suff hsplit b hr out hout
+      have hw' : Vector.Rel ρ w
+          (scheduleBV (m.map (Word.eval ρ.bool))) := by
+        rw [← scheduleBV_eq]
+        exact hw
+      rw [Vector.Rel.eval_eq hw', RoundState.Rel.eval_eq hr] at hout
+      simpa only [List.foldl_append, List.foldl_cons, List.foldl_nil] using hout
+    case vc10.h.pre =>
+      simp only [List.foldl_nil]
+      have hsu : Vector.Rel ρ su (s.map (Word.eval ρ.bool)) := by assumption
+      refine ⟨⟨(hsu 0).1, (hsu 1).1, (hsu 2).1, (hsu 3).1,
+        (hsu 4).1, (hsu 5).1, (hsu 6).1, (hsu 7).1⟩, ?_⟩
+      rw [initialRound_eval, Vector.Rel.eval_eq hsu]
+    case vc11 =>
+      exact fun _ => (by assumption : Vector.Rel ρ su _)
+    case vc12 =>
+      intro h
+      rw [roundsBV_eq] at h
+      exact h
+
+@[spec] theorem structured_complete {m : Vector (Word 32) 16}
+    {s : Vector (Word 32) 8} :
+    ⦃⌜True⌝⦄ Complete.interp ρ (structured m s)
+    ⦃⇓ out => ⌜∀ i : Fin 8, out[i].Valid ρ⌝⦄ := by
+  unfold structured
+  rw [Complete.interp_bind]
+  apply Triple.bind (Q := fun su =>
+    ⌜Vector.Rel ρ su (s.map (Word.eval ρ.bool))⌝)
+  case hx => exact U.mapM_fromWord_complete
+  case hf =>
+    intro su
+    mvcgen -trivial invariants
+    · ⇓⟨_, w⟩ => ⌜∀ j : Fin 64, w[j].Valid ρ⌝
+    · ⇓⟨_, w⟩ => ⌜∀ j : Fin 64, w[j].Valid ρ⌝
+    · ⇓⟨_, r⟩ => ⌜r.Valid ρ⌝
+    case vc1 =>
+      exact U.allValid_set! (by assumption) (by grind [U.Rel]) _
+    case vc2.h.pre =>
+      intro j
+      rw [U.vector_default_get]
+      exact U.valid_default
+    case vc3.hw => assumption
+    case vc4.hi =>
+      apply Std.Legacy.Range.mem_of_mem_range'
+      apply List.mem_of_range'_eq_append_cons
+      assumption
+    case vc5 =>
+      exact U.allValid_set! (by assumption) (by grind [U.Rel]) _
+    case vc6.h.pre => assumption
+    case vc7.hw => assumption
+    case vc8.hr => assumption
+    case vc9 => assumption
+    case vc10.h.pre =>
+      have hsu : ∀ i : Fin 8, su[i].Valid ρ :=
+        Vector.Rel.valid (by assumption)
+      exact ⟨hsu 0, hsu 1, hsu 2, hsu 3,
+        hsu 4, hsu 5, hsu 6, hsu 7⟩
+    case vc11 =>
+      intro _
+      exact Vector.Rel.valid (by assumption)
+    case vc12 => exact fun h => h
+
+def RoundState.WFRel : WF.Post (RoundState (U n)) :=
+  fun lv rv l r => U.WFRel lv rv l.1 r.1 ∧
+    U.WFRel lv rv l.2.1 r.2.1 ∧ U.WFRel lv rv l.2.2.1 r.2.2.1 ∧
+    U.WFRel lv rv l.2.2.2.1 r.2.2.2.1 ∧
+    U.WFRel lv rv l.2.2.2.2.1 r.2.2.2.2.1 ∧
+    U.WFRel lv rv l.2.2.2.2.2.1 r.2.2.2.2.2.1 ∧
+    U.WFRel lv rv l.2.2.2.2.2.2.1 r.2.2.2.2.2.2.1 ∧
+    U.WFRel lv rv l.2.2.2.2.2.2.2 r.2.2.2.2.2.2.2
+
+theorem scheduleStep_wf (i : Nat) (hi : i ∈ [16:64]) :
+    WF.GadgetSpec (WF.VectorRel U.WFRel) (scheduleStep i) U.WFRel := by
+  unfold WF.GadgetSpec
+  intro left right
+  unfold scheduleStep
+  simp only [U.sum4_eq_sumFixed]
+  apply WF.GadgetSpec.bind_rule U.fromWord_wf_rel
+  · intro lv rv h
+    have hw := h.getElem! (i := i - 15) (by grind) |>.2
+    change Word.WFRel lv rv _ _ at hw
+    exact ((hw.rotateRight 7).xor (hw.rotateRight 18)).xor (hw.shiftRight 3)
+  · intro A s0L s0R hs0
+    apply WF.GadgetSpec.bind_rule U.fromWord_wf_rel
+    · intro lv rv h
+      have hw := (hs0 lv rv h).1.getElem! (i := i - 2) (by grind) |>.2
+      change Word.WFRel lv rv _ _ at hw
+      exact ((hw.rotateRight 17).xor (hw.rotateRight 19)).xor (hw.shiftRight 10)
+    · intro B s1L s1R hs1
+      apply WF.Rel.mono (U.sumFixed_wf.relHom B
+        #v[left[i - 16]!, s0L, left[i - 7]!, s1L]
+        #v[right[i - 16]!, s0R, right[i - 7]!, s1R] (by
+          intro lv rv h
+          have h1 := hs1 lv rv h
+          have h0 := hs0 lv rv h1.1
+          intro j
+          fin_cases j
+          · exact h0.1.getElem! (i := i - 16) (by grind)
+          · exact h0.2
+          · exact h0.1.getElem! (i := i - 7) (by grind)
+          · exact h1.2))
+      exact fun _ _ _ _ h => h.2
 
 theorem roundStep_wf (i : Nat) (hi : i ∈ [0:64]) :
     WF.GadgetSpec
-      (fun lv rv (l r : Vector (U 32) 64 × RoundState) =>
-        WF.VectorRel U.WFRel lv rv l.1 r.1 ∧
-          RoundWFRel lv rv l.2 r.2)
-      (fun x => roundStep i x.1 x.2) RoundWFRel := by
+      (fun lv rv (l r : Vector (U 32) 64 × RoundState (U 32)) =>
+        WF.VectorRel U.WFRel lv rv l.1 r.1 ∧ RoundState.WFRel lv rv l.2 r.2)
+      (roundStep i hi) RoundState.WFRel := by
   unfold WF.GadgetSpec
   rintro ⟨wL, rL⟩ ⟨wR, rR⟩
   unfold roundStep
-  apply WF.GadgetSpec.bind_rule
-    (left := rL.2.2.2.2.1.bits.rotateRight 6 ^^^
-      rL.2.2.2.2.1.bits.rotateRight 11 ^^^ rL.2.2.2.2.1.bits.rotateRight 25)
-    (right := rR.2.2.2.2.1.bits.rotateRight 6 ^^^
-      rR.2.2.2.2.1.bits.rotateRight 11 ^^^ rR.2.2.2.2.1.bits.rotateRight 25)
-    U.fromWord_wf_rel
+  simp only [U.sum6_eq_sumFixed, U.sum7_eq_sumFixed]
+  apply WF.GadgetSpec.bind_rule U.fromWord_wf_rel
   · intro lv rv h
     have he := h.2.2.2.2.2.1.2
-    change Word.WFRel lv rv rL.2.2.2.2.1.bits rR.2.2.2.2.1.bits at he
-    exact ((he.rotateRight 6).xor (he.rotateRight 11)).xor
-      (he.rotateRight 25)
+    change Word.WFRel lv rv _ _ at he
+    exact ((he.rotateRight 6).xor (he.rotateRight 11)).xor (he.rotateRight 25)
   · intro A S1L S1R hS1
     apply WF.GadgetSpec.bind_rule
       (left := ⟨rL.2.2.2.2.1, rL.2.2.2.2.2.1, rL.2.2.2.2.2.2.1⟩)
       (right := ⟨rR.2.2.2.2.1, rR.2.2.2.2.2.1, rR.2.2.2.2.2.2.1⟩)
-      U.ch_wf_rel
-    · intro lv rv hA
-      have h := (hS1 lv rv hA).1.2
-      exact ⟨h.2.2.2.2.1, h.2.2.2.2.2.1, h.2.2.2.2.2.2.1⟩
+      U.ch_wf
+    · intro lv rv h
+      have hr := (hS1 lv rv h).1.2
+      exact ⟨hr.2.2.2.2.1, hr.2.2.2.2.2.1, hr.2.2.2.2.2.2.1⟩
     · intro B chL chR hch
-      apply WF.GadgetSpec.bind_rule
-        (left := rL.1.bits.rotateRight 2 ^^^ rL.1.bits.rotateRight 13 ^^^
-          rL.1.bits.rotateRight 22)
-        (right := rR.1.bits.rotateRight 2 ^^^ rR.1.bits.rotateRight 13 ^^^
-          rR.1.bits.rotateRight 22)
-        U.fromWord_wf_rel
-      · intro lv rv hB
-        have ha := (hS1 lv rv (hch lv rv hB).1).1.2.1.2
-        change Word.WFRel lv rv rL.1.bits rR.1.bits at ha
+      apply WF.GadgetSpec.bind_rule U.fromWord_wf_rel
+      · intro lv rv h
+        have ha := (hS1 lv rv (hch lv rv h).1).1.2.1.2
+        change Word.WFRel lv rv _ _ at ha
         exact ((ha.rotateRight 2).xor (ha.rotateRight 13)).xor
           (ha.rotateRight 22)
       · intro C S0L S0R hS0
         apply WF.GadgetSpec.bind_rule
           (left := ⟨rL.1, rL.2.1, rL.2.2.1⟩)
-          (right := ⟨rR.1, rR.2.1, rR.2.2.1⟩) U.maj_wf_rel
-        · intro lv rv hC
-          have hA := hS0 lv rv hC
-          have hB := hch lv rv hA.1
-          have hr := (hS1 lv rv hB.1).1.2
+          (right := ⟨rR.1, rR.2.1, rR.2.2.1⟩) U.maj_wf
+        · intro lv rv h
+          have hr := (hS1 lv rv (hch lv rv (hS0 lv rv h).1).1).1.2
           exact ⟨hr.1, hr.2.1, hr.2.2.1⟩
         · intro D majL majR hmaj
-          apply WF.GadgetSpec.bind_rule
-            (left := #v[rL.2.2.2.1, rL.2.2.2.2.2.2.2, S1L, chL,
-              (k[i]! : U 32), wL[i]!])
-            (right := #v[rR.2.2.2.1, rR.2.2.2.2.2.2.2, S1R, chR,
-              (k[i]! : U 32), wR[i]!]) U.sumFixed_wf
-          · intro lv rv hD
-            have hC := hmaj lv rv hD
+          apply WF.GadgetSpec.bind_rule U.sumFixed_wf
+          · intro lv rv h
+            have hC := hmaj lv rv h
             have hB := hS0 lv rv hC.1
             have hA := hch lv rv hB.1
             have h0 := hS1 lv rv hA.1
@@ -2210,15 +920,11 @@ theorem roundStep_wf (i : Nat) (hi : i ∈ [0:64]) :
             · exact h0.2
             · exact hA.2
             · exact U.wfRel_bitVec _ _ _
-            · exact hw.getElem! (i := i) (by grind)
+            · exact hw ⟨i, by grind⟩
           · intro E newEL newER hnewE
-            apply WF.GadgetSpec.bind_rule
-              (left := #v[rL.2.2.2.2.2.2.2, S1L, chL, (k[i]! : U 32),
-                wL[i]!, S0L, majL])
-              (right := #v[rR.2.2.2.2.2.2.2, S1R, chR, (k[i]! : U 32),
-                wR[i]!, S0R, majR]) U.sumFixed_wf
-            · intro lv rv hE
-              have hD := hnewE lv rv hE
+            apply WF.GadgetSpec.bind_rule U.sumFixed_wf
+            · intro lv rv h
+              have hD := hnewE lv rv h
               have hC := hmaj lv rv hD.1
               have hB := hS0 lv rv hC.1
               have hA := hch lv rv hB.1
@@ -2231,13 +937,13 @@ theorem roundStep_wf (i : Nat) (hi : i ∈ [0:64]) :
               · exact h0.2
               · exact hA.2
               · exact U.wfRel_bitVec _ _ _
-              · exact hw.getElem! (i := i) (by grind)
+              · exact hw ⟨i, by grind⟩
               · exact hB.2
               · exact hC.2
             · intro F newAL newAR hnewA
               apply WF.Rel.pure
-              intro lv rv hF
-              have hE := hnewA lv rv hF
+              intro lv rv h
+              have hE := hnewA lv rv h
               have hD := hnewE lv rv hE.1
               have hC := hmaj lv rv hD.1
               have hB := hS0 lv rv hC.1
@@ -2247,199 +953,251 @@ theorem roundStep_wf (i : Nat) (hi : i ∈ [0:64]) :
               exact ⟨hE.2, hr.1, hr.2.1, hr.2.2.1, hD.2,
                 hr.2.2.2.2.1, hr.2.2.2.2.2.1, hr.2.2.2.2.2.2.1⟩
 
-theorem RoundWFRel.ofVector
+theorem RoundState.WFRel.ofVector
     {sL sR : Vector (U 32) 8}
     (h : WF.VectorRel U.WFRel lv rv sL sR) :
-    RoundWFRel lv rv
+    RoundState.WFRel lv rv
       ⟨sL[0], sL[1], sL[2], sL[3], sL[4], sL[5], sL[6], sL[7]⟩
       ⟨sR[0], sR[1], sR[2], sR[3], sR[4], sR[5], sR[6], sR[7]⟩ :=
   ⟨h 0, h 1, h 2, h 3, h 4, h 5, h 6, h 7⟩
 
-theorem roundStepBounded_wf (i : Nat) (hi : i ∈ [0:64]) :
+theorem finish_wf :
     WF.GadgetSpec
-      (fun lv rv (l r : Vector (U 32) 64 × RoundState) =>
-        WF.VectorRel U.WFRel lv rv l.1 r.1 ∧ RoundWFRel lv rv l.2 r.2)
-      (fun x => roundStepBounded i hi x.1 x.2) RoundWFRel := by
-  unfold WF.GadgetSpec
-  intro left right
-  change WF.Rel RoundWFRel _
-    (roundStepBounded i hi left.1 left.2)
-    (roundStepBounded i hi right.1 right.2)
-  rw [roundStepBounded_eq, roundStepBounded_eq]
-  exact roundStep_wf i hi left right
-
-def finishRounds (s : Vector (U 32) 8) (r : RoundState) :
-    Circuit (Vector (U 32) 8) := do
-  let a ← U.sumFixed #v[s[0], r.1]
-  let b ← U.sumFixed #v[s[1], r.2.1]
-  let c ← U.sumFixed #v[s[2], r.2.2.1]
-  let d ← U.sumFixed #v[s[3], r.2.2.2.1]
-  let e ← U.sumFixed #v[s[4], r.2.2.2.2.1]
-  let f ← U.sumFixed #v[s[5], r.2.2.2.2.2.1]
-  let g ← U.sumFixed #v[s[6], r.2.2.2.2.2.2.1]
-  let h ← U.sumFixed #v[s[7], r.2.2.2.2.2.2.2]
-  pure #v[a, b, c, d, e, f, g, h]
-
-def roundStateVector (r : RoundState) : Vector (U 32) 8 :=
-  #v[r.1, r.2.1, r.2.2.1, r.2.2.2.1, r.2.2.2.2.1,
-    r.2.2.2.2.2.1, r.2.2.2.2.2.2.1, r.2.2.2.2.2.2.2]
-
-theorem finishRounds_eq_ofFnM (s : Vector (U 32) 8) (r : RoundState) :
-    finishRounds s r = Vector.ofFnM (fun i =>
-      U.sumFixed #v[s[i], (roundStateVector r)[i]]) := by
-  simp [finishRounds, Vector.ofFnM_succ, Vector.ofFnM_zero, roundStateVector]
-
-theorem finishRounds_wf :
-    WF.GadgetSpec
-      (fun lv rv (l r : Vector (U 32) 8 × RoundState) =>
-        WF.VectorRel U.WFRel lv rv l.1 r.1 ∧ RoundWFRel lv rv l.2 r.2)
-      (fun x => finishRounds x.1 x.2) (WF.VectorRel U.WFRel) := by
+      (fun lv rv (l r : Vector (U 32) 8 × RoundState (U 32)) =>
+        WF.VectorRel U.WFRel lv rv l.1 r.1 ∧ RoundState.WFRel lv rv l.2 r.2)
+      finish (WF.VectorRel U.WFRel) := by
   unfold WF.GadgetSpec
   rintro ⟨sL, rL⟩ ⟨sR, rR⟩
-  change WF.Rel (WF.VectorRel U.WFRel) _
-    (finishRounds sL rL) (finishRounds sR rR)
-  rw [finishRounds_eq_ofFnM, finishRounds_eq_ofFnM]
+  rw [finish_eq, finish_eq]
   apply WF.Rel.mono (WF.Rel.vectorOfFnM (S := fun _ => U.WFRel) ?_)
-  · intro lv rv left right h
-    exact h.2
+  · exact fun _ _ _ _ h => h.2
   · intro i A _ _ hA
     apply U.sumFixed_wf.relHom
     intro lv rv h
-    have hinput := hA lv rv h
-    have hs := hinput.1
-    have hr := hinput.2
+    have hin := hA lv rv h
     intro j
     fin_cases j
-    · exact hs i
-    · unfold roundStateVector
-      unfold RoundWFRel at hr
-      fin_cases i
-      · exact hr.1
-      · exact hr.2.1
-      · exact hr.2.2.1
-      · exact hr.2.2.2.1
-      · exact hr.2.2.2.2.1
-      · exact hr.2.2.2.2.2.1
-      · exact hr.2.2.2.2.2.2.1
-      · exact hr.2.2.2.2.2.2.2
+    · exact hin.1 i
+    · unfold roundVector
+      fin_cases i <;> simp only [Fin.getElem_fin] <;>
+        first | exact hin.2.1 | exact hin.2.2.1 |
+          exact hin.2.2.2.1 | exact hin.2.2.2.2.1 |
+          exact hin.2.2.2.2.2.1 | exact hin.2.2.2.2.2.2.1 |
+          exact hin.2.2.2.2.2.2.2.1 | exact hin.2.2.2.2.2.2.2.2
 
-theorem permCircuit_wf :
+theorem structured_wf :
     WF.GadgetSpec
       (fun lv rv
           (l r : Vector (Word 32) 16 × Vector (Word 32) 8) =>
-        WF.VectorRel
-            (fun lv rv (l r : Word 32) => ∀ i : Fin 32,
-              WF.LCEq lv.bool rv.bool l[i] r[i])
-            lv rv l.1 r.1 ∧
-          WF.VectorRel
-            (fun lv rv (l r : Word 32) => ∀ i : Fin 32,
-              WF.LCEq lv.bool rv.bool l[i] r[i])
-            lv rv l.2 r.2)
-      (fun x => permCircuit x.1 x.2)
-      (WF.VectorRel U.WFRel) := by
+        WF.VectorRel Word.WFRel lv rv l.1 r.1 ∧
+          WF.VectorRel Word.WFRel lv rv l.2 r.2)
+      (fun x => structured x.1 x.2) (WF.VectorRel U.WFRel) := by
   unfold WF.GadgetSpec
   intro left right
-  unfold permCircuit
-  simp only [U.sum2_eq_sumFixed, U.sum4_eq_sumFixed,
-    U.sum6_eq_sumFixed, U.sum7_eq_sumFixed]
-  apply WF.GadgetSpec.bind_rule U.mapM_fromWord_wf_full
-  · intro leftVal rightVal h
-    exact h.2
-  · intro B sL sR hs
-    wfgen' using [U.fromWord_wf_rel, U.sumFixed_wf,
-      U.ch_wf, U.maj_wf]
+  unfold structured
+  apply WF.GadgetSpec.bind_rule U.mapM_fromWord_wf
+  · exact fun lv rv h => h.2
+  · intro A sL sR hs
+    wfgen' using [U.fromWord_wf_rel, scheduleStep_wf,
+      roundStep_wf, finish_wf]
     case inv1 => exact WF.VectorRel U.WFRel
     case vc1 =>
-      intro leftVal rightVal _
-      exact U.vector_default_wfRel leftVal rightVal
+      exact fun lv rv _ => U.vector_default_wfRel lv rv
     case vc2 =>
-      wfgen' using [U.fromWord_wf_rel]
-      case vc1 =>
-        rename_i hambient houtPost hB
-        have hout := houtPost leftVal rightVal hB
-        have hinv := hambient leftVal rightVal hout.1
-        exact ⟨hinv.1, WF.VectorRel.set! hinv.2 hout.2 a⟩
-      case vc2 =>
-        rename_i hambient hP
-        have hB := (hambient leftVal rightVal hP).1
-        exact (hs leftVal rightVal hB).1.1 ⟨a, by grind⟩ i
+      intro i hi P wL wR hw
+      apply WF.GadgetSpec.bind_rule U.fromWord_wf_rel
+      · intro lv rv h
+        exact (hs lv rv (hw lv rv h).1).1.1 ⟨i, by grind⟩
+      · intro B outL outR hout
+        apply WF.Rel.pure
+        intro lv rv hB
+        have ho := hout lv rv hB
+        have hin := hw lv rv ho.1
+        exact ⟨ho.1, hin.1, WF.VectorRel.set! hin.2 ho.2 i⟩
     case vc3 =>
-      simp only [forIn_eq_forIn']
-      intro A wL wR hw
+      intro B wL wR hw
       apply WF.Rel.forIn'_range_map_yield_bind_rule
         (I := WF.VectorRel U.WFRel)
-        (xs := [16:64]) (initL := wL) (initR := wR)
         (fL := fun i _ w => scheduleStep i w)
         (fR := fun i _ w => scheduleStep i w)
         (nextL := fun i _ w out => w.set! i out)
         (nextR := fun i _ w out => w.set! i out)
-      case hinit =>
-        intro leftVal rightVal hA
-        exact (hw leftVal rightVal hA).2
+      case hinit => exact fun lv rv h => (hw lv rv h).2
       case hstep =>
         intro i hi P left right hP
         apply WF.GadgetSpec.bind_rule (scheduleStep_wf i hi)
-        · intro leftVal rightVal h
-          exact (hP leftVal rightVal h).2
+        · exact fun lv rv h => (hP lv rv h).2
         · intro C outL outR hout
           apply WF.Rel.pure
-          intro leftVal rightVal hC
-          have ho := hout leftVal rightVal hC
-          have hin := hP leftVal rightVal ho.1
+          intro lv rv hC
+          have ho := hout lv rv hC
+          have hin := hP lv rv ho.1
           exact ⟨ho.1, hin.1, WF.VectorRel.set! hin.2 ho.2 i⟩
       case hcont =>
-        intro C wL wR hleft
-        have H : WF.Rel (WF.VectorRel U.WFRel) C
-            ((forIn' [0:64]
-                ⟨sL[0], sL[1], sL[2], sL[3], sL[4], sL[5], sL[6], sL[7]⟩
-                fun i hi r => do
-                  let out ← roundStepBounded i hi wL r
-                  pure (ForInStep.yield out)) >>= finishRounds sL)
-            ((forIn' [0:64]
-                ⟨sR[0], sR[1], sR[2], sR[3], sR[4], sR[5], sR[6], sR[7]⟩
-                fun i hi r => do
-                  let out ← roundStepBounded i hi wR r
-                  pure (ForInStep.yield out)) >>= finishRounds sR) := by
-          apply WF.Rel.forIn'_range_map_yield_bind_rule
-            (I := RoundWFRel) (xs := [0:64])
-            (fL := fun i hi r => roundStepBounded i hi wL r)
-            (fR := fun i hi r => roundStepBounded i hi wR r)
-            (nextL := fun _ _ _ out => out)
-            (nextR := fun _ _ _ out => out)
-          case hinit =>
-            intro lv rv hC
-            have h0 := hleft lv rv hC
-            have h1 := hw lv rv h0.1
-            apply RoundWFRel.ofVector
-            intro i
-            have hsi := (hs lv rv h1.1).2 i
-            exact ⟨hsi.2.2, hsi.1⟩
-          case hstep =>
-            intro i hi P rL rR hP
-            have hstep := (roundStepBounded_wf i hi).relHom P
-              ⟨wL, rL⟩ ⟨wR, rR⟩ (by
-                intro lv rv h
-                have hp := hP lv rv h
-                exact ⟨(hleft lv rv hp.1).2, hp.2⟩)
-            apply WF.Rel.mono hstep
-            intro lv rv _ _ hout
-            exact ⟨hout.1, (hP lv rv hout.1).1, hout.2⟩
-          case hcont =>
-            intro D rL rR hr
-            apply WF.Rel.mono (finishRounds_wf.relHom D
-              ⟨sL, rL⟩ ⟨sR, rR⟩ ?_)
-            · intro lv rv _ _ h
-              exact h.2
-            · intro lv rv hD
+        intro C wL wR hschedule
+        apply WF.Rel.forIn'_range_map_yield_bind_rule
+          (I := RoundState.WFRel)
+          (fL := fun i hi r => roundStep i hi (wL, r))
+          (fR := fun i hi r => roundStep i hi (wR, r))
+          (nextL := fun _ _ _ out => out)
+          (nextR := fun _ _ _ out => out)
+        case hinit =>
+          intro lv rv hC
+          have h0 := hschedule lv rv hC
+          have h1 := hw lv rv h0.1
+          exact RoundState.WFRel.ofVector (hs lv rv h1.1).2
+        case hstep =>
+          intro i hi P rL rR hP
+          have hstep := (roundStep_wf i hi).relHom P
+            ⟨wL, rL⟩ ⟨wR, rR⟩ (by
+              intro lv rv h
+              have hp := hP lv rv h
+              exact ⟨(hschedule lv rv hp.1).2, hp.2⟩)
+          apply WF.Rel.mono hstep
+          exact fun lv rv _ _ hout =>
+            ⟨hout.1, (hP lv rv hout.1).1, hout.2⟩
+        case hcont =>
+          intro D rL rR hr
+          apply WF.Rel.mono (finish_wf.relHom D
+            ⟨sL, rL⟩ ⟨sR, rR⟩ (by
+              intro lv rv hD
               have hround := hr lv rv hD
-              have h0 := hleft lv rv hround.1
+              have h0 := hschedule lv rv hround.1
               have h1 := hw lv rv h0.1
-              refine ⟨?_, hround.2⟩
-              intro i
-              have hsi := (hs lv rv h1.1).2 i
-              exact ⟨hsi.2.2, hsi.1⟩
-        unfold finishRounds at H
-        simpa only [roundStepBounded, bind_assoc, pure_bind] using H
+              exact ⟨( hs lv rv h1.1).2, hround.2⟩))
+          exact fun _ _ _ _ h => h.2
+
+def permModel (m : Vector (BitVec 32) 16)
+    (s : Vector (BitVec 32) 8) : Vector (BitVec 32) 8 := Id.run $ do
+  let mut w := Vector.replicate 64 (0 : BitVec 32)
+  for h:i in [0:16] do
+    w := w.set! i m[i]
+  for i in [16:64] do
+    let s0 := (w[i-15]!.rotateRight 7) ^^^
+      (w[i-15]!.rotateRight 18) ^^^ (w[i-15]! >>> 3)
+    let s1 := (w[i-2]!.rotateRight 17) ^^^
+      (w[i-2]!.rotateRight 19) ^^^ (w[i-2]! >>> 10)
+    w := w.set! i (w[i-16]! + s0 + w[i-7]! + s1)
+  let mut a := s[0]
+  let mut b := s[1]
+  let mut c := s[2]
+  let mut d := s[3]
+  let mut e := s[4]
+  let mut f := s[5]
+  let mut g := s[6]
+  let mut h := s[7]
+  for h:i in [0:64] do
+    let S1 := (e.rotateRight 6) ^^^ (e.rotateRight 11) ^^^
+      (e.rotateRight 25)
+    let ch := (e &&& f) ^^^ ((~~~e) &&& g)
+    let temp1 := h + S1 + ch + k[i] + w[i]
+    let S0 := (a.rotateRight 2) ^^^ (a.rotateRight 13) ^^^
+      (a.rotateRight 22)
+    let maj := (a &&& b) ^^^ (a &&& c) ^^^ (b &&& c)
+    let temp2 := S0 + maj
+    h := g
+    g := f
+    f := e
+    e := d + temp1
+    d := c
+    c := b
+    b := a
+    a := temp1 + temp2
+  #v[s[0] + a, s[1] + b, s[2] + c, s[3] + d,
+    s[4] + e, s[5] + f, s[6] + g, s[7] + h]
+
+private def permScheduleStepBV (i : Nat)
+    (w : Vector (BitVec 32) 64) :=
+  w.set! i
+    (w[i - 16]! +
+      (w[i - 15]!.rotateRight 7 ^^^ w[i - 15]!.rotateRight 18 ^^^
+        (w[i - 15]! >>> 3)) + w[i - 7]! +
+      (w[i - 2]!.rotateRight 17 ^^^ w[i - 2]!.rotateRight 19 ^^^
+        (w[i - 2]! >>> 10)))
+
+private theorem permScheduleStepBV_eq (i : Nat)
+    (w : Vector (BitVec 32) 64) :
+    permScheduleStepBV i w = w.set! i (scheduleStepBV i w) := by
+  unfold permScheduleStepBV scheduleStepBV
+  congr 1
+  rw [← Array.sum_toList]
+  simp only [List.sum_cons, List.sum_nil]
+  ac_rfl
+
+private def permRoundStepBV (i : Nat) (hi : i ∈ [0:64])
+    (w : Vector (BitVec 32) 64) (r : RoundState (BitVec 32)) :
+    RoundState (BitVec 32) :=
+  ⟨r.2.2.2.2.2.2.2 +
+      (r.2.2.2.2.1.rotateRight 6 ^^^ r.2.2.2.2.1.rotateRight 11 ^^^
+        r.2.2.2.2.1.rotateRight 25) +
+      chBV r.2.2.2.2.1 r.2.2.2.2.2.1 r.2.2.2.2.2.2.1 + k[i] + w[i] +
+      ((r.1.rotateRight 2 ^^^ r.1.rotateRight 13 ^^^ r.1.rotateRight 22) +
+        majBV r.1 r.2.1 r.2.2.1),
+    r.1, r.2.1, r.2.2.1,
+    r.2.2.2.1 + (r.2.2.2.2.2.2.2 +
+      (r.2.2.2.2.1.rotateRight 6 ^^^ r.2.2.2.2.1.rotateRight 11 ^^^
+        r.2.2.2.2.1.rotateRight 25) +
+      chBV r.2.2.2.2.1 r.2.2.2.2.2.1 r.2.2.2.2.2.2.1 + k[i] + w[i]),
+    r.2.2.2.2.1, r.2.2.2.2.2.1, r.2.2.2.2.2.2.1⟩
+
+private theorem permRoundStepBV_eq (i : Nat) (hi : i ∈ [0:64])
+    (w : Vector (BitVec 32) 64) (r : RoundState (BitVec 32)) :
+    permRoundStepBV i hi w r = roundStepBV i w r := by
+  unfold permRoundStepBV roundStepBV
+  simp only [getElem!_pos k i (by grind), getElem!_pos w i (by grind)]
+  simp only [← Array.sum_toList, List.sum_cons, List.sum_nil]
+  congr 1 <;> ac_rfl
+
+theorem permModel_eq_model (m : Vector (BitVec 32) 16)
+    (s : Vector (BitVec 32) 8) : permModel m s = model m s := by
+  unfold permModel model finishBV roundsBV scheduleBV initialSchedule initialRound
+  simp only [Id.run, forIn_eq_forIn', pure_bind]
+  have hinit :
+      (forIn' [0:16] (Vector.replicate 64 (0 : BitVec 32)) fun i hi w =>
+        (pure (ForInStep.yield (w.set! i m[i])) : Id _)) =
+      pure (([0:16].toList).foldl (fun w i => w.set! i m[i]!) default) := by
+    apply Std.Legacy.Range.id_forIn'_yield_congr
+    intro i hi w
+    rw [getElem!_pos m i (by grind)]
+  conv_lhs => enter [1]; rw [hinit]
+  simp only [pure_bind]
+  let init := ([0:16].toList).foldl (fun w i => w.set! i m[i]!)
+    (default : Vector (BitVec 32) 64)
+  have hschedule :
+      (forIn' [16:64] init fun i _ w =>
+        (pure (ForInStep.yield (permScheduleStepBV i w)) : Id _)) =
+      pure (([16:64].toList).foldl
+        (fun w i => w.set! i (scheduleStepBV i w)) init) := by
+    apply Std.Legacy.Range.id_forIn'_yield_congr
+    exact fun i _ w => permScheduleStepBV_eq i w
+  have hscheduleRaw := hschedule
+  dsimp only [permScheduleStepBV] at hscheduleRaw
+  conv_lhs => enter [1]; rw [hscheduleRaw]
+  simp only [pure_bind]
+  let w := ([16:64].toList).foldl
+    (fun w i => w.set! i (scheduleStepBV i w)) init
+  have hround :
+      (forIn' [0:64]
+        ⟨s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7]⟩
+        fun i hi r =>
+          (pure (ForInStep.yield (permRoundStepBV i hi w r)) : Id _)) =
+      pure (([0:64].toList).foldl (fun r i => roundStepBV i w r)
+        ⟨s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7]⟩) := by
+    apply Std.Legacy.Range.id_forIn'_yield_congr
+    exact fun i hi r => permRoundStepBV_eq i hi w r
+  have hroundRaw := hround
+  dsimp only [permRoundStepBV, chBV, majBV] at hroundRaw
+  dsimp only [w, init] at hroundRaw
+  conv_lhs => enter [1]; exact hroundRaw
+  simp only [pure_bind]
+
+def permModel' (input : Vector Bool 768) : Vector Bool 256 :=
+  let m := Vector.ofFn fun i => BitVec.ofNat 32 $
+    Nat.ofBits fun (j : Fin 32) => input[i.val * 32 + j.val]
+  let s := Vector.ofFn fun i => BitVec.ofNat 32 $
+    Nat.ofBits fun (j : Fin 32) => input[512 + i.val * 32 + j.val]
+  let out := permModel m s
+  Vector.ofFn fun i => out[i.val / 32].toNat.testBit (i % 32)
 
 def messageInput (inp : Vector (LC Bool) 768) : Vector (Word 32) 16 :=
   Vector.ofFn fun wi => Word.mk (Vector.ofFn fun bi =>
@@ -2454,44 +1212,18 @@ def flattenOutput (out : Vector (U 32) 8) : Vector (LC Bool) 256 :=
 
 theorem permCirc'_eq (inp : Vector (LC Bool) 768) :
     permCirc' inp = (do
-      let out ← permCircuit (messageInput inp) (stateInput inp)
+      let out ← structured (messageInput inp) (stateInput inp)
       pure (flattenOutput out)) := rfl
 
-theorem messageInput_get (inp : Vector (LC Bool) 768)
-    (wi : Fin 16) (bi : Fin 32) :
-    (messageInput inp)[wi][bi] = inp[wi.val * 32 + bi.val] := by
-  simp only [messageInput, Fin.getElem_fin, Vector.getElem_ofFn]
-  change (Vector.ofFn fun bj : Fin 32 =>
-    inp[wi.val * 32 + bj.val])[bi] = _
-  simp only [Fin.getElem_fin, Vector.getElem_ofFn]
-
-theorem stateInput_get (inp : Vector (LC Bool) 768)
-    (si : Fin 8) (bi : Fin 32) :
-    (stateInput inp)[si][bi] = inp[512 + si.val * 32 + bi.val] := by
-  simp only [stateInput, Fin.getElem_fin, Vector.getElem_ofFn]
-  change (Vector.ofFn fun bj : Fin 32 =>
-    inp[512 + si.val * 32 + bj.val])[bi] = _
-  simp only [Fin.getElem_fin, Vector.getElem_ofFn]
-
-theorem messageInput_wf
+theorem inputWords_wf (index : Fin n → Fin 32 → Fin 768)
     (h : WF.VectorRel (fun lv rv (l r : LC Bool) =>
       WF.LCEq lv.bool rv.bool l r) lv rv left right) :
-    WF.VectorRel (fun lv rv (l r : Word 32) => ∀ i : Fin 32,
-      WF.LCEq lv.bool rv.bool l[i] r[i]) lv rv
-      (messageInput left) (messageInput right) := by
+    WF.VectorRel Word.WFRel lv rv
+      (Vector.ofFn fun wi => Word.mk (Vector.ofFn fun bi => left[index wi bi]))
+      (Vector.ofFn fun wi => Word.mk (Vector.ofFn fun bi => right[index wi bi])) := by
   intro wi bi
-  rw [messageInput_get, messageInput_get]
-  exact h ⟨wi.val * 32 + bi.val, by omega⟩
-
-theorem stateInput_wf
-    (h : WF.VectorRel (fun lv rv (l r : LC Bool) =>
-      WF.LCEq lv.bool rv.bool l r) lv rv left right) :
-    WF.VectorRel (fun lv rv (l r : Word 32) => ∀ i : Fin 32,
-      WF.LCEq lv.bool rv.bool l[i] r[i]) lv rv
-      (stateInput left) (stateInput right) := by
-  intro si bi
-  rw [stateInput_get, stateInput_get]
-  exact h ⟨512 + si.val * 32 + bi.val, by omega⟩
+  simpa only [Word.WFRel, Vector.getElem_ofFn, Fin.getElem_fin] using
+    h (index wi bi)
 
 attribute [irreducible] messageInput stateInput flattenOutput
 
@@ -2507,14 +1239,18 @@ theorem permCirc'_wf :
   rw [permCirc'_eq, permCirc'_eq]
   apply WF.GadgetSpec.bind_rule
     (left := ⟨messageInput left, stateInput left⟩)
-    (right := ⟨messageInput right, stateInput right⟩) permCircuit_wf
+    (right := ⟨messageInput right, stateInput right⟩) structured_wf
   · intro lv rv h
-    exact ⟨messageInput_wf h, stateInput_wf h⟩
+    constructor
+    · unfold messageInput
+      exact inputWords_wf
+        (fun wi bi => ⟨wi.val * 32 + bi.val, by omega⟩) h
+    · unfold stateInput
+      exact inputWords_wf
+        (fun si bi => ⟨512 + si.val * 32 + bi.val, by omega⟩) h
   · intro A outL outR hout
     apply WF.Rel.pure
-    intro lv rv hA
-    have h := hout lv rv hA
-    intro i
+    intro lv rv hA i
     change WF.LCEq lv.bool rv.bool
       (flattenOutput outL)[i] (flattenOutput outR)[i]
     rw [show (flattenOutput outL)[i] =
@@ -2523,63 +1259,38 @@ theorem permCirc'_wf :
       show (flattenOutput outR)[i] =
       outR[i.val / 32].bits.bitsLE[i.val % 32] by
         unfold flattenOutput; simp]
-    exact (h.2 ⟨i.val / 32, by omega⟩).2 ⟨i.val % 32, by omega⟩
+    exact ((hout lv rv hA).2 ⟨i.val / 32, by omega⟩).2
+      ⟨i.val % 32, by omega⟩
 
 theorem permCirc'_complete_triple (inputWires : Vector (LC Bool) 768) :
     ⦃⌜True⌝⦄ Complete.interp ρ (permCirc' inputWires)
-    ⦃ ⇓ _ => ⌜True⌝⦄ := by
-  unfold permCirc'
-  rw [Complete.interp_bind]
-  apply Triple.bind
-    (Q := fun out => ⌜∀ i : Fin 8, out[i].Valid ρ⌝)
-  case hx => exact permCircuit_complete
-  case hf =>
-    intro out
-    mvcgen
+    ⦃⇓ _ => ⌜True⌝⦄ := by
+  rw [permCirc'_eq, Complete.interp_bind]
+  apply Triple.bind (Q := fun out => ⌜∀ i : Fin 8, out[i].Valid ρ⌝)
+  case hx => exact structured_complete
+  case hf => intro out; mvcgen
 
-theorem eval_inputWord (values : Vector Bool 768) (valuation : Nat → Bool)
+theorem inputWords_eval (values : Vector Bool 768) (valuation : Nat → Bool)
     (hvalues : ∀ i : Fin 768, valuation i.val = values[i])
-    (base : Nat) (hbase : base + 32 ≤ 768) :
-    Word.eval valuation
-      { bitsLE := Vector.ofFn fun bi => ({base + bi.val} : LC Bool) } =
-      BitVec.ofNat 32 (Nat.ofBits fun bi : Fin 32 => values[base + bi.val]) := by
+    (index : Fin n → Fin 32 → Fin 768) :
+    (Vector.ofFn fun wi => Word.mk (Vector.ofFn fun bi =>
+      ({(index wi bi).val} : LC Bool))).map (Word.eval valuation) =
+    Vector.ofFn fun wi =>
+      BitVec.ofNat 32 (Nat.ofBits fun bi => values[(index wi bi).val]) := by
+  apply Vector.ext
+  intro wi hwi
   apply BitVec.eq_of_getElem_eq
-  intro i hi
-  simp only [Word.eval, BitVec.getElem_ofFnLE, Fin.getElem_fin,
+  intro bi hbi
+  simp only [Vector.getElem_map, Vector.getElem_ofFn, Word.eval,
+    BitVec.getElem_ofFnLE, Fin.getElem_fin,
     Vector.getElem_ofFn, LC.eval_singleton]
   rw [BitVec.getElem_eq_testBit_toNat, BitVec.toNat_ofNat,
     Nat.mod_eq_of_lt (Nat.ofBits_lt_two_pow _),
-    Nat.testBit_ofBits_lt _ _ hi]
-  exact hvalues ⟨base + i, by omega⟩
-
-theorem messageWords_eval (values : Vector Bool 768) (valuation : Nat → Bool)
-    (hvalues : ∀ i : Fin 768, valuation i.val = values[i]) :
-    (Vector.ofFn fun wi : Fin 16 =>
-      Word.mk (Vector.ofFn fun bi : Fin 32 =>
-        ({wi.val * 32 + bi.val} : LC Bool))).map (Word.eval valuation) =
-    Vector.ofFn fun wi : Fin 16 =>
-      BitVec.ofNat 32 (Nat.ofBits fun bi : Fin 32 =>
-        values[wi.val * 32 + bi.val]) := by
-  apply Vector.ext
-  intro wi hwi
-  simp only [Vector.getElem_map, Vector.getElem_ofFn]
-  exact eval_inputWord values valuation hvalues (wi * 32) (by omega)
-
-theorem stateWords_eval (values : Vector Bool 768) (valuation : Nat → Bool)
-    (hvalues : ∀ i : Fin 768, valuation i.val = values[i]) :
-    (Vector.ofFn fun si : Fin 8 =>
-      Word.mk (Vector.ofFn fun bi : Fin 32 =>
-        ({512 + si.val * 32 + bi.val} : LC Bool))).map (Word.eval valuation) =
-    Vector.ofFn fun si : Fin 8 =>
-      BitVec.ofNat 32 (Nat.ofBits fun bi : Fin 32 =>
-        values[512 + si.val * 32 + bi.val]) := by
-  apply Vector.ext
-  intro si hsi
-  simp only [Vector.getElem_map, Vector.getElem_ofFn]
-  exact eval_inputWord values valuation hvalues (512 + si * 32) (by omega)
+    Nat.testBit_ofBits_lt _ _ hbi]
+  exact hvalues (index ⟨wi, hwi⟩ ⟨bi, hbi⟩)
 
 theorem flatten_eval {out : Vector (U 32) 8}
-    {value : Vector (BitVec 32) 8} (h : VectorEvalRel out value ρ) :
+    {value : Vector (BitVec 32) 8} (h : Vector.Rel ρ out value) :
     (Vector.ofFn fun i : Fin 256 =>
       out[i.val / 32].bits.bitsLE[i.val % 32]).map
         (fun x => x.eval ρ.bool) =
@@ -2589,8 +1300,8 @@ theorem flatten_eval {out : Vector (U 32) 8}
   intro i hi
   simp only [Vector.getElem_map, Vector.getElem_ofFn]
   have hu := h ⟨i / 32, by omega⟩
-  have heval := U.eval_eq_ofFnLE _ hu.1
-  have hbit := congrArg (fun x : BitVec 32 => x[i % 32]'(by omega)) heval
+  have hbit := congrArg (fun x : BitVec 32 => x[i % 32]'(by omega))
+    (U.eval_eq_ofFnLE _ hu.1)
   rw [hu.2] at hbit
   simp only [BitVec.getElem_ofFnLE] at hbit
   rw [BitVec.getElem_eq_testBit_toNat] at hbit
@@ -2598,10 +1309,10 @@ theorem flatten_eval {out : Vector (U 32) 8}
 
 def permSoundPost (wireInputs : Vector (LC Bool) 768)
     (valuation : WF.Valuation) (out : Vector (U 32) 8) : Prop :=
-  VectorEvalRel out
-    (permModel
+  Vector.Rel valuation out
+    (model
       ((messageInput wireInputs).map (Word.eval valuation.bool))
-      ((stateInput wireInputs).map (Word.eval valuation.bool))) valuation
+      ((stateInput wireInputs).map (Word.eval valuation.bool)))
 
 theorem permCirc'_sound_triple (inputs : Vector Bool 768)
     (wit : Nat → Bool)
@@ -2609,16 +1320,15 @@ theorem permCirc'_sound_triple (inputs : Vector Bool 768)
     (cs : Semantics.CS) :
     ⦃⌜True⌝⦄ Sound.interp (Sound.csValuation cs wit)
     (permCirc' (Vector.ofFn fun i => ({i.val} : LC Bool)))
-    ⦃ ⇓ out => ⌜out.map (fun x => x.eval wit) = permModel' inputs⌝⦄ := by
-  rw [permCirc'_eq]
-  rw [Sound.interp_bind]
+    ⦃⇓ out => ⌜out.map (fun x => x.eval wit) = permModel' inputs⌝⦄ := by
+  rw [permCirc'_eq, Sound.interp_bind]
   apply Triple.bind
     (Q := fun out => ⌜permSoundPost
       (Vector.ofFn fun i => ({i.val} : LC Bool))
       (Sound.csValuation cs wit) out⌝)
   case hx =>
     unfold permSoundPost
-    exact permCircuit_sound
+    exact structured_sound
   case hf =>
     intro out
     apply Triple.pure
@@ -2628,13 +1338,15 @@ theorem permCirc'_sound_triple (inputs : Vector Bool 768)
     unfold messageInput stateInput at hout
     unfold flattenOutput
     simp only [Sound.csValuation] at hout ⊢
-    simp only [Fin.getElem_fin, Vector.getElem_ofFn] at hout
+    simp only [Vector.getElem_ofFn] at hout
     rw [flatten_eval hout]
-    have hperm := congrArg₂ permModel
-      (messageWords_eval inputs wit hinputs)
-      (stateWords_eval inputs wit hinputs)
+    have hperm := congrArg₂ model
+      (inputWords_eval inputs wit hinputs
+        (fun wi bi => ⟨wi.val * 32 + bi.val, by omega⟩))
+      (inputWords_eval inputs wit hinputs
+        (fun si bi => ⟨512 + si.val * 32 + bi.val, by omega⟩))
     rw [hperm]
-    rfl
-
+    simp only [permModel', permModel_eq_model]
+    exact True.intro
 
 end Freigen.F2Z.Examples

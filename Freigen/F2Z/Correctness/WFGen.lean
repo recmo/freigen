@@ -399,7 +399,7 @@ private def gadgetHeadOfRule? (declName : Name) : MetaM (Option Name) := do
   let args := conclusion.getAppArgs
   unless args.size ≥ 2 do return none
   let gadget := args[args.size - 2]!
-  return gadget.consumeMData.getAppFn.constName?
+  return (programOp gadget).consumeMData.getAppFn.constName?
 
 private def buildRuleDB (extraRules : Array Name) : MetaM RuleDB := do
   let mut db ← getBuiltinRuleDB
