@@ -699,6 +699,102 @@ theorem optimized_sum8Doubled1_result {a b c d e f g h : U 32}
     mvcgen -trivial
     exact optimized_sum8Doubled1_result ha hb hc hd he hf hg hh hx (by assumption)
 
+theorem optimized_sum9Doubled1_result {a b c d e f g h i : U 32}
+    {half : U 36} {x2 : LC ℤ} {x : BitVec 32}
+    (ha : a.Valid ρ) (hb : b.Valid ρ) (hc : c.Valid ρ) (hd : d.Valid ρ)
+    (he : e.Valid ρ) (hf : f.Valid ρ) (hg : g.Valid ρ) (hh : h.Valid ρ)
+    (hi : i.Valid ρ) (hx : x2.eval ρ.int = 2 * (x.toNat : Int))
+    (hhalf : half.Valid ρ ∧ 2 * half.intVal.eval ρ.int =
+      (2 • (#[a, b, c, d, e, f, g, h, i].map (·.intVal) |>.sum) + x2).eval ρ.int) :
+    U.Rel ρ (half.takeLE 32 (by omega))
+      (a.eval ρ + b.eval ρ + c.eval ρ + d.eval ρ + e.eval ρ + f.eval ρ +
+        g.eval ρ + h.eval ρ + i.eval ρ + x) := by
+  let q := (a.eval ρ).toNat + (b.eval ρ).toNat + (c.eval ρ).toNat +
+    (d.eval ρ).toNat + (e.eval ρ).toNat + (f.eval ρ).toNat +
+    (g.eval ρ).toNat + (h.eval ρ).toNat + (i.eval ρ).toNat + x.toNat
+  have htotal :
+      (2 • (#[a, b, c, d, e, f, g, h, i].map (·.intVal) |>.sum) + x2).eval ρ.int =
+        2 * q := by
+    simp only [LC.eval_add, LC.eval_nsmul, LC.eval_array_sum]
+    norm_num [U.intVal_eval_eq_eval_toNat a ha,
+      U.intVal_eval_eq_eval_toNat b hb, U.intVal_eval_eq_eval_toNat c hc,
+      U.intVal_eval_eq_eval_toNat d hd, U.intVal_eval_eq_eval_toNat e he,
+      U.intVal_eval_eq_eval_toNat f hf, U.intVal_eval_eq_eval_toNat g hg,
+      U.intVal_eval_eq_eval_toNat h hh, U.intVal_eval_eq_eval_toNat i hi, hx]
+    dsimp [q]
+    omega
+  have hhalf2 : half.intVal.eval ρ.int = q := by
+    rw [htotal] at hhalf
+    omega
+  have hhalfNat : (half.intVal.eval ρ.int).toNat = q := by rw [hhalf2]; simp
+  refine ⟨U.takeLE_valid half hhalf.1 (by omega), ?_⟩
+  rw [U.takeLE_eval half hhalf.1 (by omega), hhalfNat]
+  dsimp [q]
+  simp [BitVec.ofNat_add]
+
+@[spec] theorem optimized_sum9Doubled1_sound {a b c d e f g h i : U 32}
+    {x2 : LC ℤ} {x : BitVec 32}
+    (ha : a.Valid ρ) (hb : b.Valid ρ) (hc : c.Valid ρ) (hd : d.Valid ρ)
+    (he : e.Valid ρ) (hf : f.Valid ρ) (hg : g.Valid ρ) (hh : h.Valid ρ)
+    (hi : i.Valid ρ) (hx : x2.eval ρ.int = 2 * (x.toNat : Int)) :
+    ⦃⌜True⌝⦄ Sound.interp ρ (U.sum9Doubled1 a b c d e f g h i x2)
+    ⦃⇓ out => ⌜U.Rel ρ out
+      (a.eval ρ + b.eval ρ + c.eval ρ + d.eval ρ + e.eval ρ + f.eval ρ +
+        g.eval ρ + h.eval ρ + i.eval ρ + x)⌝⦄ := by
+  unfold U.sum9Doubled1
+  rw [Sound.interp_bind]
+  apply Triple.bind (Q := fun half => ⌜half.Valid ρ ∧
+    2 * half.intVal.eval ρ.int =
+      (2 • (#[a, b, c, d, e, f, g, h, i].map (·.intVal) |>.sum) + x2).eval ρ.int⌝)
+  case hx => exact optimized_fromDoubledInt36_sound
+  case hf =>
+    intro half
+    mvcgen -trivial
+    exact optimized_sum9Doubled1_result ha hb hc hd he hf hg hh hi hx (by assumption)
+
+@[spec] theorem optimized_sum9Doubled1_complete {a b c d e f g h i : U 32}
+    {x2 : LC ℤ} {x : BitVec 32}
+    (ha : a.Valid ρ) (hb : b.Valid ρ) (hc : c.Valid ρ) (hd : d.Valid ρ)
+    (he : e.Valid ρ) (hf : f.Valid ρ) (hg : g.Valid ρ) (hh : h.Valid ρ)
+    (hi : i.Valid ρ) (hx : x2.eval ρ.int = 2 * (x.toNat : Int)) :
+    ⦃⌜True⌝⦄ Complete.interp ρ (U.sum9Doubled1 a b c d e f g h i x2)
+    ⦃⇓ out => ⌜U.Rel ρ out
+      (a.eval ρ + b.eval ρ + c.eval ρ + d.eval ρ + e.eval ρ + f.eval ρ +
+        g.eval ρ + h.eval ρ + i.eval ρ + x)⌝⦄ := by
+  let q := (a.eval ρ).toNat + (b.eval ρ).toNat + (c.eval ρ).toNat +
+    (d.eval ρ).toNat + (e.eval ρ).toNat + (f.eval ρ).toNat +
+    (g.eval ρ).toNat + (h.eval ρ).toNat + (i.eval ρ).toNat + x.toNat
+  have htotal :
+      (2 • (#[a, b, c, d, e, f, g, h, i].map (·.intVal) |>.sum) + x2).eval ρ.int =
+        2 * q := by
+    simp only [LC.eval_add, LC.eval_nsmul, LC.eval_array_sum]
+    norm_num [U.intVal_eval_eq_eval_toNat a ha,
+      U.intVal_eval_eq_eval_toNat b hb, U.intVal_eval_eq_eval_toNat c hc,
+      U.intVal_eval_eq_eval_toNat d hd, U.intVal_eval_eq_eval_toNat e he,
+      U.intVal_eval_eq_eval_toNat f hf, U.intVal_eval_eq_eval_toNat g hg,
+      U.intVal_eval_eq_eval_toNat h hh, U.intVal_eval_eq_eval_toNat i hi, hx]
+    dsimp [q]
+    omega
+  have h36 : q < 2^36 := by
+    have ha' := (a.eval ρ).isLt; have hb' := (b.eval ρ).isLt
+    have hc' := (c.eval ρ).isLt; have hd' := (d.eval ρ).isLt
+    have he' := (e.eval ρ).isLt; have hf' := (f.eval ρ).isLt
+    have hg' := (g.eval ρ).isLt; have hh' := (h.eval ρ).isLt
+    have hi' := (i.eval ρ).isLt; have hx' := x.isLt
+    dsimp [q]
+    norm_num at ha' hb' hc' hd' he' hf' hg' hh' hi' hx' ⊢
+    omega
+  unfold U.sum9Doubled1
+  rw [Complete.interp_bind]
+  apply Triple.bind (Q := fun half => ⌜half.Valid ρ ∧
+    2 * half.intVal.eval ρ.int =
+      (2 • (#[a, b, c, d, e, f, g, h, i].map (·.intVal) |>.sum) + x2).eval ρ.int⌝)
+  case hx => exact optimized_fromDoubledInt36_complete q htotal h36
+  case hf =>
+    intro half
+    mvcgen -trivial
+    exact optimized_sum9Doubled1_result ha hb hc hd he hf hg hh hi hx (by assumption)
+
 theorem optimized_sum8Doubled1_wf :
     WF.GadgetSpec
       (fun lv rv (l r : Vector (U 32) 8 × LC ℤ) =>
@@ -723,6 +819,38 @@ theorem optimized_sum8Doubled1_wf :
     have h6 := (h.1 (6 : Fin 8)).1
     have h7 := (h.1 (7 : Fin 8)).1
     norm_num at h0 h1 h2 h3 h4 h5 h6 h7 ⊢
+    omega
+  · intro A outL outR hout
+    apply WF.Rel.pure
+    intro lv rv hA
+    have h := hout lv rv hA
+    constructor
+    · apply WF.LCEq.uIntVal
+      intro i
+      simpa [U.takeLE, Fin.getElem_fin] using h.2.2.1 (i.castLE (by omega))
+    · intro i
+      simpa [U.takeLE, Fin.getElem_fin] using h.2.1 (i.castLE (by omega))
+
+theorem optimized_sum9Doubled1_wf :
+    WF.GadgetSpec
+      (fun lv rv (l r : Vector (U 32) 9 × LC ℤ) =>
+        WF.VectorRel U.WFRel lv rv l.1 r.1 ∧ WF.LCEq lv.int rv.int l.2 r.2)
+      (fun z => U.sum9Doubled1 z.1[0] z.1[1] z.1[2] z.1[3]
+        z.1[4] z.1[5] z.1[6] z.1[7] z.1[8] z.2) U.WFRel := by
+  unfold WF.GadgetSpec
+  intro left right
+  unfold U.sum9Doubled1
+  apply WF.GadgetSpec.bind_rule optimized_fromDoubledInt36_wf_full
+  · intro lv rv h
+    unfold WF.LCEq at h ⊢
+    simp only [LC.eval_add, LC.eval_nsmul, LC.eval_array_sum]
+    simp only [WF.VectorRel, U.WFRel, WF.LCEq] at h
+    have h0 := (h.1 (0 : Fin 9)).1; have h1 := (h.1 (1 : Fin 9)).1
+    have h2 := (h.1 (2 : Fin 9)).1; have h3 := (h.1 (3 : Fin 9)).1
+    have h4 := (h.1 (4 : Fin 9)).1; have h5 := (h.1 (5 : Fin 9)).1
+    have h6 := (h.1 (6 : Fin 9)).1; have h7 := (h.1 (7 : Fin 9)).1
+    have h8 := (h.1 (8 : Fin 9)).1
+    norm_num at h0 h1 h2 h3 h4 h5 h6 h7 h8 ⊢
     omega
   · intro A outL outR hout
     apply WF.Rel.pure
@@ -794,6 +922,128 @@ theorem optimized_sumAFromE_result {d newE S0 : U 32} {half : U 34}
     _ = newE.eval ρ + S0.eval ρ + maj := by
           rw [Nat.sub_add_cancel hdle]
           simp [BitVec.ofNat_add, BitVec.ofNat_toNat]
+
+theorem optimized_sumAFinal_result {d outE S0 stateA stateE : U 32}
+    {half : U 35} {maj2 : LC ℤ} {maj : BitVec 32}
+    (hd : d.Valid ρ) (he : outE.Valid ρ) (hS0 : S0.Valid ρ)
+    (hA : stateA.Valid ρ) (hE : stateE.Valid ρ)
+    (hmaj : maj2.eval ρ.int = 2 * (maj.toNat : Int))
+    (hhalf : half.Valid ρ ∧ 2 * half.intVal.eval ρ.int =
+      (2 • (outE.intVal + S0.intVal + stateA.intVal - stateE.intVal - d.intVal) +
+        maj2 + LC.ofConst (2^34 : ℤ)).eval ρ.int) :
+    U.Rel ρ (half.takeLE 32 (by omega))
+      (outE.eval ρ + S0.eval ρ + stateA.eval ρ + maj - stateE.eval ρ - d.eval ρ) := by
+  let pos := (outE.eval ρ).toNat + (S0.eval ρ).toNat +
+    (stateA.eval ρ).toNat + maj.toNat + 2^33
+  let neg := (stateE.eval ρ).toNat + (d.eval ρ).toNat
+  let q := pos - neg
+  have hle : neg ≤ pos := by
+    have hd' := (d.eval ρ).isLt; have he' := (outE.eval ρ).isLt
+    have hs' := (S0.eval ρ).isLt; have ha' := (stateA.eval ρ).isLt
+    have hse' := (stateE.eval ρ).isLt; have hm' := maj.isLt
+    dsimp [neg, pos]
+    norm_num at hd' he' hs' ha' hse' hm' ⊢
+    omega
+  have htotal :
+      (2 • (outE.intVal + S0.intVal + stateA.intVal - stateE.intVal - d.intVal) +
+        maj2 + LC.ofConst (2^34 : ℤ)).eval ρ.int = 2 * q := by
+    simp only [LC.eval_add, LC.eval_sub, LC.eval_nsmul, LC.eval_ofConst,
+      U.intVal_eval_eq_eval_toNat outE he,
+      U.intVal_eval_eq_eval_toNat S0 hS0,
+      U.intVal_eval_eq_eval_toNat stateA hA,
+      U.intVal_eval_eq_eval_toNat stateE hE,
+      U.intVal_eval_eq_eval_toNat d hd, hmaj]
+    rw [show (q : Int) = (pos : Int) - neg by
+      rw [Int.ofNat_sub hle]]
+    dsimp [pos, neg]
+    ring
+  have hhalf2 : half.intVal.eval ρ.int = q := by rw [htotal] at hhalf; omega
+  have hhalfNat : (half.intVal.eval ρ.int).toNat = q := by rw [hhalf2]; simp
+  refine ⟨U.takeLE_valid half hhalf.1 (by omega), ?_⟩
+  rw [U.takeLE_eval half hhalf.1 (by omega), hhalfNat]
+  apply BitVec.eq_sub_iff_add_eq.mpr
+  apply BitVec.eq_sub_iff_add_eq.mpr
+  calc
+    BitVec.ofNat 32 q + d.eval ρ + stateE.eval ρ =
+        BitVec.ofNat 32 (q + (d.eval ρ).toNat + (stateE.eval ρ).toNat) := by
+      simp [BitVec.ofNat_add, BitVec.ofNat_toNat]
+    _ = BitVec.ofNat 32 pos := by
+      congr 1
+      dsimp [q, pos, neg]
+      omega
+    _ = outE.eval ρ + S0.eval ρ + stateA.eval ρ + maj := by
+      dsimp [pos]
+      simp [BitVec.ofNat_add, BitVec.ofNat_toNat]
+
+@[spec] theorem optimized_sumAFinal_sound {d outE S0 stateA stateE : U 32}
+    {maj2 : LC ℤ} {maj : BitVec 32}
+    (hd : d.Valid ρ) (he : outE.Valid ρ) (hS0 : S0.Valid ρ)
+    (hA : stateA.Valid ρ) (hE : stateE.Valid ρ)
+    (hmaj : maj2.eval ρ.int = 2 * (maj.toNat : Int)) :
+    ⦃⌜True⌝⦄ Sound.interp ρ (U.sumAFinal d outE S0 stateA stateE maj2)
+    ⦃⇓ out => ⌜U.Rel ρ out
+      (outE.eval ρ + S0.eval ρ + stateA.eval ρ + maj - stateE.eval ρ - d.eval ρ)⌝⦄ := by
+  unfold U.sumAFinal
+  rw [Sound.interp_bind]
+  apply Triple.bind (Q := fun half => ⌜half.Valid ρ ∧
+    2 * half.intVal.eval ρ.int =
+      (2 • (outE.intVal + S0.intVal + stateA.intVal - stateE.intVal - d.intVal) +
+        maj2 + LC.ofConst (2^34 : ℤ)).eval ρ.int⌝)
+  case hx => exact optimized_fromDoubledInt35_sound
+  case hf =>
+    intro half
+    mvcgen -trivial
+    exact optimized_sumAFinal_result hd he hS0 hA hE hmaj (by assumption)
+
+@[spec] theorem optimized_sumAFinal_complete {d outE S0 stateA stateE : U 32}
+    {maj2 : LC ℤ} {maj : BitVec 32}
+    (hd : d.Valid ρ) (he : outE.Valid ρ) (hS0 : S0.Valid ρ)
+    (hA : stateA.Valid ρ) (hE : stateE.Valid ρ)
+    (hmaj : maj2.eval ρ.int = 2 * (maj.toNat : Int)) :
+    ⦃⌜True⌝⦄ Complete.interp ρ (U.sumAFinal d outE S0 stateA stateE maj2)
+    ⦃⇓ out => ⌜U.Rel ρ out
+      (outE.eval ρ + S0.eval ρ + stateA.eval ρ + maj - stateE.eval ρ - d.eval ρ)⌝⦄ := by
+  let pos := (outE.eval ρ).toNat + (S0.eval ρ).toNat +
+    (stateA.eval ρ).toNat + maj.toNat + 2^33
+  let neg := (stateE.eval ρ).toNat + (d.eval ρ).toNat
+  let q := pos - neg
+  have hle : neg ≤ pos := by
+    have hd' := (d.eval ρ).isLt; have he' := (outE.eval ρ).isLt
+    have hs' := (S0.eval ρ).isLt; have ha' := (stateA.eval ρ).isLt
+    have hse' := (stateE.eval ρ).isLt; have hm' := maj.isLt
+    dsimp [neg, pos]
+    norm_num at hd' he' hs' ha' hse' hm' ⊢
+    omega
+  have htotal :
+      (2 • (outE.intVal + S0.intVal + stateA.intVal - stateE.intVal - d.intVal) +
+        maj2 + LC.ofConst (2^34 : ℤ)).eval ρ.int = 2 * q := by
+    simp only [LC.eval_add, LC.eval_sub, LC.eval_nsmul, LC.eval_ofConst,
+      U.intVal_eval_eq_eval_toNat outE he,
+      U.intVal_eval_eq_eval_toNat S0 hS0,
+      U.intVal_eval_eq_eval_toNat stateA hA,
+      U.intVal_eval_eq_eval_toNat stateE hE,
+      U.intVal_eval_eq_eval_toNat d hd, hmaj]
+    rw [show (q : Int) = (pos : Int) - neg by rw [Int.ofNat_sub hle]]
+    dsimp [pos, neg]
+    ring
+  have h35 : q < 2^35 := by
+    apply lt_of_le_of_lt (Nat.sub_le _ _)
+    dsimp [pos]
+    have he' := (outE.eval ρ).isLt; have hs' := (S0.eval ρ).isLt
+    have ha' := (stateA.eval ρ).isLt; have hm' := maj.isLt
+    norm_num at he' hs' ha' hm' ⊢
+    omega
+  unfold U.sumAFinal
+  rw [Complete.interp_bind]
+  apply Triple.bind (Q := fun half => ⌜half.Valid ρ ∧
+    2 * half.intVal.eval ρ.int =
+      (2 • (outE.intVal + S0.intVal + stateA.intVal - stateE.intVal - d.intVal) +
+        maj2 + LC.ofConst (2^34 : ℤ)).eval ρ.int⌝)
+  case hx => exact optimized_fromDoubledInt35_complete q htotal h35
+  case hf =>
+    intro half
+    mvcgen -trivial
+    exact optimized_sumAFinal_result hd he hS0 hA hE hmaj (by assumption)
 
 @[spec] theorem optimized_sumAFromE_sound {d newE S0 : U 32} {maj2 : LC ℤ}
     {maj : BitVec 32} (hd : d.Valid ρ) (he : newE.Valid ρ)
@@ -870,6 +1120,35 @@ theorem optimized_sumAFromE_wf :
   intro left right
   unfold U.sumAFromE
   apply WF.GadgetSpec.bind_rule optimized_fromDoubledInt34_wf_full
+  · intro lv rv h
+    unfold WF.LCEq at h ⊢
+    simp only [LC.eval_add, LC.eval_sub, LC.eval_nsmul, LC.eval_ofConst]
+    simp only [U.WFRel, WF.LCEq] at h
+    grind
+  · intro A outL outR hout
+    apply WF.Rel.pure
+    intro lv rv hA
+    have h := hout lv rv hA
+    constructor
+    · apply WF.LCEq.uIntVal
+      intro i
+      simpa [U.takeLE, Fin.getElem_fin] using h.2.2.1 (i.castLE (by omega))
+    · intro i
+      simpa [U.takeLE, Fin.getElem_fin] using h.2.1 (i.castLE (by omega))
+
+theorem optimized_sumAFinal_wf :
+    WF.GadgetSpec
+      (fun lv rv (l r : U 32 × U 32 × U 32 × U 32 × U 32 × LC ℤ) =>
+        U.WFRel lv rv l.1 r.1 ∧ U.WFRel lv rv l.2.1 r.2.1 ∧
+        U.WFRel lv rv l.2.2.1 r.2.2.1 ∧ U.WFRel lv rv l.2.2.2.1 r.2.2.2.1 ∧
+        U.WFRel lv rv l.2.2.2.2.1 r.2.2.2.2.1 ∧
+        WF.LCEq lv.int rv.int l.2.2.2.2.2 r.2.2.2.2.2)
+      (fun z => U.sumAFinal z.1 z.2.1 z.2.2.1 z.2.2.2.1
+        z.2.2.2.2.1 z.2.2.2.2.2) U.WFRel := by
+  unfold WF.GadgetSpec
+  intro left right
+  unfold U.sumAFinal
+  apply WF.GadgetSpec.bind_rule optimized_fromDoubledInt35_wf_full
   · intro lv rv h
     unfold WF.LCEq at h ⊢
     simp only [LC.eval_add, LC.eval_sub, LC.eval_nsmul, LC.eval_ofConst]
@@ -984,6 +1263,28 @@ def inlineScheduleRoundBV (i : Nat) (w : Vector (BitVec 32) 64)
   let newA := #[r.2.2.2.2.2.2.2, S1, ch, k[i]!, wi, S0, maj].sum
   ⟨newA, r.1, r.2.1, r.2.2.1, newE,
     r.2.2.2.2.1, r.2.2.2.2.2.1, r.2.2.2.2.2.2.1⟩
+
+set_option maxHeartbeats 1000000 in
+private theorem inlineScheduleRoundBV_a (i : Nat) (w : Vector (BitVec 32) 64)
+    (r : RoundState (BitVec 32)) :
+    (inlineScheduleRoundBV i w r).1 =
+      #[r.2.2.2.2.2.2.2,
+        r.2.2.2.2.1.rotateRight 6 ^^^ r.2.2.2.2.1.rotateRight 11 ^^^
+          r.2.2.2.2.1.rotateRight 25,
+        chBV r.2.2.2.2.1 r.2.2.2.2.2.1 r.2.2.2.2.2.2.1, k[i]!,
+        scheduleStepBV i w,
+        r.1.rotateRight 2 ^^^ r.1.rotateRight 13 ^^^ r.1.rotateRight 22,
+        majBV r.1 r.2.1 r.2.2.1].sum := rfl
+
+set_option maxHeartbeats 1000000 in
+private theorem inlineScheduleRoundBV_e (i : Nat) (w : Vector (BitVec 32) 64)
+    (r : RoundState (BitVec 32)) :
+    (inlineScheduleRoundBV i w r).2.2.2.2.1 =
+      #[r.2.2.2.1, r.2.2.2.2.2.2.2,
+        r.2.2.2.2.1.rotateRight 6 ^^^ r.2.2.2.2.1.rotateRight 11 ^^^
+          r.2.2.2.2.1.rotateRight 25,
+        chBV r.2.2.2.2.1 r.2.2.2.2.2.1 r.2.2.2.2.2.2.1, k[i]!,
+        scheduleStepBV i w].sum := rfl
 
 private theorem scheduleResult {w : Vector (U 32) 64}
     {wv : Vector (BitVec 32) 64} (hw : Vector.Rel ρ w wv)
@@ -1394,6 +1695,38 @@ theorem finishBV_get (s : Vector (BitVec 32) 8)
     (finishBV s r)[i] = s[i] + (roundVector r)[i] := by
   fin_cases i <;> rfl
 
+def finalRoundCoreBV (i : Nat) (w : Vector (BitVec 32) 64)
+    (r : RoundState (BitVec 32)) (s : Vector (BitVec 32) 8) :
+    BitVec 32 × BitVec 32 :=
+  let S1 := r.2.2.2.2.1.rotateRight 6 ^^^ r.2.2.2.2.1.rotateRight 11 ^^^
+    r.2.2.2.2.1.rotateRight 25
+  let ch := chBV r.2.2.2.2.1 r.2.2.2.2.2.1 r.2.2.2.2.2.2.1
+  let S0 := r.1.rotateRight 2 ^^^ r.1.rotateRight 13 ^^^ r.1.rotateRight 22
+  let maj := majBV r.1 r.2.1 r.2.2.1
+  let wi := scheduleStepBV i w
+  let outE := s[4] +
+    #[r.2.2.2.1, r.2.2.2.2.2.2.2, S1, ch, k[i]!, wi].sum
+  let outA := outE + S0 + s[0] + maj - s[4] - r.2.2.2.1
+  (outA, outE)
+
+theorem finalRoundCoreBV_eq (i : Nat) (w : Vector (BitVec 32) 64)
+    (r : RoundState (BitVec 32)) (s : Vector (BitVec 32) 8) :
+    finalRoundCoreBV i w r s =
+      ((finishBV s (inlineScheduleRoundBV i w r))[0],
+        (finishBV s (inlineScheduleRoundBV i w r))[4]) := by
+  apply Prod.ext
+  · change (finalRoundCoreBV i w r s).1 =
+      s[0] + (inlineScheduleRoundBV i w r).1
+    unfold finalRoundCoreBV inlineScheduleRoundBV
+    simp only [← Array.sum_toList, List.sum_cons, List.sum_nil]
+    apply BitVec.sub_eq_iff_eq_add.mpr
+    apply BitVec.sub_eq_iff_eq_add.mpr
+    ac_rfl
+  · change (finalRoundCoreBV i w r s).2 =
+      s[4] + (inlineScheduleRoundBV i w r).2.2.2.2.1
+    unfold finalRoundCoreBV inlineScheduleRoundBV
+    simp only [← Array.sum_toList, List.sum_cons, List.sum_nil]
+
 theorem finish_eq (s : Vector (U 32) 8) (r : RoundState (U 32)) :
     finish (s, r) = Vector.ofFnM (fun i =>
       U.sumFixed #v[s[i], (roundVector r)[i]]) := by
@@ -1428,6 +1761,287 @@ theorem finish_eq (s : Vector (U 32) 8) (r : RoundState (U 32)) :
       ((RoundState.Rel.refl hr).vector i)) (by simp) (by
         simp only [PostCond.entails, SPred.entails_nil]
         exact ⟨fun _ h => h.1, ExceptConds.entails.refl _⟩)
+
+set_option maxRecDepth 4000 in
+set_option maxHeartbeats 100000 in
+@[spec] theorem finalRoundCore_sound {w : Vector (U 32) 64}
+    {wv : Vector (BitVec 32) 64} (hw : Vector.Rel ρ w wv)
+    {r : RoundState (U 32)} {rv : RoundState (BitVec 32)}
+    (hr : RoundState.Rel ρ r rv) {s : Vector (U 32) 8}
+    {sv : Vector (BitVec 32) 8} (hs : Vector.Rel ρ s sv)
+    (i : Nat) (hi : i ∈ [16:64]) :
+    ⦃⌜True⌝⦄ Sound.interp ρ (finalRoundCore i hi (w, r, s))
+    ⦃⇓ out => ⌜U.Rel ρ out.1 (finalRoundCoreBV i wv rv sv).1 ∧
+      U.Rel ρ out.2 (finalRoundCoreBV i wv rv sv).2⌝⦄ := by
+  unfold finalRoundCore finalRoundBody finalRoundTransforms finalRoundSums
+  mvcgen -trivial
+  case vc1.hw => exact Vector.Rel.valid hw
+  case vc2.hi => exact hi
+  case vc3.hu | vc4.hv | vc5.hw | vc6.hu | vc7.hv | vc8.hw =>
+    first | exact hr.a.1 | exact hr.b.1 | exact hr.c.1 |
+      exact hr.e.1 | exact hr.f.1 | exact hr.g.1
+  case vc9.x =>
+    exact chBV (r.2.2.2.2.1.eval ρ) (r.2.2.2.2.2.1.eval ρ)
+      (r.2.2.2.2.2.2.1.eval ρ)
+  case vc10.ha => exact hr.d.1
+  case vc11.hb => exact hr.h.1
+  case vc12.hc => grind [U.Rel]
+  case vc13.hd => exact U.valid_bitVec _
+  case vc14.he => exact U.valid_getElem! (Vector.Rel.valid hw) (by grind)
+  case vc15.hf => grind [U.Rel]
+  case vc16.hg => exact U.valid_getElem! (Vector.Rel.valid hw) (by grind)
+  case vc17.hh => grind [U.Rel]
+  case vc18.hi => exact (hs 4).1
+  case vc19.hx => assumption
+  case vc20.maj => exact majBV (r.1.eval ρ) (r.2.1.eval ρ) (r.2.2.1.eval ρ)
+  case vc21.hd => exact hr.d.1
+  case vc22.he => grind [U.Rel]
+  case vc23.hS0 => grind [U.Rel]
+  case vc24.hA => exact (hs 0).1
+  case vc25.hE => exact (hs 4).1
+  case vc26.hmaj => assumption
+  case vc27.success =>
+    rename_i parts hparts S1 hS1 ch2 hch S0 hS0 maj2 hmaj
+      outE houtE outA houtA
+    have hs0' := (hw.getElem! (i := i - 15) (by grind)).rotateXorShift
+      (by decide) (by decide) hparts.1
+    have hs1' := (hw.getElem! (i := i - 2) (by grind)).rotateXorShift
+      (by decide) (by decide) hparts.2
+    have hS1' := hr.e.rotateXor3 (by decide) (by decide) (by decide) hS1
+    have hS0' := hr.a.rotateXor3 (by decide) (by decide) (by decide) hS0
+    have houtE' : outE.eval ρ = (finalRoundCoreBV i wv rv sv).2 := by
+      unfold finalRoundCoreBV scheduleStepBV
+      simp only [getElem!_pos k i (by grind)]
+      simp only [houtE.2, hS1'.2, hr.d.2, hr.h.2, (hs 4).2,
+        hs0'.2, hs1'.2,
+        (hw.getElem! (i := i - 16) (by grind)).2,
+        (hw.getElem! (i := i - 7) (by grind)).2]
+      rw [show s[4].eval ρ = sv[4] from (hs 4).2]
+      rw [show chBV (r.2.2.2.2.1.eval ρ) (r.2.2.2.2.2.1.eval ρ)
+          (r.2.2.2.2.2.2.1.eval ρ) =
+          chBV rv.2.2.2.2.1 rv.2.2.2.2.2.1 rv.2.2.2.2.2.2.1 by
+        rw [hr.e.2, hr.f.2, hr.g.2]]
+      simp only [U.eval_bitVec, ← Array.sum_toList, List.sum_cons, List.sum_nil]
+      ac_rfl
+    have houtA' : outA.eval ρ = (finalRoundCoreBV i wv rv sv).1 := by
+      unfold finalRoundCoreBV
+      simp only [houtA.2, houtE', hS0'.2, (hs 0).2, (hs 4).2, hr.d.2]
+      rw [show s[0].eval ρ = sv[0] from (hs 0).2,
+        show s[4].eval ρ = sv[4] from (hs 4).2]
+      rw [show majBV (r.1.eval ρ) (r.2.1.eval ρ) (r.2.2.1.eval ρ) =
+          majBV rv.1 rv.2.1 rv.2.2.1 by rw [hr.a.2, hr.b.2, hr.c.2]]
+      rfl
+    constructor
+    · exact ⟨houtA.1, houtA'⟩
+    · exact ⟨houtE.1, houtE'⟩
+
+set_option maxHeartbeats 100000 in
+@[spec] theorem finalRoundCore_complete {w : Vector (U 32) 64}
+    (hw : ∀ j : Fin 64, w[j].Valid ρ) {r : RoundState (U 32)}
+    (hr : r.Valid ρ) {s : Vector (U 32) 8}
+    (hs : ∀ j : Fin 8, s[j].Valid ρ) (i : Nat) (hi : i ∈ [16:64]) :
+    ⦃⌜True⌝⦄ Complete.interp ρ (finalRoundCore i hi (w, r, s))
+    ⦃⇓ out => ⌜out.1.Valid ρ ∧ out.2.Valid ρ⌝⦄ := by
+  unfold finalRoundCore finalRoundBody finalRoundTransforms finalRoundSums
+  mvcgen -trivial
+  case vc1.hw => exact hw
+  case vc2.hi => exact hi
+  case vc3.hu | vc4.hv | vc5.hw | vc6.hu | vc7.hv | vc8.hw =>
+    first | exact hr.1 | exact hr.2.1 | exact hr.2.2.1 |
+      exact hr.2.2.2.2.1 | exact hr.2.2.2.2.2.1 |
+      exact hr.2.2.2.2.2.2.1
+  case vc9.x =>
+    exact chBV (r.2.2.2.2.1.eval ρ) (r.2.2.2.2.2.1.eval ρ)
+      (r.2.2.2.2.2.2.1.eval ρ)
+  case vc10.ha => exact hr.2.2.2.1
+  case vc11.hb => exact hr.2.2.2.2.2.2.2
+  case vc12.hc => grind [U.Rel]
+  case vc13.hd => exact U.valid_bitVec _
+  case vc14.he => exact U.valid_getElem! hw (by grind)
+  case vc15.hf => grind
+  case vc16.hg => exact U.valid_getElem! hw (by grind)
+  case vc17.hh => grind
+  case vc18.hi => exact hs 4
+  case vc19.hx => assumption
+  case vc20.maj => exact majBV (r.1.eval ρ) (r.2.1.eval ρ) (r.2.2.1.eval ρ)
+  case vc21.hd => exact hr.2.2.2.1
+  case vc22.he | vc23.hS0 => grind [U.Rel]
+  case vc24.hA => exact hs 0
+  case vc25.hE => exact hs 4
+  case vc26.hmaj => assumption
+  case vc27.success => grind [U.Rel]
+
+@[spec] theorem finalRound_sound {w : Vector (U 32) 64}
+    {wv : Vector (BitVec 32) 64} (hw : Vector.Rel ρ w wv)
+    {r : RoundState (U 32)} {rv : RoundState (BitVec 32)}
+    (hr : RoundState.Rel ρ r rv) {s : Vector (U 32) 8}
+    {sv : Vector (BitVec 32) 8} (hs : Vector.Rel ρ s sv)
+    (i : Nat) (hi : i ∈ [16:64]) :
+    ⦃⌜True⌝⦄ Sound.interp ρ (finalRound i hi (w, r, s))
+    ⦃⇓ out => ⌜Vector.Rel ρ out (finishBV sv (inlineScheduleRoundBV i wv rv))⌝⦄ := by
+  unfold finalRound finalRoundTail
+  mvcgen -trivial
+  case vc1.wv => exact wv
+  case vc2.hw => exact hw
+  case vc3.rv => exact rv
+  case vc4.hr => exact hr
+  case vc5.sv => exact sv
+  case vc6.hs => exact hs
+  case vc7.hvalid => simpa using And.intro (hs 1).1 hr.a.1
+  case vc8.hvalid => simpa using And.intro (hs 2).1 hr.b.1
+  case vc9.hvalid => simpa using And.intro (hs 3).1 hr.c.1
+  case vc10.hvalid => simpa using And.intro (hs 5).1 hr.e.1
+  case vc11.hvalid => simpa using And.intro (hs 6).1 hr.f.1
+  case vc12.hvalid => simpa using And.intro (hs 7).1 hr.g.1
+  case vc13.success =>
+    rename_i out hout o1 ho1 o2 ho2 o3 ho3 o5 ho5 o6 ho6 o7 ho7
+    rw [finalRoundCoreBV_eq] at hout
+    intro j
+    fin_cases j
+    · exact hout.1
+    · refine ⟨ho1.1, ?_⟩
+      change o1.eval ρ = _
+      calc
+        _ = (#[s[1], r.1].map (·.eval ρ)).sum := ho1.2
+        _ = sv[1] + rv.1 := by
+          simp [← Array.sum_toList]
+          exact congrArg₂ (· + ·) (hs 1).2 hr.a.2
+    · refine ⟨ho2.1, ?_⟩
+      change o2.eval ρ = _
+      calc
+        _ = (#[s[2], r.2.1].map (·.eval ρ)).sum := ho2.2
+        _ = sv[2] + rv.2.1 := by
+          simp [← Array.sum_toList]
+          exact congrArg₂ (· + ·) (hs 2).2 hr.b.2
+    · refine ⟨ho3.1, ?_⟩
+      change o3.eval ρ = _
+      calc
+        _ = (#[s[3], r.2.2.1].map (·.eval ρ)).sum := ho3.2
+        _ = sv[3] + rv.2.2.1 := by
+          simp [← Array.sum_toList]
+          exact congrArg₂ (· + ·) (hs 3).2 hr.c.2
+    · exact hout.2
+    · refine ⟨ho5.1, ?_⟩
+      change o5.eval ρ = _
+      calc
+        _ = (#[s[5], r.2.2.2.2.1].map (·.eval ρ)).sum := ho5.2
+        _ = sv[5] + rv.2.2.2.2.1 := by
+          simp [← Array.sum_toList]
+          exact congrArg₂ (· + ·) (hs 5).2 hr.e.2
+    · refine ⟨ho6.1, ?_⟩
+      change o6.eval ρ = _
+      calc
+        _ = (#[s[6], r.2.2.2.2.2.1].map (·.eval ρ)).sum := ho6.2
+        _ = sv[6] + rv.2.2.2.2.2.1 := by
+          simp [← Array.sum_toList]
+          exact congrArg₂ (· + ·) (hs 6).2 hr.f.2
+    · refine ⟨ho7.1, ?_⟩
+      change o7.eval ρ = _
+      calc
+        _ = (#[s[7], r.2.2.2.2.2.2.1].map (·.eval ρ)).sum := ho7.2
+        _ = sv[7] + rv.2.2.2.2.2.2.1 := by
+          simp [← Array.sum_toList]
+          exact congrArg₂ (· + ·) (hs 7).2 hr.g.2
+
+@[spec] theorem finalRound_complete {w : Vector (U 32) 64}
+    (hw : ∀ j : Fin 64, w[j].Valid ρ) {r : RoundState (U 32)}
+    (hr : r.Valid ρ) {s : Vector (U 32) 8}
+    (hs : ∀ j : Fin 8, s[j].Valid ρ) (i : Nat) (hi : i ∈ [16:64]) :
+    ⦃⌜True⌝⦄ Complete.interp ρ (finalRound i hi (w, r, s))
+    ⦃⇓ out => ⌜∀ j : Fin 8, out[j].Valid ρ⌝⦄ := by
+  unfold finalRound finalRoundTail
+  mvcgen -trivial
+  case vc1.hw => exact hw
+  case vc2.hr => exact hr
+  case vc3.hs => exact hs
+  case vc4.hvalid => simpa using And.intro (hs 1) hr.1
+  case vc5.hvalid => simpa using And.intro (hs 2) hr.2.1
+  case vc6.hvalid => simpa using And.intro (hs 3) hr.2.2.1
+  case vc7.hvalid => simpa using And.intro (hs 5) hr.2.2.2.2.1
+  case vc8.hvalid => simpa using And.intro (hs 6) hr.2.2.2.2.2.1
+  case vc9.hvalid => simpa using And.intro (hs 7) hr.2.2.2.2.2.2.1
+  case vc10.success =>
+    rename_i out hout o1 ho1 o2 ho2 o3 ho3 o5 ho5 o6 ho6 o7 ho7
+    intro j
+    fin_cases j
+    · exact hout.1
+    · exact ho1.1
+    · exact ho2.1
+    · exact ho3.1
+    · exact hout.2
+    · exact ho5.1
+    · exact ho6.1
+    · exact ho7.1
+
+def terminalRoundsBV (w : Vector (BitVec 32) 64)
+    (r : RoundState (BitVec 32)) (s : Vector (BitVec 32) 8) :
+    Vector (BitVec 32) 8 :=
+  finishBV s (inlineScheduleRoundBV 63 w (inlineScheduleRoundBV 62 w r))
+
+set_option maxHeartbeats 1000000 in
+@[spec] theorem terminalRounds_sound {w : Vector (U 32) 64}
+    {wv : Vector (BitVec 32) 64} (hw : Vector.Rel ρ w wv)
+    {r : RoundState (U 32)} {rv : RoundState (BitVec 32)}
+    (hr : RoundState.Rel ρ r rv) {s : Vector (U 32) 8}
+    {sv : Vector (BitVec 32) 8} (hs : Vector.Rel ρ s sv) :
+    ⦃⌜True⌝⦄ Sound.interp ρ (terminalRounds (w, r, s))
+    ⦃⇓ out => ⌜Vector.Rel ρ out (terminalRoundsBV wv rv sv)⌝⦄ := by
+  unfold terminalRounds terminalRoundsBV
+  rw [Sound.interp_bind]
+  apply Triple.bind (Q := fun r62 =>
+    ⌜RoundState.Rel ρ r62 (inlineScheduleRoundBV 62 wv rv)⌝)
+  case hx => exact inlineScheduleRound_sound_rel hw hr 62 (by
+    change 16 ≤ 62 ∧ 62 < 64 ∧ (62 - 16) % 1 = 0
+    norm_num)
+  case hf =>
+    intro r62
+    mvcgen [finalRound_sound]
+    case vc1 => exact fun _ => hw
+    case vc2 => exact fun h => h
+    case vc3 => exact fun _ => hs
+
+set_option maxHeartbeats 1000000 in
+@[spec] theorem terminalRounds_complete {w : Vector (U 32) 64}
+    (hw : ∀ j : Fin 64, w[j].Valid ρ) {r : RoundState (U 32)}
+    (hr : r.Valid ρ) {s : Vector (U 32) 8}
+    (hs : ∀ j : Fin 8, s[j].Valid ρ) :
+    ⦃⌜True⌝⦄ Complete.interp ρ (terminalRounds (w, r, s))
+    ⦃⇓ out => ⌜∀ j : Fin 8, out[j].Valid ρ⌝⦄ := by
+  unfold terminalRounds
+  rw [Complete.interp_bind]
+  apply Triple.bind (Q := fun r62 => ⌜r62.Valid ρ⌝)
+  case hx => exact inlineScheduleRound_complete hw hr 62 (by
+    change 16 ≤ 62 ∧ 62 < 64 ∧ (62 - 16) % 1 = 0
+    norm_num)
+  case hf =>
+    intro r62
+    mvcgen [finalRound_complete]
+    case vc1 => exact fun _ => hw
+    case vc2 => exact fun h => h
+    case vc3 => exact fun _ => hs
+
+@[spec] theorem terminalRounds_sound_rel {w : Vector (U 32) 64}
+    {wv : Vector (BitVec 32) 64} {r : RoundState (U 32)}
+    {rv : RoundState (BitVec 32)} {s : Vector (U 32) 8}
+    {sv : Vector (BitVec 32) 8} :
+    ⦃⌜Vector.Rel ρ w wv ∧ RoundState.Rel ρ r rv ∧ Vector.Rel ρ s sv⌝⦄
+      Sound.interp ρ (terminalRounds (w, r, s))
+    ⦃⇓ out => ⌜Vector.Rel ρ out (terminalRoundsBV wv rv sv)⌝⦄ := by
+  mvcgen [terminalRounds_sound]
+  case vc1 => exact fun hw _ _ => hw
+  case vc2 => exact fun _ hr _ => hr
+  case vc3 => exact fun _ _ hs => hs
+
+@[spec] theorem terminalRounds_complete_rel {w : Vector (U 32) 64}
+    {r : RoundState (U 32)} {s : Vector (U 32) 8} :
+    ⦃⌜(∀ j : Fin 64, w[j].Valid ρ) ∧ r.Valid ρ ∧
+        (∀ j : Fin 8, s[j].Valid ρ)⌝⦄
+      Complete.interp ρ (terminalRounds (w, r, s))
+    ⦃⇓ out => ⌜∀ j : Fin 8, out[j].Valid ρ⌝⦄ := by
+  mvcgen [terminalRounds_complete]
+  case vc1 => exact fun hw _ _ => hw
+  case vc2 => exact fun _ hr _ => hr
+  case vc3 => exact fun _ _ hs => hs
 
 def initialSchedule (m : Vector (BitVec 32) 16) : Vector (BitVec 32) 64 :=
   ([0:16].toList).foldl (fun w i => w.set! i m[i]!) default
@@ -1597,19 +2211,16 @@ private theorem mem_range0_62_to_64 {i : Nat} (hi : i ∈ [0:62]) :
 
 set_option maxRecDepth 2000 in
 set_option maxHeartbeats 1000000 in
-@[spec] theorem structured_sound {m : Vector (Word 32) 16}
-    {s : Vector (Word 32) 8} :
-    ⦃⌜True⌝⦄ Sound.interp ρ (structured m s)
-    ⦃⇓ out => ⌜Vector.Rel ρ out
-      (model (m.map (Word.eval ρ.bool))
-        (s.map (Word.eval ρ.bool)))⌝⦄ := by
-  unfold structured permCircuit
-  rw [Sound.interp_bind]
-  apply Triple.bind (Q := fun su =>
-    ⌜Vector.Rel ρ su (s.map (Word.eval ρ.bool))⌝)
-  case hx => exact U.mapM_fromWord_sound
-  case hf =>
-    intro su
+@[spec] theorem permPrefix_sound {m : Vector (Word 32) 16}
+    {su : Vector (U 32) 8} {sv : Vector (BitVec 32) 8}
+    (hsu : Vector.Rel ρ su sv) :
+    ⦃⌜True⌝⦄ Sound.interp ρ (permPrefix m su)
+    ⦃⇓ out => ⌜Vector.Rel ρ out.1
+        (scheduleBV62 (m.map (Word.eval ρ.bool))) ∧
+      RoundState.Rel ρ out.2.1
+        (roundsBV62 (scheduleBV62 (m.map (Word.eval ρ.bool))) sv) ∧
+      Vector.Rel ρ out.2.2 sv⌝⦄ := by
+    unfold permPrefix
     mvcgen -trivial invariants
     · ⇓⟨cur, w⟩ => ⌜Vector.Rel ρ w
         (cur.prefix.foldl
@@ -1620,7 +2231,7 @@ set_option maxHeartbeats 1000000 in
     · ⇓⟨cur, r⟩ => ⌜RoundState.Rel ρ r
         (cur.prefix.foldl
           (fun r i => roundStepBV i (scheduleBV62 (m.map (Word.eval ρ.bool))) r)
-          (initialRound (s.map (Word.eval ρ.bool))))⌝
+          (initialRound sv))⌝
     case vc1 =>
       rename_i pref cur suff hsplit w hw out hout
       simpa [List.foldl_append, getElem!_pos m cur (by grind)]
@@ -1645,7 +2256,7 @@ set_option maxHeartbeats 1000000 in
     case vc8.hr =>
       exact (by assumption : RoundState.Rel ρ _ _).1
     case vc9 =>
-      rename_i hsu w0 hw0 w hw pref cur suff hsplit b hr out hout
+      rename_i w0 hw0 w hw pref cur suff hsplit b hr out hout
       have hw' : Vector.Rel ρ w
           (scheduleBV62 (m.map (Word.eval ρ.bool))) := by
         exact hw
@@ -1653,42 +2264,67 @@ set_option maxHeartbeats 1000000 in
       simpa only [List.foldl_append, List.foldl_cons, List.foldl_nil] using hout
     case vc10.h.pre =>
       simp only [List.foldl_nil]
-      have hsu : Vector.Rel ρ su (s.map (Word.eval ρ.bool)) := by assumption
       refine ⟨⟨(hsu 0).1, (hsu 1).1, (hsu 2).1, (hsu 3).1,
         (hsu 4).1, (hsu 5).1, (hsu 6).1, (hsu 7).1⟩, ?_⟩
       rw [initialRound_eval, Vector.Rel.eval_eq hsu]
-    case vc11 => exact scheduleBV62 (m.map (Word.eval ρ.bool))
-    case vc12 => assumption
-    case vc13.rv =>
-      exact roundsBV62 (scheduleBV62 (m.map (Word.eval ρ.bool)))
-        (s.map (Word.eval ρ.bool))
-    case vc14.hr => assumption
-    case vc15.wv => exact scheduleBV62 (m.map (Word.eval ρ.bool))
-    case vc16.hw => assumption
-    case vc17.rv =>
-      exact inlineScheduleRoundBV 62 (scheduleBV62 (m.map (Word.eval ρ.bool)))
-        (roundsBV62 (scheduleBV62 (m.map (Word.eval ρ.bool)))
+    case vc11 => exact ⟨by assumption, by assumption, hsu⟩
+
+@[spec] theorem permPrefix_sound_rel {m : Vector (Word 32) 16}
+    {su : Vector (U 32) 8} {sv : Vector (BitVec 32) 8} :
+    ⦃⌜Vector.Rel ρ su sv⌝⦄ Sound.interp ρ (permPrefix m su)
+    ⦃⇓ out => ⌜Vector.Rel ρ out.1
+        (scheduleBV62 (m.map (Word.eval ρ.bool))) ∧
+      RoundState.Rel ρ out.2.1
+        (roundsBV62 (scheduleBV62 (m.map (Word.eval ρ.bool))) sv) ∧
+      Vector.Rel ρ out.2.2 sv⌝⦄ := by
+  mvcgen [permPrefix_sound]
+  case vc1 => exact fun h => h
+
+set_option maxRecDepth 2000 in
+set_option maxHeartbeats 1000000 in
+@[spec] theorem structured_sound {m : Vector (Word 32) 16}
+    {s : Vector (Word 32) 8} :
+    ⦃⌜True⌝⦄ Sound.interp ρ (structured m s)
+    ⦃⇓ out => ⌜Vector.Rel ρ out
+      (model (m.map (Word.eval ρ.bool))
+        (s.map (Word.eval ρ.bool)))⌝⦄ := by
+  unfold structured permCircuit
+  rw [Sound.interp_bind]
+  apply Triple.bind (Q := fun su =>
+    ⌜Vector.Rel ρ su (s.map (Word.eval ρ.bool))⌝)
+  case hx => exact U.mapM_fromWord_sound
+  case hf =>
+    intro su
+    rw [Sound.interp_bind]
+    apply Triple.bind (Q := fun wr =>
+      ⌜Vector.Rel ρ wr.1 (scheduleBV62 (m.map (Word.eval ρ.bool))) ∧
+        RoundState.Rel ρ wr.2.1
+          (roundsBV62 (scheduleBV62 (m.map (Word.eval ρ.bool)))
+            (s.map (Word.eval ρ.bool))) ∧
+        Vector.Rel ρ wr.2.2 (s.map (Word.eval ρ.bool))⌝)
+    case hx => exact permPrefix_sound_rel
+    case hf =>
+      intro wr
+      apply Triple.iff_conseq.mp (terminalRounds_sound_rel
+        (wv := scheduleBV62 (m.map (Word.eval ρ.bool)))
+        (rv := roundsBV62 (scheduleBV62 (m.map (Word.eval ρ.bool)))
           (s.map (Word.eval ρ.bool)))
-    case vc18.hr => assumption
-    case vc19 => exact fun _ => (by assumption : Vector.Rel ρ su _)
-    case vc20 =>
-      intro h
+        (sv := s.map (Word.eval ρ.bool))) (by simp)
+      simp only [PostCond.entails, SPred.entails_nil]
+      refine ⟨?_, ExceptConds.entails.refl _⟩
+      intro out h
+      unfold terminalRoundsBV at h
       rw [optimizedRounds_eq] at h
       exact h
 
 set_option maxRecDepth 2000 in
 set_option maxHeartbeats 1000000 in
-@[spec] theorem structured_complete {m : Vector (Word 32) 16}
-    {s : Vector (Word 32) 8} :
-    ⦃⌜True⌝⦄ Complete.interp ρ (structured m s)
-    ⦃⇓ out => ⌜∀ i : Fin 8, out[i].Valid ρ⌝⦄ := by
-  unfold structured permCircuit
-  rw [Complete.interp_bind]
-  apply Triple.bind (Q := fun su =>
-    ⌜Vector.Rel ρ su (s.map (Word.eval ρ.bool))⌝)
-  case hx => exact U.mapM_fromWord_complete
-  case hf =>
-    intro su
+@[spec] theorem permPrefix_complete {m : Vector (Word 32) 16}
+    {su : Vector (U 32) 8} (hsu : ∀ i : Fin 8, su[i].Valid ρ) :
+    ⦃⌜True⌝⦄ Complete.interp ρ (permPrefix m su)
+    ⦃⇓ out => ⌜(∀ j : Fin 64, out.1[j].Valid ρ) ∧ out.2.1.Valid ρ ∧
+      (∀ j : Fin 8, out.2.2[j].Valid ρ)⌝⦄ := by
+    unfold permPrefix
     mvcgen -trivial invariants
     · ⇓⟨_, w⟩ => ⌜∀ j : Fin 64, w[j].Valid ρ⌝
     · ⇓⟨_, w⟩ => ⌜∀ j : Fin 64, w[j].Valid ρ⌝
@@ -1712,18 +2348,39 @@ set_option maxHeartbeats 1000000 in
     case vc8.hr => assumption
     case vc9 => assumption
     case vc10.h.pre =>
-      have hsu : ∀ i : Fin 8, su[i].Valid ρ :=
-        Vector.Rel.valid (by assumption)
       exact ⟨hsu 0, hsu 1, hsu 2, hsu 3,
         hsu 4, hsu 5, hsu 6, hsu 7⟩
-    case vc11 => assumption
-    case vc12 => assumption
-    case vc13.hw => assumption
-    case vc14.hr => assumption
-    case vc15 =>
-      intro _
-      exact Vector.Rel.valid (by assumption)
-    case vc16 => exact fun h => h
+    case vc11 => exact ⟨by assumption, by assumption, hsu⟩
+
+@[spec] theorem permPrefix_complete_rel {m : Vector (Word 32) 16}
+    {su : Vector (U 32) 8} {sv : Vector (BitVec 32) 8} :
+    ⦃⌜Vector.Rel ρ su sv⌝⦄ Complete.interp ρ (permPrefix m su)
+    ⦃⇓ out => ⌜(∀ j : Fin 64, out.1[j].Valid ρ) ∧ out.2.1.Valid ρ ∧
+      (∀ j : Fin 8, out.2.2[j].Valid ρ)⌝⦄ := by
+  mvcgen [permPrefix_complete]
+  case vc1 => exact fun h => Vector.Rel.valid h
+
+set_option maxRecDepth 2000 in
+set_option maxHeartbeats 1000000 in
+@[spec] theorem structured_complete {m : Vector (Word 32) 16}
+    {s : Vector (Word 32) 8} :
+    ⦃⌜True⌝⦄ Complete.interp ρ (structured m s)
+    ⦃⇓ out => ⌜∀ i : Fin 8, out[i].Valid ρ⌝⦄ := by
+  unfold structured permCircuit
+  rw [Complete.interp_bind]
+  apply Triple.bind (Q := fun su =>
+    ⌜Vector.Rel ρ su (s.map (Word.eval ρ.bool))⌝)
+  case hx => exact U.mapM_fromWord_complete
+  case hf =>
+    intro su
+    rw [Complete.interp_bind]
+    apply Triple.bind (Q := fun wr =>
+      ⌜(∀ j : Fin 64, wr.1[j].Valid ρ) ∧ wr.2.1.Valid ρ ∧
+        (∀ j : Fin 8, wr.2.2[j].Valid ρ)⌝)
+    case hx => exact permPrefix_complete_rel
+    case hf =>
+      intro wr
+      exact terminalRounds_complete_rel
 
 def RoundState.WFRel : WF.Post (RoundState (U n)) :=
   fun lv rv l r => U.WFRel lv rv l.1 r.1 ∧
@@ -2015,6 +2672,341 @@ theorem finish_wf :
           exact hin.2.2.2.2.2.1 | exact hin.2.2.2.2.2.2.1 |
           exact hin.2.2.2.2.2.2.2.1 | exact hin.2.2.2.2.2.2.2.2
 
+set_option maxHeartbeats 1000000 in
+theorem finalRoundTransforms_wf :
+    WF.GadgetSpec RoundState.WFRel finalRoundTransforms
+      (fun lv rv l r => U.WFRel lv rv l.1 r.1 ∧
+        WF.LCEq lv.int rv.int l.2.1 r.2.1 ∧
+        U.WFRel lv rv l.2.2.1 r.2.2.1 ∧
+        WF.LCEq lv.int rv.int l.2.2.2 r.2.2.2) := by
+  unfold WF.GadgetSpec
+  intro rL rR
+  unfold finalRoundTransforms
+  apply WF.GadgetSpec.bind_rule U.fromWord_wf_rel
+  · intro lv rv h
+    have he := h.2.2.2.2.1.2
+    change Word.WFRel lv rv _ _ at he
+    exact ((he.rotateRight 6).xor (he.rotateRight 11)).xor (he.rotateRight 25)
+  · intro A S1L S1R hS1
+    apply WF.GadgetSpec.bind_rule
+      (left := ⟨rL.2.2.2.2.1, rL.2.2.2.2.2.1, rL.2.2.2.2.2.2.1⟩)
+      (right := ⟨rR.2.2.2.2.1, rR.2.2.2.2.2.1, rR.2.2.2.2.2.2.1⟩)
+      optimized_ch2_wf
+    · intro lv rv h
+      have hr := (hS1 lv rv h).1
+      exact ⟨hr.2.2.2.2.1, hr.2.2.2.2.2.1, hr.2.2.2.2.2.2.1⟩
+    · intro B chL chR hch
+      apply WF.GadgetSpec.bind_rule U.fromWord_wf_rel
+      · intro lv rv h
+        have ha := (hS1 lv rv (hch lv rv h).1).1.1.2
+        change Word.WFRel lv rv _ _ at ha
+        exact ((ha.rotateRight 2).xor (ha.rotateRight 13)).xor (ha.rotateRight 22)
+      · intro C S0L S0R hS0
+        apply WF.GadgetSpec.bind_rule
+          (left := ⟨rL.1, rL.2.1, rL.2.2.1⟩)
+          (right := ⟨rR.1, rR.2.1, rR.2.2.1⟩) optimized_maj2_wf
+        · intro lv rv h
+          have hr := (hS1 lv rv (hch lv rv (hS0 lv rv h).1).1).1
+          exact ⟨hr.1, hr.2.1, hr.2.2.1⟩
+        · intro D majL majR hmaj
+          apply WF.Rel.pure
+          intro lv rv h
+          have hD := hmaj lv rv h
+          have hC := hS0 lv rv hD.1
+          have hB := hch lv rv hC.1
+          have hA := hS1 lv rv hB.1
+          exact ⟨hA.2, hB.2, hC.2, hD.2⟩
+
+set_option maxHeartbeats 1000000 in
+theorem finalRoundSums_wf (i : Nat) (hi : i ∈ [16:64]) :
+    WF.GadgetSpec
+      (fun lv rv (l r : Vector (U 32) 64 × RoundState (U 32) ×
+          Vector (U 32) 8 × U 32 × U 32 × U 32 × LC ℤ × U 32 × LC ℤ) =>
+        WF.VectorRel U.WFRel lv rv l.1 r.1 ∧
+        RoundState.WFRel lv rv l.2.1 r.2.1 ∧
+        WF.VectorRel U.WFRel lv rv l.2.2.1 r.2.2.1 ∧
+        U.WFRel lv rv l.2.2.2.1 r.2.2.2.1 ∧
+        U.WFRel lv rv l.2.2.2.2.1 r.2.2.2.2.1 ∧
+        U.WFRel lv rv l.2.2.2.2.2.1 r.2.2.2.2.2.1 ∧
+        WF.LCEq lv.int rv.int l.2.2.2.2.2.2.1 r.2.2.2.2.2.2.1 ∧
+        U.WFRel lv rv l.2.2.2.2.2.2.2.1 r.2.2.2.2.2.2.2.1 ∧
+        WF.LCEq lv.int rv.int l.2.2.2.2.2.2.2.2 r.2.2.2.2.2.2.2.2)
+      (finalRoundSums i hi)
+      (fun lv rv l r => U.WFRel lv rv l.1 r.1 ∧ U.WFRel lv rv l.2 r.2) := by
+  unfold WF.GadgetSpec
+  rintro ⟨wL, rL, sL, s0L, s1L, S1L, chL, S0L, majL⟩
+    ⟨wR, rR, sR, s0R, s1R, S1R, chR, S0R, majR⟩
+  unfold finalRoundSums
+  apply WF.GadgetSpec.bind_rule
+    (left := ⟨#v[rL.2.2.2.1, rL.2.2.2.2.2.2.2, S1L, (k[i] : U 32),
+      wL[i - 16]!, s0L, wL[i - 7]!, s1L, sL[4]], chL⟩)
+    (right := ⟨#v[rR.2.2.2.1, rR.2.2.2.2.2.2.2, S1R, (k[i] : U 32),
+      wR[i - 16]!, s0R, wR[i - 7]!, s1R, sR[4]], chR⟩)
+    optimized_sum9Doubled1_wf
+  · intro lv rv h
+    exact ⟨(by
+      intro j
+      fin_cases j
+      · exact h.2.1.2.2.2.1
+      · exact h.2.1.2.2.2.2.2.2.2
+      · exact h.2.2.2.2.2.1
+      · exact U.wfRel_bitVec _ _ _
+      · exact h.1.getElem! (i := i - 16) (by grind)
+      · exact h.2.2.2.1
+      · exact h.1.getElem! (i := i - 7) (by grind)
+      · exact h.2.2.2.2.1
+      · exact h.2.2.1 4), h.2.2.2.2.2.2.1⟩
+  · intro A outEL outER houtE
+    apply WF.GadgetSpec.bind_rule
+      (left := ⟨rL.2.2.2.1, outEL, S0L, sL[0], sL[4], majL⟩)
+      (right := ⟨rR.2.2.2.1, outER, S0R, sR[0], sR[4], majR⟩)
+      optimized_sumAFinal_wf
+    · intro lv rv h
+      have hE := houtE lv rv h
+      have hin := hE.1
+      exact ⟨hin.2.1.2.2.2.1, hE.2, hin.2.2.2.2.2.2.2.1,
+        hin.2.2.1 0, hin.2.2.1 4, hin.2.2.2.2.2.2.2.2⟩
+    · intro B outAL outAR houtA
+      apply WF.Rel.pure
+      intro lv rv h
+      have hA := houtA lv rv h
+      have hE := houtE lv rv hA.1
+      exact ⟨hA.2, hE.2⟩
+
+set_option maxHeartbeats 1000000 in
+theorem finalRoundBody_wf (i : Nat) (hi : i ∈ [16:64]) :
+    WF.GadgetSpec
+      (fun lv rv (l r : Vector (U 32) 64 × RoundState (U 32) ×
+          Vector (U 32) 8 × U 32 × U 32) =>
+        WF.VectorRel U.WFRel lv rv l.1 r.1 ∧
+        RoundState.WFRel lv rv l.2.1 r.2.1 ∧
+        WF.VectorRel U.WFRel lv rv l.2.2.1 r.2.2.1 ∧
+        U.WFRel lv rv l.2.2.2.1 r.2.2.2.1 ∧
+        U.WFRel lv rv l.2.2.2.2 r.2.2.2.2)
+      (finalRoundBody i hi)
+      (fun lv rv l r => U.WFRel lv rv l.1 r.1 ∧ U.WFRel lv rv l.2 r.2) := by
+  unfold WF.GadgetSpec
+  rintro ⟨wL, rL, sL, s0L, s1L⟩ ⟨wR, rR, sR, s0R, s1R⟩
+  unfold finalRoundBody
+  apply WF.GadgetSpec.bind_rule finalRoundTransforms_wf
+  · exact fun lv rv h => h.2.1
+  · intro A tL tR ht
+    apply WF.Rel.mono ((finalRoundSums_wf i hi).relHom A
+      (wL, rL, sL, s0L, s1L, tL.1, tL.2.1, tL.2.2.1, tL.2.2.2)
+      (wR, rR, sR, s0R, s1R, tR.1, tR.2.1, tR.2.2.1, tR.2.2.2) (by
+        intro lv rv h
+        have hT := ht lv rv h
+        exact ⟨hT.1.1, hT.1.2.1, hT.1.2.2.1, hT.1.2.2.2.1,
+          hT.1.2.2.2.2, hT.2.1, hT.2.2.1, hT.2.2.2.1, hT.2.2.2.2⟩))
+    exact fun _ _ _ _ h => h.2
+
+set_option maxHeartbeats 1000000 in
+theorem finalRoundCore_wf (i : Nat) (hi : i ∈ [16:64]) :
+    WF.GadgetSpec
+      (fun lv rv
+          (l r : Vector (U 32) 64 × RoundState (U 32) × Vector (U 32) 8) =>
+        WF.VectorRel U.WFRel lv rv l.1 r.1 ∧
+        RoundState.WFRel lv rv l.2.1 r.2.1 ∧
+        WF.VectorRel U.WFRel lv rv l.2.2 r.2.2)
+      (finalRoundCore i hi)
+      (fun lv rv l r => U.WFRel lv rv l.1 r.1 ∧ U.WFRel lv rv l.2 r.2) := by
+  unfold WF.GadgetSpec
+  rintro ⟨wL, rL, sL⟩ ⟨wR, rR, sR⟩
+  unfold finalRoundCore
+  apply WF.GadgetSpec.bind_rule (terminalScheduleParts_wf i hi)
+  · exact fun lv rv h => h.1
+  · intro A partsL partsR hparts
+    apply WF.Rel.mono ((finalRoundBody_wf i hi).relHom A
+      (wL, rL, sL, partsL.1, partsL.2)
+      (wR, rR, sR, partsR.1, partsR.2) (by
+        intro lv rv h
+        have hp := hparts lv rv h
+        exact ⟨hp.1.1, hp.1.2.1, hp.1.2.2, hp.2.1, hp.2.2⟩))
+    exact fun _ _ _ _ h => h.2
+
+private def finalRoundTailState (r : RoundState α) : Vector α 8 :=
+  #v[r.1, r.1, r.2.1, r.2.2.1, r.2.2.2.2.1,
+    r.2.2.2.2.1, r.2.2.2.2.2.1, r.2.2.2.2.2.2.1]
+
+private def finalRoundTailAt (out : U 32 × U 32) (r : RoundState (U 32))
+    (s : Vector (U 32) 8) (i : Fin 8) : Circuit (U 32) :=
+  if i = 0 then pure out.1
+  else if i = 4 then pure out.2
+  else U.sumFixed #v[s[i], (finalRoundTailState r)[i]]
+
+private theorem finalRoundTail_eq (out : U 32 × U 32)
+    (r : RoundState (U 32)) (s : Vector (U 32) 8) :
+    finalRoundTail (out, r, s) =
+      Vector.ofFnM (finalRoundTailAt out r s) := by
+  simp [finalRoundTail, finalRoundTailAt, Vector.ofFnM_succ,
+    Vector.ofFnM_zero, U.sum2_eq_sumFixed, finalRoundTailState]
+
+theorem finalRoundTail_wf :
+    WF.GadgetSpec
+      (fun lv rv (l r : (U 32 × U 32) × RoundState (U 32) × Vector (U 32) 8) =>
+        (U.WFRel lv rv l.1.1 r.1.1 ∧ U.WFRel lv rv l.1.2 r.1.2) ∧
+        RoundState.WFRel lv rv l.2.1 r.2.1 ∧
+        WF.VectorRel U.WFRel lv rv l.2.2 r.2.2)
+      finalRoundTail (WF.VectorRel U.WFRel) := by
+  unfold WF.GadgetSpec
+  rintro ⟨outL, rL, sL⟩ ⟨outR, rR, sR⟩
+  rw [finalRoundTail_eq, finalRoundTail_eq]
+  apply WF.Rel.mono (WF.Rel.vectorOfFnM (S := fun _ => U.WFRel) ?_)
+  · exact fun _ _ _ _ h => h.2
+  · intro i A _ _ hA
+    unfold finalRoundTailAt
+    split
+    · apply WF.Rel.pure
+      intro lv rv h
+      exact ⟨h, (hA lv rv h).1.1⟩
+    · split
+      · apply WF.Rel.pure
+        intro lv rv h
+        exact ⟨h, (hA lv rv h).1.2⟩
+      · apply U.sumFixed_wf.relHom
+        intro lv rv h
+        have hin := hA lv rv h
+        intro j
+        fin_cases j
+        · exact hin.2.2 i
+        · unfold finalRoundTailState
+          fin_cases i <;> simp only [Fin.getElem_fin] <;>
+            first | exact hin.2.1.1 | exact hin.2.1.2.1 |
+              exact hin.2.1.2.2.1 | exact hin.2.1.2.2.2.1 |
+              exact hin.2.1.2.2.2.2.1 | exact hin.2.1.2.2.2.2.2.1 |
+              exact hin.2.1.2.2.2.2.2.2.1
+
+set_option maxHeartbeats 1000000 in
+theorem finalRound_wf (i : Nat) (hi : i ∈ [16:64]) :
+    WF.GadgetSpec
+      (fun lv rv
+          (l r : Vector (U 32) 64 × RoundState (U 32) × Vector (U 32) 8) =>
+        WF.VectorRel U.WFRel lv rv l.1 r.1 ∧
+        RoundState.WFRel lv rv l.2.1 r.2.1 ∧
+        WF.VectorRel U.WFRel lv rv l.2.2 r.2.2)
+      (finalRound i hi) (WF.VectorRel U.WFRel) := by
+  unfold WF.GadgetSpec
+  rintro ⟨wL, rL, sL⟩ ⟨wR, rR, sR⟩
+  unfold finalRound
+  apply WF.GadgetSpec.bind_rule (finalRoundCore_wf i hi)
+  · exact fun _ _ h => h
+  · intro A outL outR hout
+    apply WF.Rel.mono (finalRoundTail_wf.relHom A
+      (outL, rL, sL) (outR, rR, sR) (by
+        intro lv rv h
+        have ho := hout lv rv h
+        exact ⟨ho.2, ho.1.2.1, ho.1.2.2⟩))
+    exact fun _ _ _ _ h => h.2
+
+theorem terminalRounds_wf :
+    WF.GadgetSpec
+      (fun lv rv
+          (l r : Vector (U 32) 64 × RoundState (U 32) × Vector (U 32) 8) =>
+        WF.VectorRel U.WFRel lv rv l.1 r.1 ∧
+        RoundState.WFRel lv rv l.2.1 r.2.1 ∧
+        WF.VectorRel U.WFRel lv rv l.2.2 r.2.2)
+      terminalRounds (WF.VectorRel U.WFRel) := by
+  unfold WF.GadgetSpec
+  rintro ⟨wL, rL, sL⟩ ⟨wR, rR, sR⟩
+  unfold terminalRounds
+  apply WF.GadgetSpec.bind_rule
+    (inlineScheduleRound_wf 62 (by
+      change 16 ≤ 62 ∧ 62 < 64 ∧ (62 - 16) % 1 = 0
+      norm_num))
+  · intro lv rv h
+    exact ⟨h.1, h.2.1⟩
+  · intro A r62L r62R hr62
+    apply WF.Rel.mono ((finalRound_wf 63 (by
+      change 16 ≤ 63 ∧ 63 < 64 ∧ (63 - 16) % 1 = 0
+      norm_num)).relHom A ⟨wL, r62L, sL⟩ ⟨wR, r62R, sR⟩ (by
+        intro lv rv hA
+        have h62 := hr62 lv rv hA
+        exact ⟨h62.1.1, h62.2, h62.1.2.2⟩))
+    exact fun _ _ _ _ h => h.2
+
+set_option maxHeartbeats 1000000 in
+theorem permPrefix_wf :
+    WF.GadgetSpec
+      (fun lv rv
+          (l r : Vector (Word 32) 16 × Vector (U 32) 8) =>
+        WF.VectorRel Word.WFRel lv rv l.1 r.1 ∧
+          WF.VectorRel U.WFRel lv rv l.2 r.2)
+      (fun x => permPrefix x.1 x.2)
+      (fun lv rv l r =>
+        WF.VectorRel U.WFRel lv rv l.1 r.1 ∧
+        RoundState.WFRel lv rv l.2.1 r.2.1 ∧
+        WF.VectorRel U.WFRel lv rv l.2.2 r.2.2) := by
+  unfold WF.GadgetSpec
+  intro left right
+  unfold permPrefix
+  wfgen' using [U.fromWord_wf_rel, scheduleStep_wf, roundStep_wf]
+  case inv1 => exact WF.VectorRel U.WFRel
+  case vc1 =>
+    exact fun lv rv _ => U.vector_default_wfRel lv rv
+  case vc2 =>
+    intro i hi P wL wR hw
+    apply WF.GadgetSpec.bind_rule U.fromWord_wf_rel
+    · intro lv rv h
+      exact (hw lv rv h).1.1 ⟨i, by grind⟩
+    · intro B outL outR hout
+      apply WF.Rel.pure
+      intro lv rv hB
+      have ho := hout lv rv hB
+      have hin := hw lv rv ho.1
+      exact ⟨ho.1, hin.1, WF.VectorRel.set! hin.2 ho.2 i⟩
+  case vc3 =>
+    intro B wL wR hw
+    apply WF.Rel.forIn'_range_map_yield_bind_rule
+      (I := WF.VectorRel U.WFRel)
+      (fL := fun i _ w => scheduleStep i w)
+      (fR := fun i _ w => scheduleStep i w)
+      (nextL := fun i _ w out => w.set! i out)
+      (nextR := fun i _ w out => w.set! i out)
+    case hinit => exact fun lv rv h => (hw lv rv h).2
+    case hstep =>
+      intro i hi P left right hP
+      apply WF.GadgetSpec.bind_rule
+        (scheduleStep_wf i (mem_range16_62_to_64 hi))
+      · exact fun lv rv h => (hP lv rv h).2
+      · intro C outL outR hout
+        apply WF.Rel.pure
+        intro lv rv hC
+        have ho := hout lv rv hC
+        have hin := hP lv rv ho.1
+        exact ⟨ho.1, hin.1, WF.VectorRel.set! hin.2 ho.2 i⟩
+    case hcont =>
+      intro C wL wR hschedule
+      apply WF.Rel.forIn'_range_map_yield_bind_rule
+        (I := RoundState.WFRel)
+        (fL := fun i hi r => roundStep i (mem_range0_62_to_64 hi) (wL, r))
+        (fR := fun i hi r => roundStep i (mem_range0_62_to_64 hi) (wR, r))
+        (nextL := fun _ _ _ out => out)
+        (nextR := fun _ _ _ out => out)
+      case hinit =>
+        intro lv rv hC
+        have h0 := hschedule lv rv hC
+        have h1 := hw lv rv h0.1
+        exact RoundState.WFRel.ofVector h1.1.2
+      case hstep =>
+        intro i hi P rL rR hP
+        have hstep := (roundStep_wf i (mem_range0_62_to_64 hi)).relHom P
+          ⟨wL, rL⟩ ⟨wR, rR⟩ (by
+            intro lv rv h
+            have hp := hP lv rv h
+            exact ⟨(hschedule lv rv hp.1).2, hp.2⟩)
+        apply WF.Rel.mono hstep
+        exact fun lv rv _ _ hout =>
+          ⟨hout.1, (hP lv rv hout.1).1, hout.2⟩
+      case hcont =>
+        intro D rL rR hr
+        apply WF.Rel.pure
+        intro lv rv hD
+        have hround := hr lv rv hD
+        have h0 := hschedule lv rv hround.1
+        have h1 := hw lv rv h0.1
+        exact ⟨h0.2, hround.2, h1.1.2⟩
+
+set_option maxHeartbeats 1000000 in
 theorem structured_wf :
     WF.GadgetSpec
       (fun lv rv
@@ -2024,98 +3016,21 @@ theorem structured_wf :
       (fun x => structured x.1 x.2) (WF.VectorRel U.WFRel) := by
   unfold WF.GadgetSpec
   intro left right
-  unfold structured
-  apply WF.GadgetSpec.bind_rule U.mapM_fromWord_wf
+  unfold structured permCircuit
+  apply WF.GadgetSpec.bind_rule
+    (left := left.2) (right := right.2) U.mapM_fromWord_wf
   · exact fun lv rv h => h.2
   · intro A sL sR hs
-    wfgen' using [U.fromWord_wf_rel, scheduleStep_wf,
-      roundStep_wf, finish_wf]
-    case inv1 => exact WF.VectorRel U.WFRel
-    case vc1 =>
-      exact fun lv rv _ => U.vector_default_wfRel lv rv
-    case vc2 =>
-      intro i hi P wL wR hw
-      apply WF.GadgetSpec.bind_rule U.fromWord_wf_rel
-      · intro lv rv h
-        exact (hs lv rv (hw lv rv h).1).1.1 ⟨i, by grind⟩
-      · intro B outL outR hout
-        apply WF.Rel.pure
+    apply WF.GadgetSpec.bind_rule
+      (left := (left.1, sL)) (right := (right.1, sR)) permPrefix_wf
+    · intro lv rv h
+      have hsu := hs lv rv h
+      exact ⟨hsu.1.1, hsu.2⟩
+    · intro B wrL wrR hwr
+      apply WF.Rel.mono (terminalRounds_wf.relHom B wrL wrR (by
         intro lv rv hB
-        have ho := hout lv rv hB
-        have hin := hw lv rv ho.1
-        exact ⟨ho.1, hin.1, WF.VectorRel.set! hin.2 ho.2 i⟩
-    case vc3 =>
-      intro B wL wR hw
-      apply WF.Rel.forIn'_range_map_yield_bind_rule
-        (I := WF.VectorRel U.WFRel)
-        (fL := fun i _ w => scheduleStep i w)
-        (fR := fun i _ w => scheduleStep i w)
-        (nextL := fun i _ w out => w.set! i out)
-        (nextR := fun i _ w out => w.set! i out)
-      case hinit => exact fun lv rv h => (hw lv rv h).2
-      case hstep =>
-        intro i hi P left right hP
-        apply WF.GadgetSpec.bind_rule
-          (scheduleStep_wf i (mem_range16_62_to_64 hi))
-        · exact fun lv rv h => (hP lv rv h).2
-        · intro C outL outR hout
-          apply WF.Rel.pure
-          intro lv rv hC
-          have ho := hout lv rv hC
-          have hin := hP lv rv ho.1
-          exact ⟨ho.1, hin.1, WF.VectorRel.set! hin.2 ho.2 i⟩
-      case hcont =>
-        intro C wL wR hschedule
-        apply WF.Rel.forIn'_range_map_yield_bind_rule
-          (I := RoundState.WFRel)
-          (fL := fun i hi r => roundStep i (mem_range0_62_to_64 hi) (wL, r))
-          (fR := fun i hi r => roundStep i (mem_range0_62_to_64 hi) (wR, r))
-          (nextL := fun _ _ _ out => out)
-          (nextR := fun _ _ _ out => out)
-        case hinit =>
-          intro lv rv hC
-          have h0 := hschedule lv rv hC
-          have h1 := hw lv rv h0.1
-          exact RoundState.WFRel.ofVector (hs lv rv h1.1).2
-        case hstep =>
-          intro i hi P rL rR hP
-          have hstep := (roundStep_wf i (mem_range0_62_to_64 hi)).relHom P
-            ⟨wL, rL⟩ ⟨wR, rR⟩ (by
-              intro lv rv h
-              have hp := hP lv rv h
-              exact ⟨(hschedule lv rv hp.1).2, hp.2⟩)
-          apply WF.Rel.mono hstep
-          exact fun lv rv _ _ hout =>
-            ⟨hout.1, (hP lv rv hout.1).1, hout.2⟩
-        case hcont =>
-          intro D rL rR hr
-          apply WF.GadgetSpec.bind_rule
-            (inlineScheduleRound_wf 62 (by
-              change 16 ≤ 62 ∧ 62 < 64 ∧ (62 - 16) % 1 = 0
-              norm_num))
-          · intro lv rv hD
-            have hround := hr lv rv hD
-            exact ⟨(hschedule lv rv hround.1).2, hround.2⟩
-          · intro E r62L r62R hr62
-            apply WF.GadgetSpec.bind_rule
-              (inlineScheduleRound_wf 63 (by
-                change 16 ≤ 63 ∧ 63 < 64 ∧ (63 - 16) % 1 = 0
-                norm_num))
-            · intro lv rv hE
-              have h62 := hr62 lv rv hE
-              have hround := hr lv rv h62.1
-              exact ⟨(hschedule lv rv hround.1).2, h62.2⟩
-            · intro F r63L r63R hr63
-              apply WF.Rel.mono (finish_wf.relHom F
-                ⟨sL, r63L⟩ ⟨sR, r63R⟩ (by
-                  intro lv rv hF
-                  have h63 := hr63 lv rv hF
-                  have h62 := hr62 lv rv h63.1
-                  have hround := hr lv rv h62.1
-                  have h0 := hschedule lv rv hround.1
-                  have h1 := hw lv rv h0.1
-                  exact ⟨(hs lv rv h1.1).2, h63.2⟩))
-              exact fun _ _ _ _ h => h.2
+        exact (hwr lv rv hB).2))
+      exact fun _ _ _ _ h => h.2
 
 private def permScheduleStepBV (i : Nat)
     (w : Vector (BitVec 32) 64) :=

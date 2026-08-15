@@ -103,6 +103,12 @@ def U.sum8Doubled1 (a b c d e f g h : U 32) (x2 : LC ℤ) : Circuit (U 32) := do
   let half ← U.fromDoubledInt36 total
   pure $ half.takeLE 32 (by omega)
 
+/-- Sum nine 32-bit words and one doubled word, modulo `2^32`. -/
+def U.sum9Doubled1 (a b c d e f g h i : U 32) (x2 : LC ℤ) : Circuit (U 32) := do
+  let total := 2 • (#[a, b, c, d, e, f, g, h, i].map (·.intVal) |>.sum) + x2
+  let half ← U.fromDoubledInt36 total
+  pure $ half.takeLE 32 (by omega)
+
 /-- Recover the new `a` from the already constrained new `e`.
 
 For a SHA-256 round, `newE = d + T1 (mod 2^32)` and
@@ -115,6 +121,17 @@ def U.sumAFromE (d newE S0 : U 32) (maj2 : LC ℤ) : Circuit (U 32) := do
   let total := 2 • (newE.intVal + S0.intVal - d.intVal) + maj2 +
     LC.ofConst (2^33 : ℤ)
   let half ← U.fromDoubledInt34 total
+  pure $ half.takeLE 32 (by omega)
+
+/-- Fuse the final `a` feed-forward with the coupled round output.
+
+`outA = outE + S0 + stateA - stateE + Maj - d (mod 2^32)`.
+The `2^34` doubled offset makes the half-value nonnegative and below `2^35`. -/
+def U.sumAFinal (d outE S0 stateA stateE : U 32)
+    (maj2 : LC ℤ) : Circuit (U 32) := do
+  let total := 2 • (outE.intVal + S0.intVal + stateA.intVal -
+    stateE.intVal - d.intVal) + maj2 + LC.ofConst (2^34 : ℤ)
+  let half ← U.fromDoubledInt35 total
   pure $ half.takeLE 32 (by omega)
 
 abbrev RoundState (α : Type) :=
@@ -179,6 +196,68 @@ def inlineScheduleRound (i : Nat) (hi : i ∈ [16:64])
   let parts ← terminalScheduleParts i x.1
   roundWithScheduleParts i hi (x.1, x.2, parts.1, parts.2)
 
+/-- Compute the four rotation and Boolean auxiliaries for the final round. -/
+def finalRoundTransforms (r : RoundState (U 32)) :
+    Circuit (U 32 × LC ℤ × U 32 × LC ℤ) := do
+  let S1 ← U.fromWord $ r.2.2.2.2.1.bits.rotateRight 6 ^^^
+    r.2.2.2.2.1.bits.rotateRight 11 ^^^ r.2.2.2.2.1.bits.rotateRight 25
+  let ch2 ← U.ch2 r.2.2.2.2.1 r.2.2.2.2.2.1 r.2.2.2.2.2.2.1
+  let S0 ← U.fromWord $ r.1.bits.rotateRight 2 ^^^
+    r.1.bits.rotateRight 13 ^^^ r.1.bits.rotateRight 22
+  let maj2 ← U.maj2 r.1 r.2.1 r.2.2.1
+  pure (S1, ch2, S0, maj2)
+
+/-- Compute the two fused final-round feed-forward sums. -/
+def finalRoundSums (i : Nat) (hi : i ∈ [16:64])
+    (x : Vector (U 32) 64 × RoundState (U 32) × Vector (U 32) 8 ×
+      U 32 × U 32 × U 32 × LC ℤ × U 32 × LC ℤ) : Circuit (U 32 × U 32) := do
+  let w := x.1
+  let r := x.2.1
+  let s := x.2.2.1
+  let s0 := x.2.2.2.1
+  let s1 := x.2.2.2.2.1
+  let S1 := x.2.2.2.2.2.1
+  let ch2 := x.2.2.2.2.2.2.1
+  let S0 := x.2.2.2.2.2.2.2.1
+  let maj2 := x.2.2.2.2.2.2.2.2
+  let outE ← U.sum9Doubled1 r.2.2.2.1 r.2.2.2.2.2.2.2 S1 k[i]
+    w[i - 16]! s0 w[i - 7]! s1 s[4] ch2
+  let outA ← U.sumAFinal r.2.2.2.1 outE S0 s[0] s[4] maj2
+  pure (outA, outE)
+
+/-- Compute fused final-round outputs from precomputed terminal schedule parts. -/
+def finalRoundBody (i : Nat) (hi : i ∈ [16:64])
+    (x : Vector (U 32) 64 × RoundState (U 32) × Vector (U 32) 8 × U 32 × U 32) :
+    Circuit (U 32 × U 32) := do
+  let t ← finalRoundTransforms x.2.1
+  finalRoundSums i hi (x.1, x.2.1, x.2.2.1, x.2.2.2.1, x.2.2.2.2,
+    t.1, t.2.1, t.2.2.1, t.2.2.2)
+
+/-- Compute the two final-round words whose feed-forward can be fused. -/
+def finalRoundCore (i : Nat) (hi : i ∈ [16:64])
+    (x : Vector (U 32) 64 × RoundState (U 32) × Vector (U 32) 8) :
+    Circuit (U 32 × U 32) := do
+  let parts ← terminalScheduleParts i x.1
+  finalRoundBody i hi (x.1, x.2.1, x.2.2, parts.1, parts.2)
+
+/-- Assemble the fused pair and the six unchanged feed-forward sums. -/
+def finalRoundTail
+    (x : (U 32 × U 32) × RoundState (U 32) × Vector (U 32) 8) :
+    Circuit (Vector (U 32) 8) := do
+  let out := x.1
+  let r := x.2.1
+  let s := x.2.2
+  pure #v[out.1, ←U.sum #[s[1], r.1], ←U.sum #[s[2], r.2.1],
+    ←U.sum #[s[3], r.2.2.1], out.2, ←U.sum #[s[5], r.2.2.2.2.1],
+    ←U.sum #[s[6], r.2.2.2.2.2.1], ←U.sum #[s[7], r.2.2.2.2.2.2.1]]
+
+/-- Fuse the terminal round with the two feed-forward words it produces. -/
+def finalRound (i : Nat) (hi : i ∈ [16:64])
+    (x : Vector (U 32) 64 × RoundState (U 32) × Vector (U 32) 8) :
+    Circuit (Vector (U 32) 8) := do
+  let out ← finalRoundCore i hi x
+  finalRoundTail (out, x.2.1, x.2.2)
+
 def finish (x : Vector (U 32) 8 × RoundState (U 32)) :
     Circuit (Vector (U 32) 8) := do
   let s := x.1
@@ -189,10 +268,20 @@ def finish (x : Vector (U 32) 8 × RoundState (U 32)) :
     ←U.sum #[s[4], r.2.2.2.2.1], ←U.sum #[s[5], r.2.2.2.2.2.1],
     ←U.sum #[s[6], r.2.2.2.2.2.2.1], ←U.sum #[s[7], r.2.2.2.2.2.2.2]]
 
-def permCircuit (m : Vector (Word 32) 16)
-    (s : Vector (Word 32) 8) :
+/-- Run the two terminal rounds without materializing either terminal schedule word. -/
+def terminalRounds
+    (x : Vector (U 32) 64 × RoundState (U 32) × Vector (U 32) 8) :
     Circuit (Vector (U 32) 8) := do
-  let su ← s.mapM U.fromWord
+  let r ← inlineScheduleRound 62 (by
+    change 16 ≤ 62 ∧ 62 < 64 ∧ (62 - 16) % 1 = 0
+    norm_num) (x.1, x.2.1)
+  finalRound 63 (by
+    change 16 ≤ 63 ∧ 63 < 64 ∧ (63 - 16) % 1 = 0
+    norm_num) (x.1, r, x.2.2)
+
+/-- Build the schedule through word 61 and execute rounds 0 through 61. -/
+def permPrefix (m : Vector (Word 32) 16) (su : Vector (U 32) 8) :
+    Circuit (Vector (U 32) 64 × RoundState (U 32) × Vector (U 32) 8) := do
   let mut w : Vector (U 32) 64 := default
   for h:i in [0:16] do
     w := w.set! i $ ←U.fromWord m[i]
@@ -205,13 +294,14 @@ def permCircuit (m : Vector (Word 32) 16)
       change 0 ≤ i ∧ i < 64 ∧ (i - 0) % 1 = 0
       have hil : i < 62 := by simpa using hi.upper
       exact ⟨by omega, lt_trans hil (by omega), Nat.mod_one _⟩) (w, r)
-  r ← inlineScheduleRound 62 (by
-    change 16 ≤ 62 ∧ 62 < 64 ∧ (62 - 16) % 1 = 0
-    norm_num) (w, r)
-  r ← inlineScheduleRound 63 (by
-    change 16 ≤ 63 ∧ 63 < 64 ∧ (63 - 16) % 1 = 0
-    norm_num) (w, r)
-  finish (su, r)
+  pure (w, r, su)
+
+def permCircuit (m : Vector (Word 32) 16)
+    (s : Vector (Word 32) 8) :
+    Circuit (Vector (U 32) 8) := do
+  let su ← s.mapM U.fromWord
+  let wr ← permPrefix m su
+  terminalRounds wr
 
 def permCirc' (inp : Vector (LC Bool) 768): Circuit (Vector (LC Bool) 256) := do
   let m := Vector.ofFn fun wi => Word.mk $ Vector.ofFn fun bi => inp[wi.val * 32 + bi.val]
