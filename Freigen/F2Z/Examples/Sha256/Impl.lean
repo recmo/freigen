@@ -61,6 +61,15 @@ def U.fromDoubledInt35 (x : LC ℤ) : Circuit (U 35) := do
   assertR1C 0 0 (x - 2 • r.intVal)
   pure r
 
+/-- Witness the 34-bit quotient of an even nonnegative integer by two. -/
+def U.fromDoubledInt34 (x : LC ℤ) : Circuit (U 34) := do
+  let bits ← hint h![x] fun h![(x : Int)] => match x with
+    | .ofNat n => pure $ Vector.ofFn fun i => (n / 2).testBit i
+    | _ => fail s!"negative integer {x} in U.fromDoubledInt34"
+  let r ← U.fromWord { bitsLE := bits }
+  assertR1C 0 0 (x - 2 • r.intVal)
+  pure r
+
 /-- Add ordinary 32-bit terms and terms already represented as twice their
 unsigned value.  Keeping the whole expression doubled lets `CH` and `MAJ`
 remain linear combinations; witnessing only the 35-bit quotient removes the
@@ -76,6 +85,20 @@ def U.sum5Doubled1 (a b c d e : U 32) (x2 : LC ℤ) : Circuit (U 32) :=
 
 def U.sum5Doubled2 (a b c d e : U 32) (x2 y2 : LC ℤ) : Circuit (U 32) :=
   U.sumDoubled32 #[a, b, c, d, e] #[x2, y2]
+
+/-- Recover the new `a` from the already constrained new `e`.
+
+For a SHA-256 round, `newE = d + T1 (mod 2^32)` and
+`newA = T1 + S0 + Maj (mod 2^32)`.  Hence
+`newA = newE + S0 + Maj - d (mod 2^32)`.  Adding `2^32` makes the
+integer representative nonnegative; the doubled form keeps `Maj` as a linear
+combination.  The representative is below `2^34`, so only 34 quotient bits
+are needed. -/
+def U.sumAFromE (d newE S0 : U 32) (maj2 : LC ℤ) : Circuit (U 32) := do
+  let total := 2 • (newE.intVal + S0.intVal - d.intVal) + maj2 +
+    LC.ofConst (2^33 : ℤ)
+  let half ← U.fromDoubledInt34 total
+  pure $ half.takeLE 32 (by omega)
 
 def permCircuit (m : Vector (Word 32) 16)
     (s : Vector (Word 32) 8) :
@@ -107,6 +130,7 @@ def permCircuit (m : Vector (Word 32) 16)
     let maj2 ← U.maj2 a b c
 
     let oldH := h
+    let oldD := d
 
     h := g
     g := f
@@ -115,7 +139,7 @@ def permCircuit (m : Vector (Word 32) 16)
     d := c
     c := b
     b := a
-    a ← U.sum5Doubled2 oldH S1 k[i] w[i] S0 ch2 maj2
+    a ← U.sumAFromE oldD e S0 maj2
 
   pure $ #v[
     ←U.sum #[s[0], a],
