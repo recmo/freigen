@@ -1,4 +1,4 @@
-import Freigen.F2Z.Examples.Sha256.Impl
+import Freigen.F2Z.Examples.Sha256.Model
 import Freigen.F2Z.Correctness.U
 
 namespace Freigen.F2Z.Examples
@@ -267,34 +267,6 @@ theorem U.maj_wf :
       exact (Word.WFRel.xor
         (Word.WFRel.xor (U.WFRel.bits (by grind))
           (U.WFRel.bits (by grind))) (U.WFRel.bits (by grind))) i
-
-@[spec 0] theorem U.ch_sound_frame {u v w : U n} (hu : u.Valid ρ)
-    (hv : v.Valid ρ) (hw : w.Valid ρ) (P : Prop) :
-    ⦃⌜P⌝⦄ Sound.interp ρ (U.ch u v w)
-    ⦃⇓ r => ⌜P ∧ r.Valid ρ ∧ r.eval ρ =
-      chBV (u.eval ρ) (v.eval ρ) (w.eval ρ)⌝⦄ :=
-  Sound.frame (U.ch_sound hu hv hw) P
-
-@[spec 0] theorem U.ch_complete_frame {u v w : U n} (hu : u.Valid ρ)
-    (hv : v.Valid ρ) (hw : w.Valid ρ) (P : Prop) :
-    ⦃⌜P⌝⦄ Complete.interp ρ (U.ch u v w)
-    ⦃⇓ r => ⌜P ∧ r.Valid ρ ∧ r.eval ρ =
-      chBV (u.eval ρ) (v.eval ρ) (w.eval ρ)⌝⦄ :=
-  Complete.frame (U.ch_complete hu hv hw) P
-
-@[spec 0] theorem U.maj_sound_frame {u v w : U n} (hu : u.Valid ρ)
-    (hv : v.Valid ρ) (hw : w.Valid ρ) (P : Prop) :
-    ⦃⌜P⌝⦄ Sound.interp ρ (U.maj u v w)
-    ⦃⇓ r => ⌜P ∧ r.Valid ρ ∧ r.eval ρ =
-      majBV (u.eval ρ) (v.eval ρ) (w.eval ρ)⌝⦄ :=
-  Sound.frame (U.maj_sound hu hv hw) P
-
-@[spec 0] theorem U.maj_complete_frame {u v w : U n} (hu : u.Valid ρ)
-    (hv : v.Valid ρ) (hw : w.Valid ρ) (P : Prop) :
-    ⦃⌜P⌝⦄ Complete.interp ρ (U.maj u v w)
-    ⦃⇓ r => ⌜P ∧ r.Valid ρ ∧ r.eval ρ =
-      majBV (u.eval ρ) (v.eval ρ) (w.eval ρ)⌝⦄ :=
-  Complete.frame (U.maj_complete hu hv hw) P
 
 abbrev RoundState (α : Type) :=
   MProd α (MProd α (MProd α (MProd α (MProd α (MProd α (MProd α α))))))
@@ -1067,45 +1039,6 @@ theorem structured_wf :
               exact ⟨( hs lv rv h1.1).2, hround.2⟩))
           exact fun _ _ _ _ h => h.2
 
-def permModel (m : Vector (BitVec 32) 16)
-    (s : Vector (BitVec 32) 8) : Vector (BitVec 32) 8 := Id.run $ do
-  let mut w := Vector.replicate 64 (0 : BitVec 32)
-  for h:i in [0:16] do
-    w := w.set! i m[i]
-  for i in [16:64] do
-    let s0 := (w[i-15]!.rotateRight 7) ^^^
-      (w[i-15]!.rotateRight 18) ^^^ (w[i-15]! >>> 3)
-    let s1 := (w[i-2]!.rotateRight 17) ^^^
-      (w[i-2]!.rotateRight 19) ^^^ (w[i-2]! >>> 10)
-    w := w.set! i (w[i-16]! + s0 + w[i-7]! + s1)
-  let mut a := s[0]
-  let mut b := s[1]
-  let mut c := s[2]
-  let mut d := s[3]
-  let mut e := s[4]
-  let mut f := s[5]
-  let mut g := s[6]
-  let mut h := s[7]
-  for h:i in [0:64] do
-    let S1 := (e.rotateRight 6) ^^^ (e.rotateRight 11) ^^^
-      (e.rotateRight 25)
-    let ch := (e &&& f) ^^^ ((~~~e) &&& g)
-    let temp1 := h + S1 + ch + k[i] + w[i]
-    let S0 := (a.rotateRight 2) ^^^ (a.rotateRight 13) ^^^
-      (a.rotateRight 22)
-    let maj := (a &&& b) ^^^ (a &&& c) ^^^ (b &&& c)
-    let temp2 := S0 + maj
-    h := g
-    g := f
-    f := e
-    e := d + temp1
-    d := c
-    c := b
-    b := a
-    a := temp1 + temp2
-  #v[s[0] + a, s[1] + b, s[2] + c, s[3] + d,
-    s[4] + e, s[5] + f, s[6] + g, s[7] + h]
-
 private def permScheduleStepBV (i : Nat)
     (w : Vector (BitVec 32) 64) :=
   w.set! i
@@ -1148,9 +1081,9 @@ private theorem permRoundStepBV_eq (i : Nat) (hi : i ∈ [0:64])
   simp only [← Array.sum_toList, List.sum_cons, List.sum_nil]
   congr 1 <;> ac_rfl
 
-theorem permModel_eq_model (m : Vector (BitVec 32) 16)
-    (s : Vector (BitVec 32) 8) : permModel m s = model m s := by
-  unfold permModel model finishBV roundsBV scheduleBV initialSchedule initialRound
+theorem perm_eq_model (m : Vector (BitVec 32) 16)
+    (s : Vector (BitVec 32) 8) : perm m s = model m s := by
+  unfold perm model finishBV roundsBV scheduleBV initialSchedule initialRound
   simp only [Id.run, forIn_eq_forIn', pure_bind]
   have hinit :
       (forIn' [0:16] (Vector.replicate 64 (0 : BitVec 32)) fun i hi w =>
@@ -1190,14 +1123,6 @@ theorem permModel_eq_model (m : Vector (BitVec 32) 16)
   dsimp only [w, init] at hroundRaw
   conv_lhs => enter [1]; exact hroundRaw
   simp only [pure_bind]
-
-def permModel' (input : Vector Bool 768) : Vector Bool 256 :=
-  let m := Vector.ofFn fun i => BitVec.ofNat 32 $
-    Nat.ofBits fun (j : Fin 32) => input[i.val * 32 + j.val]
-  let s := Vector.ofFn fun i => BitVec.ofNat 32 $
-    Nat.ofBits fun (j : Fin 32) => input[512 + i.val * 32 + j.val]
-  let out := permModel m s
-  Vector.ofFn fun i => out[i.val / 32].toNat.testBit (i % 32)
 
 def messageInput (inp : Vector (LC Bool) 768) : Vector (Word 32) 16 :=
   Vector.ofFn fun wi => Word.mk (Vector.ofFn fun bi =>
@@ -1320,7 +1245,7 @@ theorem permCirc'_sound_triple (inputs : Vector Bool 768)
     (cs : Semantics.CS) :
     ⦃⌜True⌝⦄ Sound.interp (Sound.csValuation cs wit)
     (permCirc' (Vector.ofFn fun i => ({i.val} : LC Bool)))
-    ⦃⇓ out => ⌜out.map (fun x => x.eval wit) = permModel' inputs⌝⦄ := by
+    ⦃⇓ out => ⌜out.map (fun x => x.eval wit) = perm' inputs⌝⦄ := by
   rw [permCirc'_eq, Sound.interp_bind]
   apply Triple.bind
     (Q := fun out => ⌜permSoundPost
@@ -1346,7 +1271,7 @@ theorem permCirc'_sound_triple (inputs : Vector Bool 768)
       (inputWords_eval inputs wit hinputs
         (fun si bi => ⟨512 + si.val * 32 + bi.val, by omega⟩))
     rw [hperm]
-    simp only [permModel', permModel_eq_model]
+    simp only [perm', perm_eq_model]
     exact True.intro
 
 end Freigen.F2Z.Examples

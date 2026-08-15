@@ -531,38 +531,4 @@ theorem U.sum_complete {us : Array (U n)}
         rw [U.takeLE_eval wide hwide.1 hle, hwide.2]
         exact U.sumValue_eq_sum us hvalid⟩
 
-@[spec 0]
-theorem U.sum_sound_frame {us : Array (U n)}
-    (hvalid : ∀ u ∈ us, u.Valid ρ) (P : Prop) :
-    ⦃ ⌜P⌝ ⦄ Sound.interp ρ (U.sum us)
-    ⦃ ⇓ out => ⌜P ∧ out.Valid ρ ∧
-      out.eval ρ = (us.map fun u : U n => u.eval ρ).sum⌝ ⦄ := by
-  mvcgen
-  case vc1 => tauto
-  case vc2 => exact fun _ => hvalid
-
-@[spec 0]
-theorem U.sum_complete_frame {us : Array (U n)}
-    (hvalid : ∀ u ∈ us, u.Valid ρ) (P : Prop) :
-    ⦃ ⌜P⌝ ⦄ Complete.interp ρ (U.sum us)
-    ⦃ ⇓ out => ⌜P ∧ out.Valid ρ ∧
-      out.eval ρ = (us.map fun u : U n => u.eval ρ).sum⌝ ⦄ := by
-  mvcgen
-  case vc1 => tauto
-  case vc2 => exact fun _ => hvalid
-
-@[spec 0]
-theorem U.fromWord_sound_frame {ρ} {w : Word n} (P : Prop) :
-    ⦃ ⌜P⌝ ⦄ Sound.interp ρ (U.fromWord w)
-    ⦃ ⇓ u => ⌜P ∧ u.bits = w ∧ u.Valid ρ⌝ ⦄ := by
-  mvcgen
-  case vc1 => tauto
-
-@[spec 0]
-theorem U.fromWord_complete_frame {ρ} {w : Word n} (P : Prop) :
-    ⦃ ⌜P⌝ ⦄ Complete.interp ρ (U.fromWord w)
-    ⦃ ⇓ u => ⌜P ∧ u.bits = w ∧ u.Valid ρ⌝ ⦄ := by
-  mvcgen
-  case vc1 => tauto
-
 end Freigen.F2Z

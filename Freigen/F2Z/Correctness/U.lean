@@ -220,45 +220,19 @@ theorem Vector.mapM_eq_ofFnM [Monad m] [LawfulMonad m]
       rw [hinit, ← ih]
       simp
 
-/-- Frame a pure proposition through universal nondeterminism. -/
-theorem Sound.frame {x : Nondet α} {R : α → Prop}
-    (h : ⦃⌜True⌝⦄ x ⦃⇓ a => ⌜R a⌝⦄) (P : Prop) :
-    ⦃⌜P⌝⦄ x ⦃⇓ a => ⌜P ∧ R a⌝⦄ := by
-  let QR : PostCond α .pure := ⇓ a => ⌜R a⌝
-  let QP : PostCond α .pure := ⇓ _ => ⌜P⌝
-  change True → (x.apply QR).down at h
-  change P → (x.apply (QP ∧ₚ QR)).down
-  intro hp
-  rw [(x.conjunctive QP QR).to_eq]
-  refine ⟨?_, h True.intro⟩
-  apply x.mono (Q₁ := QR) (Q₂ := QP) (by
-    simp [QR, QP, PostCond.entails, hp])
-  exact h True.intro
-
-/-- Frame a pure proposition through a successful `Option` computation. -/
-theorem Complete.frame {x : Option α} {R : α → Prop}
-    (h : ⦃⌜True⌝⦄ x ⦃⇓ a => ⌜R a⌝⦄) (P : Prop) :
-    ⦃⌜P⌝⦄ x ⦃⇓ a => ⌜P ∧ R a⌝⦄ := by
-  cases x <;> simp_all [Triple.iff, WP.wp]
-
-/-- Pointwise construction of a fixed-size vector, given a framed step rule. -/
-theorem Triple.vectorOfFnM_of_frame [Monad m] [WPMonad m ps]
+theorem Triple.vectorOfFnM [Monad m] [WPMonad m ps]
     {f : Fin n → m α} {R : Fin n → α → Prop}
-    (hstep : ∀ i P, ⦃⌜P⌝⦄ f i ⦃⇓ x => ⌜P ∧ R i x⌝⦄) :
+    (hstep : ∀ i, ⦃⌜True⌝⦄ f i ⦃⇓ x => ⌜R i x⌝⦄) :
     ⦃⌜True⌝⦄ Vector.ofFnM f ⦃⇓ xs => ⌜∀ i, R i xs[i]⌝⦄ := by
   apply Triple.iff_conseq.mp (Std.Do.Spec.vector_ofFnM
     (E := ExceptConds.false) (inv := fun i hi xs =>
       ⌜∀ j : Fin i, R (j.castLE hi) xs[j]⌝) ?_) (by simp) (by simp)
   intro i hi xs
-  apply Triple.iff_conseq.mp
-    (hstep ⟨i, hi⟩ (∀ j : Fin i,
-      R (j.castLE (Nat.le_of_lt hi)) xs[j])) (by simp)
-  simp only [PostCond.entails]
-  constructor
-  · intro x
-    apply SPred.pure_elim'
-    rintro ⟨hxs, hx⟩
-    apply SPred.pure_intro
+  mvcgen [hstep]
+  case vc1 hxs x =>
+    mframe
+    rename_i hx
+    mpure_intro
     intro j
     by_cases hj : j.val < i
     · let ji : Fin i := ⟨j, hj⟩
@@ -272,7 +246,6 @@ theorem Triple.vectorOfFnM_of_frame [Monad m] [WPMonad m ps]
           ⟨i, hi⟩ := Fin.ext rfl
       rw [hlast]
       simpa using hx
-  · exact ExceptConds.entails.refl _
 
 theorem Sound.vectorOfFnM {f : Fin n → Circuit α}
     {R : Fin n → α → Prop}
@@ -280,7 +253,7 @@ theorem Sound.vectorOfFnM {f : Fin n → Circuit α}
     ⦃⌜True⌝⦄ Sound.interp ρ (Vector.ofFnM f)
       ⦃⇓ xs => ⌜∀ i, R i xs[i]⌝⦄ := by
   rw [Sound.interp_ofFnM]
-  exact Triple.vectorOfFnM_of_frame fun i P => Sound.frame (hstep i) P
+  exact Triple.vectorOfFnM hstep
 
 theorem Complete.vectorOfFnM {f : Fin n → Circuit α}
     {R : Fin n → α → Prop}
@@ -288,7 +261,7 @@ theorem Complete.vectorOfFnM {f : Fin n → Circuit α}
     ⦃⌜True⌝⦄ Complete.interp ρ (Vector.ofFnM f)
       ⦃⇓ xs => ⌜∀ i, R i xs[i]⌝⦄ := by
   rw [Complete.interp_ofFnM]
-  exact Triple.vectorOfFnM_of_frame fun i P => Complete.frame (hstep i) P
+  exact Triple.vectorOfFnM hstep
 
 theorem U.fromWord_wf_full :
     WF.GadgetSpec
