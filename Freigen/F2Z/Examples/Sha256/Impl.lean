@@ -117,57 +117,101 @@ def U.sumAFromE (d newE S0 : U 32) (maj2 : LC ℤ) : Circuit (U 32) := do
   let half ← U.fromDoubledInt34 total
   pure $ half.takeLE 32 (by omega)
 
+abbrev RoundState (α : Type) :=
+  MProd α (MProd α (MProd α (MProd α (MProd α (MProd α (MProd α α))))))
+
+def scheduleStep (i : Nat) (w : Vector (U 32) 64) : Circuit (U 32) := do
+  let wi15 := w[i - 15]!.bits
+  let s0 ← U.fromWord $
+    wi15.rotateRight 7 ^^^ wi15.rotateRight 18 ^^^ (wi15 >>> 3)
+  let wi2 := w[i - 2]!.bits
+  let s1 ← U.fromWord $
+    wi2.rotateRight 17 ^^^ wi2.rotateRight 19 ^^^ (wi2 >>> 10)
+  U.sum #[w[i - 16]!, s0, w[i - 7]!, s1]
+
+def roundStep (i : Nat) (hi : i ∈ [0:64])
+    (x : Vector (U 32) 64 × RoundState (U 32)) : Circuit (RoundState (U 32)) := do
+  let w := x.1
+  let r := x.2
+  let S1 ← U.fromWord $ r.2.2.2.2.1.bits.rotateRight 6 ^^^
+    r.2.2.2.2.1.bits.rotateRight 11 ^^^ r.2.2.2.2.1.bits.rotateRight 25
+  let ch2 ← U.ch2 r.2.2.2.2.1 r.2.2.2.2.2.1 r.2.2.2.2.2.2.1
+  let S0 ← U.fromWord $ r.1.bits.rotateRight 2 ^^^
+    r.1.bits.rotateRight 13 ^^^ r.1.bits.rotateRight 22
+  let maj2 ← U.maj2 r.1 r.2.1 r.2.2.1
+  let newE ← U.sum5Doubled1 r.2.2.2.1 r.2.2.2.2.2.2.2 S1 k[i] w[i] ch2
+  let newA ← U.sumAFromE r.2.2.2.1 newE S0 maj2
+  pure ⟨newA, r.1, r.2.1, r.2.2.1, newE,
+    r.2.2.2.2.1, r.2.2.2.2.2.1, r.2.2.2.2.2.2.1⟩
+
+def terminalScheduleParts (i : Nat) (w : Vector (U 32) 64) :
+    Circuit (U 32 × U 32) := do
+  let wi15 := w[i - 15]!.bits
+  let s0 ← U.fromWord $
+    wi15.rotateRight 7 ^^^ wi15.rotateRight 18 ^^^ (wi15 >>> 3)
+  let wi2 := w[i - 2]!.bits
+  let s1 ← U.fromWord $
+    wi2.rotateRight 17 ^^^ wi2.rotateRight 19 ^^^ (wi2 >>> 10)
+  pure (s0, s1)
+
+def roundWithScheduleParts (i : Nat) (hi : i ∈ [16:64])
+    (x : Vector (U 32) 64 × RoundState (U 32) × U 32 × U 32) :
+    Circuit (RoundState (U 32)) := do
+  let w := x.1
+  let r := x.2.1
+  let s0 := x.2.2.1
+  let s1 := x.2.2.2
+  let S1 ← U.fromWord $ r.2.2.2.2.1.bits.rotateRight 6 ^^^
+    r.2.2.2.2.1.bits.rotateRight 11 ^^^ r.2.2.2.2.1.bits.rotateRight 25
+  let ch2 ← U.ch2 r.2.2.2.2.1 r.2.2.2.2.2.1 r.2.2.2.2.2.2.1
+  let S0 ← U.fromWord $ r.1.bits.rotateRight 2 ^^^
+    r.1.bits.rotateRight 13 ^^^ r.1.bits.rotateRight 22
+  let maj2 ← U.maj2 r.1 r.2.1 r.2.2.1
+  let newE ← U.sum8Doubled1 r.2.2.2.1 r.2.2.2.2.2.2.2 S1 k[i]
+    w[i - 16]! s0 w[i - 7]! s1 ch2
+  let newA ← U.sumAFromE r.2.2.2.1 newE S0 maj2
+  pure ⟨newA, r.1, r.2.1, r.2.2.1, newE,
+    r.2.2.2.2.1, r.2.2.2.2.2.1, r.2.2.2.2.2.2.1⟩
+
+/-- Compute a terminal schedule word only inside the round that consumes it. -/
+def inlineScheduleRound (i : Nat) (hi : i ∈ [16:64])
+    (x : Vector (U 32) 64 × RoundState (U 32)) : Circuit (RoundState (U 32)) := do
+  let parts ← terminalScheduleParts i x.1
+  roundWithScheduleParts i hi (x.1, x.2, parts.1, parts.2)
+
+def finish (x : Vector (U 32) 8 × RoundState (U 32)) :
+    Circuit (Vector (U 32) 8) := do
+  let s := x.1
+  let r := x.2
+  pure #v[
+    ←U.sum #[s[0], r.1], ←U.sum #[s[1], r.2.1],
+    ←U.sum #[s[2], r.2.2.1], ←U.sum #[s[3], r.2.2.2.1],
+    ←U.sum #[s[4], r.2.2.2.2.1], ←U.sum #[s[5], r.2.2.2.2.2.1],
+    ←U.sum #[s[6], r.2.2.2.2.2.2.1], ←U.sum #[s[7], r.2.2.2.2.2.2.2]]
+
 def permCircuit (m : Vector (Word 32) 16)
     (s : Vector (Word 32) 8) :
     Circuit (Vector (U 32) 8) := do
-  let s ← s.mapM U.fromWord
+  let su ← s.mapM U.fromWord
   let mut w : Vector (U 32) 64 := default
   for h:i in [0:16] do
     w := w.set! i $ ←U.fromWord m[i]
-  for i in [16:64] do
-    let wi15 := w[i-15]!.bits
-    let s0 ← U.fromWord $ wi15.rotateRight 7 ^^^ wi15.rotateRight 18 ^^^ (wi15 >>> 3)
-    let wi2 := w[i-2]!.bits
-    let s1 ← U.fromWord $ wi2.rotateRight 17 ^^^ wi2.rotateRight 19 ^^^ (wi2 >>> 10)
-    w := w.set! i $ ←U.sum #[w[i-16]!, s0, w[i-7]!, s1]
-
-  let mut a := s[0]
-  let mut b := s[1]
-  let mut c := s[2]
-  let mut d := s[3]
-  let mut e := s[4]
-  let mut f := s[5]
-  let mut g := s[6]
-  let mut h := s[7]
-
-  for hi:i in [0:64] do
-    let S1 ← U.fromWord $ e.bits.rotateRight 6 ^^^ e.bits.rotateRight 11 ^^^ e.bits.rotateRight 25
-    let ch2 ← U.ch2 e f g
-    let S0 ← U.fromWord $ a.bits.rotateRight 2 ^^^ a.bits.rotateRight 13 ^^^ a.bits.rotateRight 22
-    let maj2 ← U.maj2 a b c
-
-    let oldH := h
-    let oldD := d
-
-    h := g
-    g := f
-    f := e
-    e ← U.sum5Doubled1 d oldH S1 k[i] w[i] ch2
-    d := c
-    c := b
-    b := a
-    a ← U.sumAFromE oldD e S0 maj2
-
-  pure $ #v[
-    ←U.sum #[s[0], a],
-    ←U.sum #[s[1], b],
-    ←U.sum #[s[2], c],
-    ←U.sum #[s[3], d],
-    ←U.sum #[s[4], e],
-    ←U.sum #[s[5], f],
-    ←U.sum #[s[6], g],
-    ←U.sum #[s[7], h]
-  ]
+  for hi:i in [16:62] do
+    w := w.set! i $ ←scheduleStep i w
+  let mut r : RoundState (U 32) :=
+    ⟨su[0], su[1], su[2], su[3], su[4], su[5], su[6], su[7]⟩
+  for hi:i in [0:62] do
+    r ← roundStep i (by
+      change 0 ≤ i ∧ i < 64 ∧ (i - 0) % 1 = 0
+      have hil : i < 62 := by simpa using hi.upper
+      exact ⟨by omega, lt_trans hil (by omega), Nat.mod_one _⟩) (w, r)
+  r ← inlineScheduleRound 62 (by
+    change 16 ≤ 62 ∧ 62 < 64 ∧ (62 - 16) % 1 = 0
+    norm_num) (w, r)
+  r ← inlineScheduleRound 63 (by
+    change 16 ≤ 63 ∧ 63 < 64 ∧ (63 - 16) % 1 = 0
+    norm_num) (w, r)
+  finish (su, r)
 
 def permCirc' (inp : Vector (LC Bool) 768): Circuit (Vector (LC Bool) 256) := do
   let m := Vector.ofFn fun wi => Word.mk $ Vector.ofFn fun bi => inp[wi.val * 32 + bi.val]
