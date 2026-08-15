@@ -286,6 +286,80 @@ theorem optimized_fromDoubledInt34_wf_full :
     unfold WF.ArgsEq WF.LCEq at *
     simpa only [WF.evalArgs] using congrArg (fun x => h![x]) h
 
+@[spec] theorem optimized_fromDoubledInt36_sound {x : LC ℤ} :
+    ⦃⌜True⌝⦄ Sound.interp ρ (U.fromDoubledInt36 x)
+    ⦃⇓ out => ⌜out.Valid ρ ∧
+      2 * out.intVal.eval ρ.int = x.eval ρ.int⌝⦄ := by
+  mvcgen [U.fromDoubledInt36]
+  intro b
+  mvcgen
+  rename_i r h hass
+  refine ⟨h.1, ?_⟩
+  simp only [LC.eval_zero, zero_mul, LC.eval_sub, two_nsmul,
+    LC.eval_add] at hass
+  omega
+
+@[spec] theorem optimized_fromDoubledInt36_complete {x : LC ℤ} (q : Nat)
+    (hx : x.eval ρ.int = 2 * q) (hq : q < 2 ^ 36) :
+    ⦃⌜True⌝⦄ Complete.interp ρ (U.fromDoubledInt36 x)
+    ⦃⇓ out => ⌜out.Valid ρ ∧
+      2 * out.intVal.eval ρ.int = x.eval ρ.int⌝⦄ := by
+  mvcgen [U.fromDoubledInt36]
+  simp only [WF.interpHint, WF.evalArgs, hx]
+  rw [show (2 * (q : Int)) = Int.ofNat (2 * q) by norm_num [Nat.cast_mul]]
+  simp only [Free.interp_pure, Option.pure_def, Option.some.injEq,
+    exists_eq_left', Vector.map_ofFn]
+  norm_num
+  simp only [Function.comp_def]
+  have ht :
+      ⦃⌜True⌝⦄ (do
+        let r ← Complete.interp ρ (U.fromWord
+          { bitsLE := Vector.ofFn (n := 36) fun i => LC.ofConst (q.testBit i) })
+        Complete.interp ρ (assertR1C 0 0 (x - 2 • r.intVal))
+        pure r)
+      ⦃⇓ out => ⌜out.Valid ρ ∧ out.intVal.eval ρ.int = q⌝⦄ := by
+    apply Triple.bind (Q := fun r => ⌜r.bits =
+      { bitsLE := Vector.ofFn (n := 36) fun i => LC.ofConst (q.testBit i) } ∧
+        r.Valid ρ⌝)
+    case hx => exact U.fromWord_complete
+    case hf =>
+      intro r
+      mvcgen -trivial
+      rename_i h
+      have hbits : r.bits.evalZ ρ = q := by
+        simp only [Word.evalZ, h.1, Vector.getElem_ofFn, Fin.getElem_fin]
+        have hmod := Nat.mod_eq_of_lt hq
+        simpa [Nat.ofBits_testBit] using congrArg Int.ofNat hmod
+      have hintVal : r.intVal.eval ρ.int = (q : Int) :=
+        (U.eval_intVal_eq_evalZ r h.2).trans (by simpa using hbits)
+      constructor
+      · simp [LC.eval_zero, LC.eval_sub, LC.eval_nsmul, hx, hintVal]
+      · exact ⟨h.2, hintVal⟩
+  rw [Triple.iff] at ht
+  simp only [SPred.entails_nil, SPred.down_pure_nil] at ht
+  exact ht True.intro
+
+theorem optimized_fromDoubledInt36_wf_full :
+    WF.GadgetSpec
+      (fun lv rv (l r : LC ℤ) => WF.LCEq lv.int rv.int l r)
+      U.fromDoubledInt36
+      (fun lv rv l r =>
+        (∀ i : Fin 36, WF.LCEq lv.bool rv.bool
+          l.bits.bitsLE[i] r.bits.bitsLE[i]) ∧
+        (∀ i : Fin 36, WF.LCEq lv.int rv.int l.intBits[i] r.intBits[i]) ∧
+        WF.LCEq lv.int rv.int l.intVal r.intVal) := by
+  wfgen' using [U.fromWord_wf_full] unfold [U.fromDoubledInt36]
+  case vc1 hrel =>
+    rcases hrel with ⟨_, values, _, _, hleft, hright⟩
+    exact (hleft i.val i.isLt).trans (hright i.val i.isLt).symm
+  case vc2 h =>
+    unfold WF.LCEq at h
+    simp only [WF.evalArgs]
+    rw [h]
+  case vc3 h =>
+    unfold WF.ArgsEq WF.LCEq at *
+    simpa only [WF.evalArgs] using congrArg (fun x => h![x]) h
+
 theorem optimized_sum5Doubled1_result {a b c d e : U 32} {half : U 35} {x2 : LC ℤ}
     {x : BitVec 32} (ha : a.Valid ρ) (hb : b.Valid ρ) (hc : c.Valid ρ)
     (hd : d.Valid ρ) (he : e.Valid ρ)
@@ -523,6 +597,107 @@ theorem optimized_sum5Doubled2_wf :
     intro half
     mvcgen -trivial
     exact optimized_sum5Doubled2_result ha hb hc hd he hx hy (by assumption)
+
+theorem optimized_sum8Doubled1_result {a b c d e f g h : U 32}
+    {half : U 36} {x2 : LC ℤ} {x : BitVec 32}
+    (ha : a.Valid ρ) (hb : b.Valid ρ) (hc : c.Valid ρ) (hd : d.Valid ρ)
+    (he : e.Valid ρ) (hf : f.Valid ρ) (hg : g.Valid ρ) (hh : h.Valid ρ)
+    (hx : x2.eval ρ.int = 2 * (x.toNat : Int))
+    (hhalf : half.Valid ρ ∧ 2 * half.intVal.eval ρ.int =
+      (2 • (#[a, b, c, d, e, f, g, h].map (·.intVal) |>.sum) + x2).eval ρ.int) :
+    U.Rel ρ (half.takeLE 32 (by omega))
+      (a.eval ρ + b.eval ρ + c.eval ρ + d.eval ρ + e.eval ρ + f.eval ρ +
+        g.eval ρ + h.eval ρ + x) := by
+  let q := (a.eval ρ).toNat + (b.eval ρ).toNat + (c.eval ρ).toNat +
+    (d.eval ρ).toNat + (e.eval ρ).toNat + (f.eval ρ).toNat +
+    (g.eval ρ).toNat + (h.eval ρ).toNat + x.toNat
+  have hhalf2 : half.intVal.eval ρ.int = q := by
+    have htotal :
+        (2 • (#[a, b, c, d, e, f, g, h].map (·.intVal) |>.sum) + x2).eval ρ.int =
+          2 * q := by
+      rw [LC.eval_add, LC.eval_nsmul, LC.eval_array_sum]
+      norm_num [U.intVal_eval_eq_eval_toNat a ha,
+        U.intVal_eval_eq_eval_toNat b hb, U.intVal_eval_eq_eval_toNat c hc,
+        U.intVal_eval_eq_eval_toNat d hd, U.intVal_eval_eq_eval_toNat e he,
+        U.intVal_eval_eq_eval_toNat f hf, U.intVal_eval_eq_eval_toNat g hg,
+        U.intVal_eval_eq_eval_toNat h hh, hx]
+      dsimp [q]
+      omega
+    rw [htotal] at hhalf
+    omega
+  have hhalfNat : (half.intVal.eval ρ.int).toNat = q := by
+    rw [hhalf2]
+    simp
+  refine ⟨U.takeLE_valid half hhalf.1 (by omega), ?_⟩
+  rw [U.takeLE_eval half hhalf.1 (by omega), hhalfNat]
+  dsimp [q]
+  simp [BitVec.ofNat_add]
+
+@[spec] theorem optimized_sum8Doubled1_sound {a b c d e f g h : U 32}
+    {x2 : LC ℤ} {x : BitVec 32}
+    (ha : a.Valid ρ) (hb : b.Valid ρ) (hc : c.Valid ρ) (hd : d.Valid ρ)
+    (he : e.Valid ρ) (hf : f.Valid ρ) (hg : g.Valid ρ) (hh : h.Valid ρ)
+    (hx : x2.eval ρ.int = 2 * (x.toNat : Int)) :
+    ⦃⌜True⌝⦄ Sound.interp ρ (U.sum8Doubled1 a b c d e f g h x2)
+    ⦃⇓ out => ⌜U.Rel ρ out
+      (a.eval ρ + b.eval ρ + c.eval ρ + d.eval ρ + e.eval ρ + f.eval ρ +
+        g.eval ρ + h.eval ρ + x)⌝⦄ := by
+  unfold U.sum8Doubled1
+  rw [Sound.interp_bind]
+  apply Triple.bind (Q := fun half => ⌜half.Valid ρ ∧
+    2 * half.intVal.eval ρ.int =
+      (2 • (#[a, b, c, d, e, f, g, h].map (·.intVal) |>.sum) + x2).eval ρ.int⌝)
+  case hx => exact optimized_fromDoubledInt36_sound
+  case hf =>
+    intro half
+    mvcgen -trivial
+    exact optimized_sum8Doubled1_result ha hb hc hd he hf hg hh hx (by assumption)
+
+@[spec] theorem optimized_sum8Doubled1_complete {a b c d e f g h : U 32}
+    {x2 : LC ℤ} {x : BitVec 32}
+    (ha : a.Valid ρ) (hb : b.Valid ρ) (hc : c.Valid ρ) (hd : d.Valid ρ)
+    (he : e.Valid ρ) (hf : f.Valid ρ) (hg : g.Valid ρ) (hh : h.Valid ρ)
+    (hx : x2.eval ρ.int = 2 * (x.toNat : Int)) :
+    ⦃⌜True⌝⦄ Complete.interp ρ (U.sum8Doubled1 a b c d e f g h x2)
+    ⦃⇓ out => ⌜U.Rel ρ out
+      (a.eval ρ + b.eval ρ + c.eval ρ + d.eval ρ + e.eval ρ + f.eval ρ +
+        g.eval ρ + h.eval ρ + x)⌝⦄ := by
+  let q := (a.eval ρ).toNat + (b.eval ρ).toNat + (c.eval ρ).toNat +
+    (d.eval ρ).toNat + (e.eval ρ).toNat + (f.eval ρ).toNat +
+    (g.eval ρ).toNat + (h.eval ρ).toNat + x.toNat
+  let total := 2 • (#[a, b, c, d, e, f, g, h].map (·.intVal) |>.sum) + x2
+  have htotal : total.eval ρ.int = 2 * q := by
+    dsimp [total]
+    rw [LC.eval_add, LC.eval_nsmul, LC.eval_array_sum]
+    norm_num [U.intVal_eval_eq_eval_toNat a ha,
+      U.intVal_eval_eq_eval_toNat b hb, U.intVal_eval_eq_eval_toNat c hc,
+      U.intVal_eval_eq_eval_toNat d hd, U.intVal_eval_eq_eval_toNat e he,
+      U.intVal_eval_eq_eval_toNat f hf, U.intVal_eval_eq_eval_toNat g hg,
+      U.intVal_eval_eq_eval_toNat h hh, hx]
+    dsimp [q]
+    omega
+  have h36 : q < 2^36 := by
+    have ha' := (a.eval ρ).isLt
+    have hb' := (b.eval ρ).isLt
+    have hc' := (c.eval ρ).isLt
+    have hd' := (d.eval ρ).isLt
+    have he' := (e.eval ρ).isLt
+    have hf' := (f.eval ρ).isLt
+    have hg' := (g.eval ρ).isLt
+    have hh' := (h.eval ρ).isLt
+    have hx' := x.isLt
+    dsimp [q]
+    norm_num at ha' hb' hc' hd' he' hf' hg' hh' hx' ⊢
+    omega
+  unfold U.sum8Doubled1
+  rw [Complete.interp_bind]
+  apply Triple.bind (Q := fun half => ⌜half.Valid ρ ∧
+    2 * half.intVal.eval ρ.int = total.eval ρ.int⌝)
+  case hx => exact optimized_fromDoubledInt36_complete q htotal h36
+  case hf =>
+    intro half
+    mvcgen -trivial
+    exact optimized_sum8Doubled1_result ha hb hc hd he hf hg hh hx (by assumption)
 
 theorem optimized_sumAFromE_result {d newE S0 : U 32} {half : U 34}
     {maj2 : LC ℤ} {maj : BitVec 32}

@@ -70,6 +70,15 @@ def U.fromDoubledInt34 (x : LC ℤ) : Circuit (U 34) := do
   assertR1C 0 0 (x - 2 • r.intVal)
   pure r
 
+/-- Witness the 36-bit quotient of an even nonnegative integer by two. -/
+def U.fromDoubledInt36 (x : LC ℤ) : Circuit (U 36) := do
+  let bits ← hint h![x] fun h![(x : Int)] => match x with
+    | .ofNat n => pure $ Vector.ofFn fun i => (n / 2).testBit i
+    | _ => fail s!"negative integer {x} in U.fromDoubledInt36"
+  let r ← U.fromWord { bitsLE := bits }
+  assertR1C 0 0 (x - 2 • r.intVal)
+  pure r
+
 /-- Add ordinary 32-bit terms and terms already represented as twice their
 unsigned value.  Keeping the whole expression doubled lets `CH` and `MAJ`
 remain linear combinations; witnessing only the 35-bit quotient removes the
@@ -85,6 +94,14 @@ def U.sum5Doubled1 (a b c d e : U 32) (x2 : LC ℤ) : Circuit (U 32) :=
 
 def U.sum5Doubled2 (a b c d e : U 32) (x2 y2 : LC ℤ) : Circuit (U 32) :=
   U.sumDoubled32 #[a, b, c, d, e] #[x2, y2]
+
+/-- Add eight 32-bit terms and one doubled term.  This is the terminal-round
+shape after inlining a four-term SHA-256 schedule recurrence. -/
+def U.sum8Doubled1 (a b c d e f g h : U 32) (x2 : LC ℤ) : Circuit (U 32) := do
+  let ordinary := #[a, b, c, d, e, f, g, h].map (·.intVal) |>.sum
+  let total := 2 • ordinary + x2
+  let half ← U.fromDoubledInt36 total
+  pure $ half.takeLE 32 (by omega)
 
 /-- Recover the new `a` from the already constrained new `e`.
 
