@@ -17,6 +17,8 @@ def k : Vector (BitVec 32) 64 := #v[
 
 section Circuit
 
+/-- Bit-producing reference gadget retained for its standalone specification.
+The SHA-256 round circuit uses `ch2` below and does not call this gadget. -/
 def U.ch (u v w : U n) : Circuit (U n) := do
   let chBits ← Vector.ofFnM (n:=n) fun i => do
     let h ← hint h![u.bits[i], v.bits[i], w.bits[i]] fun h![u, v, w] =>
@@ -28,6 +30,8 @@ def U.ch (u v w : U n) : Circuit (U n) := do
   assertR1C 0 0 $ v.intVal + w.intVal - uv.intVal + uw.intVal - 2 • ch.intVal
   pure ch
 
+/-- Bit-producing reference gadget retained for its standalone specification.
+The SHA-256 round circuit uses `maj2` below and does not call this gadget. -/
 def U.maj (u v w : U n) : Circuit (U n) := do
   let majBits ← Vector.ofFnM (n:=n) fun i => do
     let h ← hint h![u.bits[i], v.bits[i], w.bits[i]] fun h![u, v, w] =>
@@ -37,6 +41,41 @@ def U.maj (u v w : U n) : Circuit (U n) := do
   let uvw ← U.fromWord $ u.bits ^^^ v.bits ^^^ w.bits
   assertR1C 0 0 $ u.intVal + v.intVal + w.intVal - uvw.intVal - 2 • maj.intVal
   pure maj
+
+def U.ch2 (u v w : U n) : Circuit (LC ℤ) := do
+  let uv ← U.fromWord $ u.bits ^^^ v.bits
+  let uw ← U.fromWord $ u.bits ^^^ w.bits
+  pure $ v.intVal + w.intVal - uv.intVal + uw.intVal
+
+def U.maj2 (u v w : U n) : Circuit (LC ℤ) := do
+  let uvw ← U.fromWord $ u.bits ^^^ v.bits ^^^ w.bits
+  pure $ u.intVal + v.intVal + w.intVal - uvw.intVal
+
+/-- Witness the 35-bit quotient of an even nonnegative integer by two.  The
+constraint proves the shift without allocating the known-zero low input bit. -/
+def U.fromDoubledInt35 (x : LC ℤ) : Circuit (U 35) := do
+  let bits ← hint h![x] fun h![(x : Int)] => match x with
+    | .ofNat n => pure $ Vector.ofFn fun i => (n / 2).testBit i
+    | _ => fail s!"negative integer {x} in U.fromDoubledInt35"
+  let r ← U.fromWord { bitsLE := bits }
+  assertR1C 0 0 (x - 2 • r.intVal)
+  pure r
+
+/-- Add ordinary 32-bit terms and terms already represented as twice their
+unsigned value.  Keeping the whole expression doubled lets `CH` and `MAJ`
+remain linear combinations; witnessing only the 35-bit quotient removes the
+common factor without allocating the known-zero low bit or `CH`/`MAJ` bits. -/
+def U.sumDoubled32 (us : Array (U 32)) (doubled : Array (LC ℤ)) : Circuit (U 32) := do
+  let ordinary := us.map (·.intVal) |>.sum
+  let total := 2 • ordinary + doubled.sum
+  let half ← U.fromDoubledInt35 total
+  pure $ half.takeLE 32 (by omega)
+
+def U.sum5Doubled1 (a b c d e : U 32) (x2 : LC ℤ) : Circuit (U 32) :=
+  U.sumDoubled32 #[a, b, c, d, e] #[x2]
+
+def U.sum5Doubled2 (a b c d e : U 32) (x2 y2 : LC ℤ) : Circuit (U 32) :=
+  U.sumDoubled32 #[a, b, c, d, e] #[x2, y2]
 
 def permCircuit (m : Vector (Word 32) 16)
     (s : Vector (Word 32) 8) :
@@ -63,20 +102,20 @@ def permCircuit (m : Vector (Word 32) 16)
 
   for hi:i in [0:64] do
     let S1 ← U.fromWord $ e.bits.rotateRight 6 ^^^ e.bits.rotateRight 11 ^^^ e.bits.rotateRight 25
-    let ch ← U.ch e f g
+    let ch2 ← U.ch2 e f g
     let S0 ← U.fromWord $ a.bits.rotateRight 2 ^^^ a.bits.rotateRight 13 ^^^ a.bits.rotateRight 22
-    let maj ← U.maj a b c
+    let maj2 ← U.maj2 a b c
 
     let oldH := h
 
     h := g
     g := f
     f := e
-    e ← U.sum #[d, oldH, S1, ch, k[i], w[i]]
+    e ← U.sum5Doubled1 d oldH S1 k[i] w[i] ch2
     d := c
     c := b
     b := a
-    a ← U.sum #[oldH, S1, ch, k[i], w[i], S0, maj]
+    a ← U.sum5Doubled2 oldH S1 k[i] w[i] S0 ch2 maj2
 
   pure $ #v[
     ←U.sum #[s[0], a],
