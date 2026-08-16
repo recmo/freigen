@@ -30,9 +30,18 @@ rank-one enumerations and the normalized full-rank checks cover arbitrary
 Boolean auxiliaries for the attempted row reductions; rank zero is the
 original Walsh representation and cannot improve its sparsity.
 
+For the larger three-round CH chain, `--three-ch-candidates` exhausts 117
+distinct low-complexity auxiliary truth tables and lets Z3 select any five
+rows from the complete parity-character space.  The symbolic and CEGIS modes
+are retained as bounded exploratory searches over an arbitrary one-bit truth
+table; unlike the fixed-mask and fixed-candidate searches, they may return
+inconclusive.
+
 Run with:
 
     nix shell nixpkgs#z3 -c python3 scripts/search_sha256_cross_bit_zero_sets.py
+    nix shell nixpkgs#z3 -c python3 scripts/search_sha256_cross_bit_zero_sets.py \
+      --three-ch-candidates
 """
 
 from __future__ import annotations
@@ -43,6 +52,7 @@ import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from itertools import combinations, product
+from typing import Callable
 
 
 def parity(bits: tuple[int, ...], mask: int) -> int:
@@ -66,6 +76,8 @@ def target_input_count(target_name: str) -> int:
         return 4
     if target_name == "three_maj":
         return 5
+    if target_name == "three_ch":
+        return 5
     return 6
 
 
@@ -79,6 +91,9 @@ def target_value(target_name: str, inputs: tuple[int, ...]) -> int:
     if target_name == "three_maj":
         return (maj(*inputs[:3]) + 2 * maj(inputs[3], inputs[0], inputs[1])
                 + 4 * maj(inputs[4], inputs[3], inputs[0]))
+    if target_name == "three_ch":
+        return (ch(*inputs[:3]) + 2 * ch(inputs[3], inputs[0], inputs[1])
+                + 4 * ch(inputs[4], inputs[3], inputs[0]))
     if target_name == "ch_maj":
         return ch(*inputs[:3]) + maj(*inputs[3:])
     if target_name == "sigma_ch":
@@ -97,6 +112,106 @@ def linear_expression(
     terms.extend(f"(* {names[1 + len(inputs) + j]} {row})"
                  for j, row in enumerate(rows))
     return "(+ " + " ".join(terms) + ")"
+
+
+def fixed_aux_sparse_query(
+    aux_values: tuple[int, ...], target_name: str, row_limit: int,
+    include_model: bool = False, timeout_ms: int = 10_000,
+) -> str:
+    """Select a sparse parity basis for one fixed auxiliary truth table."""
+    input_count = target_input_count(target_name)
+    masks = [
+        mask for mask in range(1, 1 << (input_count + 1))
+        if mask & (mask - 1) or mask == 1 << input_count
+    ]
+    prefix = "fa"
+    lines = [
+        "(set-logic QF_LIRA)",
+        "(set-option :produce-models true)",
+        f"(set-option :timeout {timeout_ms})",
+    ]
+    out_free = [f"{prefix}_out_free_{i}" for i in range(input_count + 1)]
+    eq_free = [f"{prefix}_eq_free_{i}" for i in range(input_count + 1)]
+    for name in (*out_free, *eq_free):
+        lines.append(f"(declare-const {name} Real)")
+    for mask in masks:
+        lines.extend([
+            f"(declare-const {prefix}_use_{mask} Bool)",
+            f"(declare-const {prefix}_out_{mask} Real)",
+            f"(declare-const {prefix}_eq_{mask} Real)",
+            f"(assert (=> (not {prefix}_use_{mask}) "
+            f"(and (= {prefix}_out_{mask} 0) (= {prefix}_eq_{mask} 0))))",
+        ])
+    cardinality = "(+ " + " ".join(
+        f"(ite {prefix}_use_{mask} 1 0)" for mask in masks) + ")"
+    lines.append(f"(assert (<= {cardinality} {row_limit}))")
+
+    def expression(
+        free: list[str], coefficients: str, inputs: tuple[int, ...], aux: int,
+    ) -> str:
+        terms = [free[0]]
+        terms.extend(f"(* {free[i + 1]} {bit})"
+                     for i, bit in enumerate(inputs) if bit)
+        terms.extend(
+            f"(* {prefix}_{coefficients}_{mask} "
+            f"{parity((*inputs, aux), mask)})" for mask in masks)
+        return "(+ " + " ".join(terms) + ")"
+
+    assignments = list(product((0, 1), repeat=input_count))
+    if len(aux_values) != len(assignments):
+        raise ValueError("auxiliary truth table has the wrong size")
+    for index, inputs in enumerate(assignments):
+        valid_aux = aux_values[index]
+        valid_eq = expression(eq_free, "eq", inputs, valid_aux)
+        invalid_eq = expression(eq_free, "eq", inputs, 1 ^ valid_aux)
+        output = expression(out_free, "out", inputs, valid_aux)
+        lines.append(
+            f"(assert (and (= {valid_eq} 0) (not (= {invalid_eq} 0)) "
+            f"(= {output} {target_value(target_name, inputs)})))")
+    lines.append("(check-sat)")
+    if include_model:
+        uses = " ".join(f"{prefix}_use_{mask}" for mask in masks)
+        lines.append(f"(get-value ({uses}))")
+        lines.append("(get-model)")
+    return "\n".join(lines) + "\n"
+
+
+def three_ch_auxiliary_candidates() -> list[tuple[str, tuple[int, ...]]]:
+    assignments = list(product((0, 1), repeat=5))
+    predicates: list[tuple[str, Callable[[tuple[int, ...]], int]]] = []
+    for size in (2, 3):
+        for indices in combinations(range(5), size):
+            suffix = "".join(map(str, indices))
+            predicates.append((f"and_{suffix}", lambda xs, js=indices:
+                               int(all(xs[j] for j in js))))
+            predicates.append((f"or_{suffix}", lambda xs, js=indices:
+                               int(any(xs[j] for j in js))))
+    for u, v, w in product(range(5), repeat=3):
+        if len({u, v, w}) != 3:
+            continue
+        predicates.append((f"ch_{u}{v}{w}", lambda xs, i=u, j=v, k=w:
+                           ch(xs[i], xs[j], xs[k])))
+    for indices in combinations(range(5), 3):
+        predicates.append(("maj_" + "".join(map(str, indices)),
+                           lambda xs, js=indices: maj(*(xs[j] for j in js))))
+
+    def outputs(xs: tuple[int, ...]) -> tuple[int, int, int]:
+        return (ch(*xs[:3]), ch(xs[3], xs[0], xs[1]),
+                ch(xs[4], xs[3], xs[0]))
+
+    for bits in range(1, 8):
+        predicates.append((f"ch_xor_{bits}", lambda xs, mask=bits:
+                           parity(outputs(xs), mask)))
+    predicates.extend([
+        ("ch_and", lambda xs: int(all(outputs(xs)))),
+        ("ch_or", lambda xs: int(any(outputs(xs)))),
+        ("ch_maj", lambda xs: maj(*outputs(xs))),
+    ])
+    unique: dict[tuple[int, ...], str] = {}
+    for name, predicate in predicates:
+        table = tuple(predicate(inputs) for inputs in assignments)
+        unique.setdefault(table, name)
+    return sorted((name, table) for table, name in unique.items())
 
 
 def symbolic_linear_expression(
@@ -121,10 +236,10 @@ def xor_expr(terms: list[str]) -> str:
 def symbolic_two_ch_query(
     include_model: bool = False, timeout_ms: int = 300_000,
     assignment_indices: set[int] | None = None,
+    target_name: str = "two_ch", row_count: int = 3,
 ) -> str:
     """Search all 127 affine characters without nonlinear mask selection."""
-    input_count = 6
-    row_count = 3
+    input_count = target_input_count(target_name)
     dimension = 1 + input_count + row_count
     lines = [
         "(set-logic QF_LIRA)",
@@ -177,7 +292,7 @@ def symbolic_two_ch_query(
             output_names, inputs, rows_by_aux[0])
         out_one = symbolic_linear_expression(
             output_names, inputs, rows_by_aux[1])
-        target = ch(*inputs[:3]) + 2 * ch(*inputs[3:])
+        target = target_value(target_name, inputs)
         lines.append(
             f"(assert (= (ite sym_aux_{index} {out_one} {out_zero}) {target}))"
         )
@@ -192,12 +307,12 @@ def symbolic_two_ch_query(
 
 
 def two_ch_query(
-    masks: tuple[int, int, int], include_model: bool = False,
+    masks: tuple[int, ...], include_model: bool = False,
     timeout_ms: int = 2_000, unsat_core: bool = False,
     target_name: str = "two_ch",
 ) -> str:
     input_count = target_input_count(target_name)
-    row_count = 3
+    row_count = len(masks)
     dimension = 1 + input_count + row_count
     lines = [
         "(set-logic QF_LRA)",
@@ -399,25 +514,34 @@ def full_rank_query(
     return "\n".join(lines) + "\n"
 
 
-def decode_symbolic_masks(output: str) -> tuple[int, int, int]:
+def decode_symbolic_masks(
+    output: str, row_count: int = 3, input_count: int = 6,
+) -> tuple[int, ...]:
     values = {(int(row), int(bit)): value == "true"
               for row, bit, value in re.findall(
                   r"\(mask_([0-9]+)_([0-9]+) (true|false)\)", output)}
-    if len(values) != 21:
+    if len(values) != row_count * (input_count + 1):
         raise ValueError("symbolic model did not contain all mask bits")
-    return tuple(sum((1 << bit) for bit in range(7) if values[row, bit])
-                 for row in range(3))
+    return tuple(sum((1 << bit) for bit in range(input_count + 1)
+                     if values[row, bit]) for row in range(row_count))
 
 
-def cegis_two_ch(z3: str, max_iterations: int = 64) -> tuple[str, str]:
-    samples = {0, 0b010101, 0b101010, 63}
+def cegis_two_ch(
+    z3: str, max_iterations: int = 64, target_name: str = "two_ch",
+    row_count: int = 3,
+) -> tuple[str, str]:
+    input_count = target_input_count(target_name)
+    alternating = sum(1 << bit for bit in range(0, input_count, 2))
+    samples = {0, alternating, ((1 << input_count) - 1) ^ alternating,
+               (1 << input_count) - 1}
     transcript = []
     for iteration in range(1, max_iterations + 1):
         proposal = subprocess.run(
             [z3, "-in"],
             input=symbolic_two_ch_query(
                 include_model=True, timeout_ms=120_000,
-                assignment_indices=samples),
+                assignment_indices=samples, target_name=target_name,
+                row_count=row_count),
             text=True, capture_output=True, check=False,
         )
         if proposal.stdout.startswith("unsat\n"):
@@ -428,10 +552,12 @@ def cegis_two_ch(z3: str, max_iterations: int = 64) -> tuple[str, str]:
             status = proposal.stdout.splitlines()[0] if proposal.stdout else "empty"
             transcript.append(f"iteration {iteration}: symbolic {status}")
             return "unknown", "\n".join(transcript)
-        masks = decode_symbolic_masks(proposal.stdout)
+        masks = decode_symbolic_masks(
+            proposal.stdout, row_count=row_count, input_count=input_count)
         check = subprocess.run(
             [z3, "-in"],
-            input=two_ch_query(masks, timeout_ms=30_000, unsat_core=True),
+            input=two_ch_query(masks, timeout_ms=30_000, unsat_core=True,
+                               target_name=target_name),
             text=True, capture_output=True, check=False,
         )
         if check.stdout.startswith("sat\n"):
@@ -480,6 +606,66 @@ def main() -> int:
     if z3 is None:
         print("error: z3 is not on PATH", file=sys.stderr)
         return 2
+    if "--three-ch-candidates" in sys.argv:
+        candidates = three_ch_auxiliary_candidates()
+
+        def solve_candidate(
+            item: tuple[str, tuple[int, ...]],
+        ) -> tuple[str, tuple[int, ...], str]:
+            name, table = item
+            try:
+                completed = subprocess.run(
+                    [z3, "-in"], input=fixed_aux_sparse_query(
+                        table, "three_ch", 5),
+                    text=True, capture_output=True, check=False,
+                    timeout=15,
+                )
+            except subprocess.TimeoutExpired:
+                return name, table, "unknown\n"
+            return name, table, completed.stdout
+
+        unknown = 0
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            for name, table, stdout in executor.map(solve_candidate, candidates):
+                if stdout.startswith("sat\n"):
+                    model = subprocess.run(
+                        [z3, "-in"], input=fixed_aux_sparse_query(
+                            table, "three_ch", 5, include_model=True,
+                            timeout_ms=60_000),
+                        text=True, capture_output=True, check=False,
+                        timeout=65,
+                    )
+                    print("three adjacent-round CH terms: SAT six rows -> five")
+                    print(f"auxiliary: {name}")
+                    print(model.stdout.strip())
+                    return model.returncode
+                if not stdout.startswith("unsat\n"):
+                    unknown += 1
+        print("three adjacent-round CH terms: no five-row candidate encoding")
+        print(f"candidate truth tables: {len(candidates)}; unknown: {unknown}")
+        return 1 if unknown else 0
+    if "--three-ch-cegis" in sys.argv:
+        status, transcript = cegis_two_ch(
+            z3, target_name="three_ch", row_count=5)
+        print("three adjacent-round CH terms: CEGIS six rows -> five rows")
+        print(transcript)
+        if status in ("sat", "unsat"):
+            return 0
+        print("error: three-CH CEGIS search was inconclusive", file=sys.stderr)
+        return 1
+    if "--three-ch-symbolic" in sys.argv:
+        completed = subprocess.run(
+            [z3, "-in"], input=symbolic_two_ch_query(
+                include_model=True, timeout_ms=600_000,
+                target_name="three_ch", row_count=5),
+            text=True, capture_output=True, check=False,
+        )
+        print("three adjacent-round CH terms: symbolic six rows -> five rows")
+        print(completed.stdout.strip())
+        if completed.stderr:
+            print(completed.stderr.strip(), file=sys.stderr)
+        return completed.returncode if completed.stdout.startswith(("sat\n", "unsat\n")) else 1
+
     def solve(
         target_name: str, masks: tuple[int, int, int],
     ) -> tuple[tuple[int, int, int], str]:
