@@ -65,6 +65,57 @@ of the four existing `Ch` characters and the auxiliary character.  This is a
 strict subset of the complete 7,875-case canonical search and is retained as a
 regression check.
 
+## Ordinary-round optimality status
+
+An isolated compilation of `roundStep` with nine already-committed 32-bit
+input words gives 229 additional `M` rows.  Compiling the 288 Boolean interface
+bits as `U 32` values and then executing the round gives `mRows = 518`: 288
+interface-conversion rows, 229 internal rows, and the one extra row in the
+statistics convention.
+
+The internal accounting is:
+
+| Round component | Current rows |
+| --- | ---: |
+| `Sigma1(e)` | 32 |
+| `Ch(e,f,g)` | 64 |
+| `Sigma0(a)` | 32 |
+| `Maj(a,b,c)` | 32 |
+| `newE` output and quotient | 35 |
+| `newA` output and quotient | 34 |
+| **Total** | **229** |
+
+The exact exclusions above prove optimality of the individual Boolean
+identities and several two- and three-expression couplings.  They are strong
+evidence that the 229-row construction is locally optimal.  They do **not**
+prove that the entire round is globally optimal.
+
+The strongest currently checked unrestricted semantic bound for one round is
+64 internal rows.  A deterministic exact computation found 64 linearly
+independent second-derivative vectors of the 64-bit `(newA,newE)` function
+(rank 64 was reached after 69 candidate derivatives).  This shows that no
+nonzero linear combination of those outputs is affine in the 288 round inputs.
+Turning this computation into a repository-grade lower bound still requires a
+checked certificate and the abstract factorization theorem for Freigen's `M`
+semantics.
+
+The missing 229-row theorem would have to exclude a 228-row encoding in which
+an arbitrary Boolean witness depends jointly on all 288 round inputs and its
+parity rows simultaneously encode rotations, `Ch`, `Maj`, both modular
+additions, output bits, and quotient bits.  The existing local `UNSAT`
+certificates cannot simply be added: a global parity row can span multiple bit
+positions or expression families.  No direct-sum theorem for this unrestricted
+linear zero-set extension model has been established here.
+
+Accordingly, the supported claim is:
+
+- **proved exactly:** the listed local and cross-expression exclusions;
+- **verified construction:** 229 internal rows per ordinary round;
+- **computed unrestricted lower-bound candidate:** 64 rows, pending a checked
+  derivative certificate and the abstract factorization theorem; and
+- **not proved:** global optimality of 229 rows under arbitrary witnesses and
+  unbounded `mCols`.
+
 ## Exactly excluded carry encodings
 
 For the fused schedule/round block, the three carries have ranges
@@ -136,6 +187,8 @@ The following remain open and must not be cited as lower bounds:
 - an arbitrary one-bit witness for three consecutive `Ch` terms: the fully
   symbolic and CEGIS mask searches were stopped without a result;
 - arbitrary higher-rank auxiliary encodings for the three-`Ch` chain;
+- a fully coupled 228-row encoding of an ordinary round with an arbitrary
+  global witness truth table;
 - larger cross-round expressions not listed in the exact table;
 - encodings that add nonlinear R1CS constraints; and
 - reductions that change the surrounding circuit semantics rather than only
