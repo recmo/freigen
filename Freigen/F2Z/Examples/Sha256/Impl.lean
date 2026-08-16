@@ -186,6 +186,18 @@ def roundStep (i : Nat) (hi : i ∈ [0:64])
   pure ⟨newA, r.1, r.2.1, r.2.2.1, newE,
     r.2.2.2.2.1, r.2.2.2.2.2.1, r.2.2.2.2.2.2.1⟩
 
+/-- Materialize schedule word `i` and immediately consume it in round `i`. -/
+def scheduleRoundStep (i : Nat) (hi : i ∈ [16:62])
+    (x : RoundState (U 32) × Vector (U 32) 64) :
+    Circuit (RoundState (U 32) × Vector (U 32) 64) := do
+  let wi ← scheduleStep i x.2
+  let w := x.2.set! i wi
+  let r ← roundStep i (by
+    change 16 ≤ i ∧ i < 62 ∧ (i - 16) % 1 = 0 at hi
+    change 0 ≤ i ∧ i < 64 ∧ (i - 0) % 1 = 0
+    exact ⟨by omega, by omega, Nat.mod_one _⟩) (w, x.1)
+  pure (r, w)
+
 def terminalScheduleParts (i : Nat) (w : Vector (U 32) 64) :
     Circuit (U 32 × U 32) := do
   let wi15 := w[i - 15]!.bits
@@ -307,22 +319,27 @@ def terminalRounds
     change 16 ≤ 63 ∧ 63 < 64 ∧ (63 - 16) % 1 = 0
     norm_num) (x.1, r, x.2.2)
 
-/-- Build the schedule through word 61 and execute rounds 0 through 61. -/
+/-- Build the schedule through word 61 while executing rounds 0 through 61.
+
+Rounds 0 through 15 consume the message words directly.  Thereafter each
+schedule word is materialized immediately before the round that first consumes
+it, keeping the schedule and round witnesses in one optimization scope. -/
 def permPrefix (m : Vector (Word 32) 16) (su : Vector (U 32) 8) :
     Circuit (Vector (U 32) 64 × RoundState (U 32) × Vector (U 32) 8) := do
   let mut w : Vector (U 32) 64 := default
   for h:i in [0:16] do
     w := w.set! i $ ←U.fromWord m[i]
-  for hi:i in [16:62] do
-    w := w.set! i $ ←scheduleStep i w
   let mut r : RoundState (U 32) :=
     ⟨su[0], su[1], su[2], su[3], su[4], su[5], su[6], su[7]⟩
-  for hi:i in [0:62] do
+  for hi:i in [0:16] do
     r ← roundStep i (by
       change 0 ≤ i ∧ i < 64 ∧ (i - 0) % 1 = 0
-      have hil : i < 62 := by simpa using hi.upper
+      have hil : i < 16 := by simpa using hi.upper
       exact ⟨by omega, lt_trans hil (by omega), Nat.mod_one _⟩) (w, r)
-  pure (w, r, su)
+  let mut rw := (r, w)
+  for hi:i in [16:62] do
+    rw ← scheduleRoundStep i hi rw
+  pure (rw.2, rw.1, su)
 
 def permCircuit (m : Vector (Word 32) 16)
     (s : Vector (Word 32) 8) :

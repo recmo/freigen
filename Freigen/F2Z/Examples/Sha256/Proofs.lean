@@ -1252,6 +1252,22 @@ def roundStepBV (i : Nat)
   ⟨newA, r.1, r.2.1, r.2.2.1, newE,
     r.2.2.2.2.1, r.2.2.2.2.2.1, r.2.2.2.2.2.2.1⟩
 
+def scheduleRoundStepBV (i : Nat)
+    (x : RoundState (BitVec 32) × Vector (BitVec 32) 64) :
+    RoundState (BitVec 32) × Vector (BitVec 32) 64 :=
+  let w := x.2.set! i (scheduleStepBV i x.2)
+  (roundStepBV i w x.1, w)
+
+@[simp] theorem scheduleRoundStepBV_fst (i : Nat)
+    (x : RoundState (BitVec 32) × Vector (BitVec 32) 64) :
+    (scheduleRoundStepBV i x).1 =
+      roundStepBV i (x.2.set! i (scheduleStepBV i x.2)) x.1 := rfl
+
+@[simp] theorem scheduleRoundStepBV_snd (i : Nat)
+    (x : RoundState (BitVec 32) × Vector (BitVec 32) 64) :
+    (scheduleRoundStepBV i x).2 =
+      x.2.set! i (scheduleStepBV i x.2) := rfl
+
 def inlineScheduleRoundBV (i : Nat) (w : Vector (BitVec 32) 64)
     (r : RoundState (BitVec 32)) : RoundState (BitVec 32) :=
   let S1 := r.2.2.2.2.1.rotateRight 6 ^^^ r.2.2.2.2.1.rotateRight 11 ^^^
@@ -1592,6 +1608,55 @@ theorem roundStep_sound_rel {w : Vector (U 32) 64}
   case vc16.he | vc17.hS0 => grind [U.Rel]
   case vc18.hmaj => assumption
   case vc19.success => grind [RoundState.Valid, U.Rel]
+
+private theorem mem_range16_62_to_64 {i : Nat} (hi : i ∈ [16:62]) :
+    i ∈ [16:64] := by
+  change 16 ≤ i ∧ i < 62 ∧ (i - 16) % 1 = 0 at hi
+  change 16 ≤ i ∧ i < 64 ∧ (i - 16) % 1 = 0
+  exact ⟨hi.1, by omega, hi.2.2⟩
+
+private theorem mem_range0_62_to_64 {i : Nat} (hi : i ∈ [0:62]) :
+    i ∈ [0:64] := by
+  change 0 ≤ i ∧ i < 62 ∧ (i - 0) % 1 = 0 at hi
+  change 0 ≤ i ∧ i < 64 ∧ (i - 0) % 1 = 0
+  exact ⟨hi.1, by omega, hi.2.2⟩
+
+@[spec] theorem scheduleRoundStep_sound
+    {x : RoundState (U 32) × Vector (U 32) 64}
+    {xv : RoundState (BitVec 32) × Vector (BitVec 32) 64}
+    (hx : RoundState.Rel ρ x.1 xv.1 ∧ Vector.Rel ρ x.2 xv.2)
+    (i : Nat) (hi : i ∈ [16:62]) :
+    ⦃⌜True⌝⦄ Sound.interp ρ (scheduleRoundStep i hi x)
+    ⦃⇓ out => ⌜RoundState.Rel ρ out.1
+        (roundStepBV i (xv.2.set! i (scheduleStepBV i xv.2)) xv.1) ∧
+      Vector.Rel ρ out.2 (xv.2.set! i (scheduleStepBV i xv.2))⌝⦄ := by
+  unfold scheduleRoundStep
+  mvcgen -trivial
+  case vc1.hw => exact Vector.Rel.valid hx.2
+  case vc2.hi => exact mem_range16_62_to_64 hi
+  case vc3.hw => exact Vector.Rel.valid (hx.2.set! (by assumption) i)
+  case vc4.hr => exact hx.1.1
+  case vc5.success =>
+    rename_i wi hwi out hout
+    rw [Vector.Rel.eval_eq hx.2] at hwi
+    have hw := hx.2.set! hwi i
+    rw [Vector.Rel.eval_eq hw, RoundState.Rel.eval_eq hx.1] at hout
+    exact ⟨hout, hw⟩
+
+@[spec] theorem scheduleRoundStep_complete
+    {x : RoundState (U 32) × Vector (U 32) 64}
+    (hx : x.1.Valid ρ ∧ ∀ j : Fin 64, x.2[j].Valid ρ)
+    (i : Nat) (hi : i ∈ [16:62]) :
+    ⦃⌜True⌝⦄ Complete.interp ρ (scheduleRoundStep i hi x)
+    ⦃⇓ out => ⌜out.1.Valid ρ ∧ ∀ j : Fin 64, out.2[j].Valid ρ⌝⦄ := by
+  unfold scheduleRoundStep
+  mvcgen -trivial
+  case vc1.hw => exact hx.2
+  case vc2.hi => exact mem_range16_62_to_64 hi
+  case vc3.hw => exact U.allValid_set! hx.2 (by grind [U.Rel]) _
+  case vc4.hr => exact hx.1
+  case vc5.success => exact ⟨by assumption,
+    U.allValid_set! hx.2 (by grind [U.Rel]) _⟩
 
 private theorem inlineCoupledRound_arith
     (d h S1 ki w16 s0 w7 s1 ch S0 maj : BitVec 32) :
@@ -2216,10 +2281,81 @@ def roundsBV62 (w : Vector (BitVec 32) 64) (s : Vector (BitVec 32) 8) :
     RoundState (BitVec 32) :=
   ([0:62].toList).foldl (fun r i => roundStepBV i w r) (initialRound s)
 
+def roundsBV16 (w : Vector (BitVec 32) 64) (s : Vector (BitVec 32) 8) :
+    RoundState (BitVec 32) :=
+  ([0:16].toList).foldl (fun r i => roundStepBV i w r) (initialRound s)
+
+/-- Pure model of the physically merged schedule/round prefix. -/
+def fusedPrefixBV (m : Vector (BitVec 32) 16) (s : Vector (BitVec 32) 8) :
+    RoundState (BitVec 32) × Vector (BitVec 32) 64 :=
+  ([16:62].toList).foldl (fun x i => scheduleRoundStepBV i x)
+    (roundsBV16 (initialSchedule m) s, initialSchedule m)
+
+private theorem Vector.setBang_eq_setIfInBounds (xs : Vector α n)
+    (i : Nat) (x : α) : xs.set! i x = xs.setIfInBounds i x := by
+  rfl
+
+private theorem scheduleFold_getElem!_of_not_mem
+    (xs : List Nat) (w : Vector (BitVec 32) 64) (i : Nat)
+    (hi : i < 64) (hnot : i ∉ xs) :
+    (xs.foldl (fun w j => w.set! j (scheduleStepBV j w)) w)[i]! = w[i]! := by
+  induction xs generalizing w with
+  | nil => rfl
+  | cons j js ih =>
+      simp only [List.foldl_cons]
+      have hji : j ≠ i := by
+        intro h
+        subst j
+        simp at hnot
+      have hnot' : i ∉ js := by
+        have hn : i ≠ j ∧ i ∉ js := by
+          simpa only [List.mem_cons, not_or] using hnot
+        exact hn.2
+      rw [ih _ hnot']
+      rw [getElem!_pos _ i hi, getElem!_pos _ i hi,
+        Vector.setBang_eq_setIfInBounds]
+      rw [Vector.getElem_setIfInBounds_ne hi (by omega)]
+
+private theorem roundStepBV_eq_of_getElem!
+    (i : Nat) (w v : Vector (BitVec 32) 64) (r : RoundState (BitVec 32))
+    (h : w[i]! = v[i]!) :
+    roundStepBV i w r = roundStepBV i v r := by
+  unfold roundStepBV
+  rw [h]
+
+private theorem scheduleRoundFold_eq (xs : List Nat) (hxs : xs.Nodup)
+    (r : RoundState (BitVec 32)) (w : Vector (BitVec 32) 64)
+    (hbound : ∀ i ∈ xs, i < 64) :
+    xs.foldl (fun x i => scheduleRoundStepBV i x) (r, w) =
+      let w' := xs.foldl (fun w i => w.set! i (scheduleStepBV i w)) w
+      (xs.foldl (fun r i => roundStepBV i w' r) r, w') := by
+  induction xs generalizing r w with
+  | nil => rfl
+  | cons i is ih =>
+      have hi : i < 64 := hbound i (by simp)
+      have hni : i ∉ is := (List.nodup_cons.mp hxs).1
+      have hnis : is.Nodup := (List.nodup_cons.mp hxs).2
+      let w1 := w.set! i (scheduleStepBV i w)
+      let wf := is.foldl (fun w i => w.set! i (scheduleStepBV i w)) w1
+      have hget : wf[i]! = w1[i]! := by
+        exact scheduleFold_getElem!_of_not_mem is w1 i hi hni
+      have hround : roundStepBV i w1 r = roundStepBV i wf r :=
+        roundStepBV_eq_of_getElem! i w1 wf r hget.symm
+      simp only [List.foldl_cons]
+      change
+        is.foldl (fun x i => scheduleRoundStepBV i x)
+          (roundStepBV i w1 r, w1) = _
+      rw [ih hnis _ _ (fun j hj => hbound j (by simp [hj]))]
+      change
+        (is.foldl (fun r j => roundStepBV j wf r) (roundStepBV i w1 r), wf) =
+          (is.foldl (fun r j => roundStepBV j wf r) (roundStepBV i wf r), wf)
+      rw [hround]
+
 def optimizedModel (m : Vector (BitVec 32) 16)
     (s : Vector (BitVec 32) 8) : Vector (BitVec 32) 8 :=
-  let w := scheduleBV62 m
-  let r := roundsBV62 w s
+  let p := fusedPrefixBV m s
+  let r := p.1
+  let w := p.2
   finishBV s (inlineScheduleRoundBV 63 w (inlineScheduleRoundBV 62 w r))
 
 private theorem scheduleBV_terminal (m : Vector (BitVec 32) 16) :
@@ -2230,10 +2366,6 @@ private theorem scheduleBV_terminal (m : Vector (BitVec 32) 16) :
   have hrange : [16:64].toList = [16:62].toList ++ [62, 63] := by decide
   unfold scheduleBV scheduleBV62
   rw [hrange, List.foldl_append]
-  rfl
-
-private theorem Vector.setBang_eq_setIfInBounds (xs : Vector α n)
-    (i : Nat) (x : α) : xs.set! i x = xs.setIfInBounds i x := by
   rfl
 
 private theorem scheduleBV_get_lt62 (m : Vector (BitVec 32) 16)
@@ -2304,6 +2436,44 @@ def model (m : Vector (BitVec 32) 16) (s : Vector (BitVec 32) 8) :
     Vector (BitVec 32) 8 :=
   finishBV s (roundsBV (scheduleBV m) s)
 
+set_option maxRecDepth 10000 in
+set_option maxHeartbeats 10000000 in
+private theorem fusedPrefixBV_eq (m : Vector (BitVec 32) 16)
+    (s : Vector (BitVec 32) 8) :
+    fusedPrefixBV m s =
+      (roundsBV62 (scheduleBV62 m) s, scheduleBV62 m) := by
+  unfold fusedPrefixBV roundsBV16 roundsBV62 scheduleBV62
+  rw [scheduleRoundFold_eq ([16:62].toList) (by decide) _ _ (by
+    intro i hi
+    have := Std.Legacy.Range.mem_of_mem_range' hi
+    change 16 ≤ i ∧ i < 62 ∧ (i - 16) % 1 = 0 at this
+    omega)]
+  have hround16 :
+      ([0:16].toList).foldl
+          (fun r i => roundStepBV i (initialSchedule m) r) (initialRound s) =
+        ([0:16].toList).foldl
+          (fun r i => roundStepBV i
+            (([16:62].toList).foldl
+              (fun w i => w.set! i (scheduleStepBV i w))
+              (initialSchedule m)) r) (initialRound s) := by
+    apply List.foldl_congr_of_mem
+    intro i hi r
+    apply roundStepBV_eq_of_getElem!
+    apply Eq.symm
+    apply scheduleFold_getElem!_of_not_mem
+    · have := Std.Legacy.Range.mem_of_mem_range' hi
+      change 0 ≤ i ∧ i < 16 ∧ (i - 0) % 1 = 0 at this
+      omega
+    · intro himem
+      have hi0 := Std.Legacy.Range.mem_of_mem_range' hi
+      have hi16 := Std.Legacy.Range.mem_of_mem_range' himem
+      change 0 ≤ i ∧ i < 16 ∧ (i - 0) % 1 = 0 at hi0
+      change 16 ≤ i ∧ i < 62 ∧ (i - 16) % 1 = 0 at hi16
+      omega
+  have hrange : [0:62].toList = [0:16].toList ++ [16:62].toList := by decide
+  rw [hround16]
+  rw [hrange, List.foldl_append]
+
 private theorem optimizedRounds_eq (m : Vector (BitVec 32) 16)
     (s : Vector (BitVec 32) 8) :
     inlineScheduleRoundBV 63 (scheduleBV62 m)
@@ -2320,19 +2490,8 @@ private theorem optimizedRounds_eq (m : Vector (BitVec 32) 16)
 theorem optimizedModel_eq_model (m : Vector (BitVec 32) 16)
     (s : Vector (BitVec 32) 8) : optimizedModel m s = model m s := by
   dsimp only [optimizedModel, model]
+  rw [fusedPrefixBV_eq]
   rw [optimizedRounds_eq]
-
-private theorem mem_range16_62_to_64 {i : Nat} (hi : i ∈ [16:62]) :
-    i ∈ [16:64] := by
-  change 16 ≤ i ∧ i < 62 ∧ (i - 16) % 1 = 0 at hi
-  change 16 ≤ i ∧ i < 64 ∧ (i - 16) % 1 = 0
-  exact ⟨hi.1, by omega, hi.2.2⟩
-
-private theorem mem_range0_62_to_64 {i : Nat} (hi : i ∈ [0:62]) :
-    i ∈ [0:64] := by
-  change 0 ≤ i ∧ i < 62 ∧ (i - 0) % 1 = 0 at hi
-  change 0 ≤ i ∧ i < 64 ∧ (i - 0) % 1 = 0
-  exact ⟨hi.1, by omega, hi.2.2⟩
 
 set_option maxRecDepth 2000 in
 set_option maxHeartbeats 1000000 in
@@ -2341,66 +2500,67 @@ set_option maxHeartbeats 1000000 in
     (hsu : Vector.Rel ρ su sv) :
     ⦃⌜True⌝⦄ Sound.interp ρ (permPrefix m su)
     ⦃⇓ out => ⌜Vector.Rel ρ out.1
-        (scheduleBV62 (m.map (Word.eval ρ.bool))) ∧
+        (fusedPrefixBV (m.map (Word.eval ρ.bool)) sv).2 ∧
       RoundState.Rel ρ out.2.1
-        (roundsBV62 (scheduleBV62 (m.map (Word.eval ρ.bool))) sv) ∧
+        (fusedPrefixBV (m.map (Word.eval ρ.bool)) sv).1 ∧
       Vector.Rel ρ out.2.2 sv⌝⦄ := by
     unfold permPrefix
     mvcgen -trivial invariants
     · ⇓⟨cur, w⟩ => ⌜Vector.Rel ρ w
         (cur.prefix.foldl
           (fun w i => w.set! i ((m[i]!).eval ρ.bool)) default)⌝
-    · ⇓⟨cur, w⟩ => ⌜Vector.Rel ρ w
-        (cur.prefix.foldl (fun w i => w.set! i (scheduleStepBV i w))
-          (initialSchedule (m.map (Word.eval ρ.bool))))⌝
     · ⇓⟨cur, r⟩ => ⌜RoundState.Rel ρ r
         (cur.prefix.foldl
-          (fun r i => roundStepBV i (scheduleBV62 (m.map (Word.eval ρ.bool))) r)
+          (fun r i => roundStepBV i
+            (initialSchedule (m.map (Word.eval ρ.bool))) r)
           (initialRound sv))⌝
+    · ⇓⟨cur, x⟩ =>
+        let p := cur.prefix.foldl (fun x i => scheduleRoundStepBV i x)
+          (roundsBV16 (initialSchedule (m.map (Word.eval ρ.bool))) sv,
+            initialSchedule (m.map (Word.eval ρ.bool)))
+        ⌜RoundState.Rel ρ x.1 p.1 ∧ Vector.Rel ρ x.2 p.2⌝
     case vc1 =>
       rename_i pref cur suff hsplit w hw out hout
       simpa [List.foldl_append, getElem!_pos m cur (by grind)]
         using hw.set! hout cur
     case vc2.h.pre => simpa using (Vector.Rel.default (valuation := ρ) (n := 32) (m := 64))
-    case vc3.hw => exact fun i => (by assumption : Vector.Rel ρ _ _) i |>.1
-    case vc4.hi =>
-      apply mem_range16_62_to_64
-      apply Std.Legacy.Range.mem_of_mem_range'
-      apply List.mem_of_range'_eq_append_cons
-      assumption
+    case vc3.hw => exact Vector.Rel.valid (by assumption)
+    case vc4.hr => exact (by assumption : RoundState.Rel ρ _ _).1
     case vc5 =>
-      rename_i _ cur _ _ w hw out hout
-      rw [Vector.Rel.eval_eq hw] at hout
-      simpa [List.foldl_append] using hw.set! hout cur
-    case vc6.h.pre =>
-      rename_i w hw
+      rename_i w hw _ cur _ _ r hr out hout
       rw [initialSchedule_words] at hw
-      simpa only [List.foldl_nil] using hw
-    case vc7.hw =>
-      exact Vector.Rel.valid (by assumption)
-    case vc8.hr =>
-      exact (by assumption : RoundState.Rel ρ _ _).1
-    case vc9 =>
-      rename_i w0 hw0 w hw pref cur suff hsplit b hr out hout
-      have hw' : Vector.Rel ρ w
-          (scheduleBV62 (m.map (Word.eval ρ.bool))) := by
-        exact hw
-      rw [Vector.Rel.eval_eq hw', RoundState.Rel.eval_eq hr] at hout
+      rw [Vector.Rel.eval_eq hw, RoundState.Rel.eval_eq hr] at hout
       simpa only [List.foldl_append, List.foldl_cons, List.foldl_nil] using hout
-    case vc10.h.pre =>
+    case vc6.h.pre =>
       simp only [List.foldl_nil]
       refine ⟨⟨(hsu 0).1, (hsu 1).1, (hsu 2).1, (hsu 3).1,
         (hsu 4).1, (hsu 5).1, (hsu 6).1, (hsu 7).1⟩, ?_⟩
       rw [initialRound_eval, Vector.Rel.eval_eq hsu]
-    case vc11 => exact ⟨by assumption, by assumption, hsu⟩
+    case vc7.xv =>
+      rename_i pref _ _ _ _ _
+      exact pref.foldl (fun x i => scheduleRoundStepBV i x)
+        (roundsBV16 (initialSchedule (m.map (Word.eval ρ.bool))) sv,
+          initialSchedule (m.map (Word.eval ρ.bool)))
+    case vc8.hx => exact (by assumption)
+    case vc9 =>
+      rename_i pref cur suff hsplit x hx out hout
+      simpa [List.foldl_append] using hout
+    case vc10.h.pre =>
+      simp only [List.foldl_nil]
+      rename_i r hr w hw
+      rw [initialSchedule_words] at hr
+      exact ⟨by simpa only [roundsBV16] using hw, hr⟩
+    case vc11.h.post.success =>
+      rename_i _ _ _ _ x hx
+      exact ⟨hx.2, hx.1, hsu⟩
 
 @[spec] theorem permPrefix_sound_rel {m : Vector (Word 32) 16}
     {su : Vector (U 32) 8} {sv : Vector (BitVec 32) 8} :
     ⦃⌜Vector.Rel ρ su sv⌝⦄ Sound.interp ρ (permPrefix m su)
     ⦃⇓ out => ⌜Vector.Rel ρ out.1
-        (scheduleBV62 (m.map (Word.eval ρ.bool))) ∧
+        (fusedPrefixBV (m.map (Word.eval ρ.bool)) sv).2 ∧
       RoundState.Rel ρ out.2.1
-        (roundsBV62 (scheduleBV62 (m.map (Word.eval ρ.bool))) sv) ∧
+        (fusedPrefixBV (m.map (Word.eval ρ.bool)) sv).1 ∧
       Vector.Rel ρ out.2.2 sv⌝⦄ := by
   mvcgen [permPrefix_sound]
   case vc1 => exact fun h => h
@@ -2422,28 +2582,34 @@ set_option maxHeartbeats 1000000 in
     intro su
     rw [Sound.interp_bind]
     apply Triple.bind (Q := fun wr =>
-      ⌜Vector.Rel ρ wr.1 (scheduleBV62 (m.map (Word.eval ρ.bool))) ∧
+      ⌜Vector.Rel ρ wr.1
+          (fusedPrefixBV (m.map (Word.eval ρ.bool))
+            (s.map (Word.eval ρ.bool))).2 ∧
         RoundState.Rel ρ wr.2.1
-          (roundsBV62 (scheduleBV62 (m.map (Word.eval ρ.bool)))
-            (s.map (Word.eval ρ.bool))) ∧
+          (fusedPrefixBV (m.map (Word.eval ρ.bool))
+            (s.map (Word.eval ρ.bool))).1 ∧
         Vector.Rel ρ wr.2.2 (s.map (Word.eval ρ.bool))⌝)
     case hx => exact permPrefix_sound_rel
     case hf =>
       intro wr
       apply Triple.iff_conseq.mp (terminalRounds_sound_rel
-        (wv := scheduleBV62 (m.map (Word.eval ρ.bool)))
-        (rv := roundsBV62 (scheduleBV62 (m.map (Word.eval ρ.bool)))
-          (s.map (Word.eval ρ.bool)))
+        (wv := (fusedPrefixBV (m.map (Word.eval ρ.bool))
+          (s.map (Word.eval ρ.bool))).2)
+        (rv := (fusedPrefixBV (m.map (Word.eval ρ.bool))
+          (s.map (Word.eval ρ.bool))).1)
         (sv := s.map (Word.eval ρ.bool))) (by simp)
       simp only [PostCond.entails, SPred.entails_nil]
       refine ⟨?_, ExceptConds.entails.refl _⟩
       intro out h
       unfold terminalRoundsBV at h
-      rw [optimizedRounds_eq] at h
+      change Vector.Rel ρ out
+        (optimizedModel (m.map (Word.eval ρ.bool))
+          (s.map (Word.eval ρ.bool))) at h
+      rw [optimizedModel_eq_model] at h
       exact h
 
 set_option maxRecDepth 2000 in
-set_option maxHeartbeats 1000000 in
+set_option maxHeartbeats 5000000 in
 @[spec] theorem permPrefix_complete {m : Vector (Word 32) 16}
     {su : Vector (U 32) 8} (hsu : ∀ i : Fin 8, su[i].Valid ρ) :
     ⦃⌜True⌝⦄ Complete.interp ρ (permPrefix m su)
@@ -2452,8 +2618,8 @@ set_option maxHeartbeats 1000000 in
     unfold permPrefix
     mvcgen -trivial invariants
     · ⇓⟨_, w⟩ => ⌜∀ j : Fin 64, w[j].Valid ρ⌝
-    · ⇓⟨_, w⟩ => ⌜∀ j : Fin 64, w[j].Valid ρ⌝
     · ⇓⟨_, r⟩ => ⌜r.Valid ρ⌝
+    · ⇓⟨_, x⟩ => ⌜x.1.Valid ρ ∧ ∀ j : Fin 64, x.2[j].Valid ρ⌝
     case vc1 =>
       exact U.allValid_set! (by assumption) (by grind [U.Rel]) _
     case vc2.h.pre =>
@@ -2461,21 +2627,17 @@ set_option maxHeartbeats 1000000 in
       rw [U.vector_default_get]
       exact U.valid_default
     case vc3.hw => assumption
-    case vc4.hi =>
-      apply mem_range16_62_to_64
-      apply Std.Legacy.Range.mem_of_mem_range'
-      apply List.mem_of_range'_eq_append_cons
-      assumption
-    case vc5 =>
-      exact U.allValid_set! (by assumption) (by grind [U.Rel]) _
-    case vc6.h.pre => assumption
-    case vc7.hw => assumption
-    case vc8.hr => assumption
-    case vc9 => assumption
-    case vc10.h.pre =>
+    case vc4.hr => assumption
+    case vc5 => assumption
+    case vc6.h.pre =>
       exact ⟨hsu 0, hsu 1, hsu 2, hsu 3,
         hsu 4, hsu 5, hsu 6, hsu 7⟩
-    case vc11 => exact ⟨by assumption, by assumption, hsu⟩
+    case vc7.hx => exact (by assumption)
+    case vc8 => exact (by assumption)
+    case vc9.h.pre => exact ⟨by assumption, by assumption⟩
+    case vc10.h.post.success =>
+      rename_i _ _ _ _ x hx
+      exact ⟨hx.2, hx.1, hsu⟩
 
 @[spec] theorem permPrefix_complete_rel {m : Vector (Word 32) 16}
     {su : Vector (U 32) 8} {sv : Vector (BitVec 32) 8} :
@@ -2835,6 +2997,37 @@ theorem roundStep_wf (i : Nat) (hi : i ∈ [0:64]) :
               exact ⟨hF.2, hr.1, hr.2.1, hr.2.2.1, hE.2,
                 hr.2.2.2.2.1, hr.2.2.2.2.2.1, hr.2.2.2.2.2.2.1⟩
 
+theorem scheduleRoundStep_wf (i : Nat) (hi : i ∈ [16:62]) :
+    WF.GadgetSpec
+      (fun lv rv
+          (l r : RoundState (U 32) × Vector (U 32) 64) =>
+        RoundState.WFRel lv rv l.1 r.1 ∧
+          WF.VectorRel U.WFRel lv rv l.2 r.2)
+      (scheduleRoundStep i hi)
+      (fun lv rv l r => RoundState.WFRel lv rv l.1 r.1 ∧
+        WF.VectorRel U.WFRel lv rv l.2 r.2) := by
+  unfold WF.GadgetSpec
+  rintro ⟨rL, wL⟩ ⟨rR, wR⟩
+  unfold scheduleRoundStep
+  apply WF.GadgetSpec.bind_rule
+    (scheduleStep_wf i (mem_range16_62_to_64 hi))
+  · exact fun _ _ h => h.2
+  · intro A wiL wiR hwi
+    apply WF.GadgetSpec.bind_rule
+      (roundStep_wf i (by
+        change 16 ≤ i ∧ i < 62 ∧ (i - 16) % 1 = 0 at hi
+        change 0 ≤ i ∧ i < 64 ∧ (i - 0) % 1 = 0
+        exact ⟨by omega, by omega, Nat.mod_one _⟩))
+    · intro lv rv h
+      have ho := hwi lv rv h
+      exact ⟨WF.VectorRel.set! ho.1.2 ho.2 i, ho.1.1⟩
+    · intro B outL outR hout
+      apply WF.Rel.pure
+      intro lv rv h
+      have hr := hout lv rv h
+      have hw := hwi lv rv hr.1
+      exact ⟨hr.2, WF.VectorRel.set! hw.1.2 hw.2 i⟩
+
 theorem RoundState.WFRel.ofVector
     {sL sR : Vector (U 32) 8}
     (h : WF.VectorRel U.WFRel lv rv sL sR) :
@@ -3152,54 +3345,61 @@ theorem permPrefix_wf :
   case vc3 =>
     intro B wL wR hw
     apply WF.Rel.forIn'_range_map_yield_bind_rule
-      (I := WF.VectorRel U.WFRel)
-      (fL := fun i _ w => scheduleStep i w)
-      (fR := fun i _ w => scheduleStep i w)
-      (nextL := fun i _ w out => w.set! i out)
-      (nextR := fun i _ w out => w.set! i out)
-    case hinit => exact fun lv rv h => (hw lv rv h).2
+      (I := RoundState.WFRel)
+      (fL := fun i hi r => roundStep i (by
+        change 0 ≤ i ∧ i < 64 ∧ (i - 0) % 1 = 0
+        have hil : i < 16 := by simpa using hi.upper
+        exact ⟨by omega, by omega, Nat.mod_one _⟩) (wL, r))
+      (fR := fun i hi r => roundStep i (by
+        change 0 ≤ i ∧ i < 64 ∧ (i - 0) % 1 = 0
+        have hil : i < 16 := by simpa using hi.upper
+        exact ⟨by omega, by omega, Nat.mod_one _⟩) (wR, r))
+      (nextL := fun _ _ _ out => out)
+      (nextR := fun _ _ _ out => out)
+    case hinit =>
+      intro lv rv h
+      exact RoundState.WFRel.ofVector (hw lv rv h).1.2
     case hstep =>
-      intro i hi P left right hP
-      apply WF.GadgetSpec.bind_rule
-        (scheduleStep_wf i (mem_range16_62_to_64 hi))
-      · exact fun lv rv h => (hP lv rv h).2
-      · intro C outL outR hout
-        apply WF.Rel.pure
-        intro lv rv hC
-        have ho := hout lv rv hC
-        have hin := hP lv rv ho.1
-        exact ⟨ho.1, hin.1, WF.VectorRel.set! hin.2 ho.2 i⟩
+      intro i hi P rL rR hP
+      have hstep := (roundStep_wf i (by
+        change 0 ≤ i ∧ i < 64 ∧ (i - 0) % 1 = 0
+        have hil : i < 16 := by simpa using hi.upper
+        exact ⟨by omega, by omega, Nat.mod_one _⟩)).relHom P
+        (wL, rL) (wR, rR) (by
+          intro lv rv h
+          have hp := hP lv rv h
+          exact ⟨(hw lv rv hp.1).2, hp.2⟩)
+      apply WF.Rel.mono hstep
+      exact fun lv rv _ _ hout => ⟨hout.1, (hP lv rv hout.1).1, hout.2⟩
     case hcont =>
-      intro C wL wR hschedule
+      intro C rL rR hround
       apply WF.Rel.forIn'_range_map_yield_bind_rule
-        (I := RoundState.WFRel)
-        (fL := fun i hi r => roundStep i (mem_range0_62_to_64 hi) (wL, r))
-        (fR := fun i hi r => roundStep i (mem_range0_62_to_64 hi) (wR, r))
+        (I := fun lv rv
+          (l r : RoundState (U 32) × Vector (U 32) 64) =>
+          RoundState.WFRel lv rv l.1 r.1 ∧
+            WF.VectorRel U.WFRel lv rv l.2 r.2)
+        (fL := fun i hi x => scheduleRoundStep i hi x)
+        (fR := fun i hi x => scheduleRoundStep i hi x)
         (nextL := fun _ _ _ out => out)
         (nextR := fun _ _ _ out => out)
       case hinit =>
-        intro lv rv hC
-        have h0 := hschedule lv rv hC
-        have h1 := hw lv rv h0.1
-        exact RoundState.WFRel.ofVector h1.1.2
+        intro lv rv h
+        have hr := hround lv rv h
+        exact ⟨hr.2, (hw lv rv hr.1).2⟩
       case hstep =>
-        intro i hi P rL rR hP
-        have hstep := (roundStep_wf i (mem_range0_62_to_64 hi)).relHom P
-          ⟨wL, rL⟩ ⟨wR, rR⟩ (by
-            intro lv rv h
-            have hp := hP lv rv h
-            exact ⟨(hschedule lv rv hp.1).2, hp.2⟩)
+        intro i hi P xL xR hP
+        have hstep := (scheduleRoundStep_wf i hi).relHom P xL xR
+          (fun lv rv h => (hP lv rv h).2)
         apply WF.Rel.mono hstep
-        exact fun lv rv _ _ hout =>
-          ⟨hout.1, (hP lv rv hout.1).1, hout.2⟩
+        exact fun lv rv _ _ hout => ⟨hout.1, (hP lv rv hout.1).1, hout.2⟩
       case hcont =>
-        intro D rL rR hr
+        intro D xL xR hx
         apply WF.Rel.pure
         intro lv rv hD
-        have hround := hr lv rv hD
-        have h0 := hschedule lv rv hround.1
-        have h1 := hw lv rv h0.1
-        exact ⟨h0.2, hround.2, h1.1.2⟩
+        have hp := hx lv rv hD
+        have hc := hround lv rv hp.1
+        have h0 := hw lv rv hc.1
+        exact ⟨hp.2.2, hp.2.1, h0.1.2⟩
 
 set_option maxHeartbeats 1000000 in
 theorem structured_wf :
