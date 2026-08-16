@@ -29,6 +29,14 @@ At least one Boolean input maps to a target; complementing input coordinates
 makes that point the base.  It is therefore complete to enumerate bases in S
 and generators in S-S, which is exactly what the SMT query below does.
 
+The third part enumerates every sign- and order-normalized four-generator
+family allowed by that difference argument and minimizes a constant base
+dictionary over all output-conditioned E/A shapes.  Finally, a direct
+fully-coupled construction covers the entire carry union with six cube bits
+and one base-selection bit.  Together with the 65-state lower bound, this
+shows that a witnessed affine carry encoding needs exactly seven bits: it can
+change basis, but it cannot improve on the current witness count.
+
 Run with a Z3 executable on PATH, for example:
 
     nix shell nixpkgs#z3 -c python3 scripts/search_sha256_carry_encoding.py
@@ -40,7 +48,7 @@ import re
 import shutil
 import subprocess
 import sys
-from itertools import product
+from itertools import combinations, combinations_with_replacement, product
 from random import Random
 
 
@@ -178,10 +186,62 @@ def covering_bases(
               for c in range(2))
         for bits in product((0, 1), repeat=len(generators))
     }
-    candidates = {(p[0] - v[0], p[1] - v[1])
-                  for p in points for v in offsets}
-    return {base for base in candidates
-            if points <= {(base[0] + v[0], base[1] + v[1]) for v in offsets}}
+    candidates: set[tuple[int, int]] | None = None
+    for point in points:
+        point_candidates = {(point[0] - v[0], point[1] - v[1])
+                            for v in offsets}
+        candidates = (point_candidates if candidates is None
+                      else candidates & point_candidates)
+    return candidates or set()
+
+
+def minimum_base_cover(
+    covers: tuple[frozenset[tuple[int, int]], ...],
+) -> tuple[tuple[int, int], ...]:
+    """Find a minimum set of bases intersecting every per-shape base set."""
+    unique = tuple(sorted(set(covers), key=len))
+    universe = sorted(set().union(*unique))
+    for size in range(1, len(universe) + 1):
+        for selected in combinations(universe, size):
+            selected_set = set(selected)
+            if all(selected_set & candidates for candidates in unique):
+                return selected
+    raise AssertionError("all nonempty finite covers have a hitting set")
+
+
+def exhaustive_generator_search(
+    pair_shapes: set[frozenset[tuple[int, int]]],
+    maximal: frozenset[tuple[int, int]],
+) -> tuple[int, tuple[tuple[int, int], ...], tuple[tuple[int, int], ...], int]:
+    """Minimize the base dictionary over every complete generator candidate."""
+    differences = {tuple(x - y for x, y in zip(p, q))
+                   for p in maximal for q in maximal}
+
+    def canonical(vector: tuple[int, int]) -> tuple[int, int]:
+        negative = (-vector[0], -vector[1])
+        return min(vector, negative)
+
+    # Generator order is immaterial, and changing a generator's sign merely
+    # complements its Boolean coordinate and translates the base.
+    candidates = sorted({canonical(vector) for vector in differences})
+    best: tuple[int, tuple[tuple[int, int], ...],
+                tuple[tuple[int, int], ...]] | None = None
+    viable = 0
+    for generators in combinations_with_replacement(candidates, 4):
+        if not covering_bases(maximal, generators):
+            continue
+        covers = tuple(frozenset(covering_bases(shape, generators))
+                       for shape in pair_shapes)
+        if not all(covers):
+            continue
+        viable += 1
+        dictionary = minimum_base_cover(covers)
+        result = (len(dictionary), generators, dictionary)
+        if best is None or result < best:
+            best = result
+    if best is None:
+        raise AssertionError("the synthesized generator family must be viable")
+    return best[0], best[1], best[2], viable
 
 
 def smt_query(points: tuple[tuple[int, ...], ...], bits: int) -> str:
@@ -279,6 +339,28 @@ def main() -> int:
               f"{len(set().union(*covers.values()))}")
         common_bases = set.intersection(*covers.values())
         print(f"bases covering every shape: {len(common_bases)}")
+        minimum, best_generators, dictionary, viable = exhaustive_generator_search(
+            pair_shapes, frozenset(points))
+        print(f"exhaustive viable generator families: {viable}")
+        print(f"minimum constant base dictionary: {minimum}")
+        print(f"best generators: {list(best_generators)}")
+        print(f"best base dictionary: {list(dictionary)}")
+        union = {point for shape in all_shapes for point in shape}
+        full_generators = ((1, 0, 0), (2, 0, 0),
+                           (0, -1, 0), (0, -2, 0),
+                           (0, 0, -1), (0, 0, -2))
+        full_bases = ((0, 3, 3), (0, 5, 3))
+        full_cover = {
+            tuple(base[c] + sum(bits[j] * full_generators[j][c]
+                                for j in range(6))
+                  for c in range(3))
+            for base in full_bases for bits in product((0, 1), repeat=6)
+        }
+        assert union <= full_cover
+        print(f"fully coupled union states: {len(union)}")
+        print("fully coupled minimum: six cube bits plus one base bit")
+        print(f"fully coupled generators: {list(full_generators)}")
+        print(f"fully coupled bases: {list(full_bases)}")
     if completed.stderr:
         print(completed.stderr.strip(), file=sys.stderr)
     return completed.returncode
