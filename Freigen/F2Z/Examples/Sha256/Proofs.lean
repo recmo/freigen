@@ -1,5 +1,6 @@
 import Freigen.F2Z.Examples.Sha256.Model
 import Freigen.F2Z.Correctness.U
+import Mathlib.Data.Int.Bitwise
 
 namespace Freigen.F2Z.Examples
 
@@ -1286,6 +1287,132 @@ private theorem inlineScheduleRoundBV_e (i : Nat) (w : Vector (BitVec 32) 64)
         chBV r.2.2.2.2.1 r.2.2.2.2.2.1 r.2.2.2.2.2.2.1, k[i]!,
         scheduleStepBV i w].sum := rfl
 
+@[spec] theorem U.fromIntWithLowBit_sound {x : LC ℤ} {low : LC Bool} :
+    ⦃⌜True⌝⦄ Sound.interp ρ (U.fromIntWithLowBit n x low)
+    ⦃⇓ out => ⌜out.Valid ρ ∧ out.intVal.eval ρ.int = x.eval ρ.int⌝⦄ := by
+  mvcgen [U.fromIntWithLowBit]
+  intro b
+  mvcgen
+  rename_i r h hassert
+  constructor
+  · exact h.1
+  · simp only [LC.eval_zero, mul_zero, LC.eval_sub] at hassert
+    omega
+
+@[spec] theorem U.fromIntWithLowBit_complete {x : LC ℤ} {low : LC Bool}
+    (h0 : x.eval ρ.int ≥ 0) (h2 : x.eval ρ.int < 2 ^ (n + 1))
+    (hlow : low.eval ρ.bool = Int.bodd (x.eval ρ.int)) :
+    ⦃⌜True⌝⦄ Complete.interp ρ (U.fromIntWithLowBit n x low)
+    ⦃⇓ out => ⌜out.Valid ρ ∧ out.intVal.eval ρ.int = x.eval ρ.int⌝⦄ := by
+  mvcgen [U.fromIntWithLowBit]
+  have : ∃ x', x.eval ρ.int = Int.ofNat x' := by
+    exists (x.eval ρ.int).toNat
+    simp_all
+  rcases this with ⟨x', hx'⟩
+  simp only [WF.interpHint, WF.evalArgs, hx', Int.ofNat_eq_natCast, Free.interp_pure,
+    Option.pure_def, Option.some.injEq, exists_eq_left', Vector.map_ofFn]
+  mvcgen
+  rename_i r h
+  have hxlt : x' < 2 ^ (n + 1) := by
+    rw [hx'] at h2
+    exact Int.ofNat_lt.mp (by simpa using h2)
+  have hword := congrArg BitVec.toNat h.2
+  simp only [Word.eval, Vector.getElem_ofFn, BitVec.toNat_ofFnLE,
+    Function.comp_apply] at hword
+  have hfn : (fun i : Fin (n + 1) =>
+      LC.eval ρ.bool (Vector.ofFn fun i => if hi : i.val = 0 then low else
+        LC.ofConst (x'.testBit (i.val - 1 + 1)))[i]) =
+      fun i => x'.testBit i.val := by
+    funext i
+    by_cases hi : i.val = 0
+    · simp [hi, hx', hlow, Int.bodd_coe, Nat.bodd]
+    · have hi' : i ≠ 0 := by
+        intro hzero
+        apply hi
+        simpa [hzero]
+      simp [hi', Nat.sub_add_cancel (Nat.one_le_iff_ne_zero.mpr hi)]
+  rw [hfn, Nat.ofBits_testBit, Nat.mod_eq_of_lt hxlt] at hword
+  have hintVal : r.intVal.eval ρ.int = (x' : Int) :=
+    (U.intVal_eval_eq_eval_toNat r h.1).trans
+      (congrArg (fun z : Nat => (z : Int)) hword)
+  constructor
+  · simp [LC.eval_zero, LC.eval_sub, hx', hintVal]
+  · exact ⟨h.1, hintVal⟩
+
+private theorem U.lowBit_eq_bodd (u : U (n + 1)) (hvalid : u.Valid ρ) :
+    u.bits.bitsLE[0].eval ρ.bool = Int.bodd (u.intVal.eval ρ.int) := by
+  rw [U.intVal_eval_eq_eval_toNat u hvalid, Int.bodd_coe]
+  change u.bits.bitsLE[0].eval ρ.bool = (u.eval ρ).toNat.testBit 0
+  have h := congrArg (fun x : BitVec (n + 1) => x[0])
+    (U.eval_eq_ofFnLE u hvalid)
+  have h0 : (u.eval ρ)[0] = u.bits.bitsLE[0].eval ρ.bool := by
+    simpa only [BitVec.getElem_ofFnLE, Fin.getElem_fin] using h
+  exact h0.symm.trans (BitVec.getElem_eq_testBit_toNat (u.eval ρ) 0 (by omega))
+
+private theorem boolSum_bodd (xs : List ℤ) :
+    Int.bodd xs.sum = (xs.map Int.bodd).sum := by
+  induction xs with
+  | nil => rfl
+  | cons x xs ih =>
+      rw [List.sum_cons, Int.bodd_add, List.map_cons, List.sum_cons, ih]
+      rfl
+
+private theorem vectorValid_toArray {us : Vector (U n) m}
+    (hvalid : ∀ i : Fin m, us[i].Valid ρ) :
+    ∀ u ∈ us.toArray, u.Valid ρ := by
+  intro u hu
+  rw [Array.mem_iff_getElem] at hu
+  obtain ⟨i, hi, rfl⟩ := hu
+  simpa using hvalid ⟨i, by simpa using hi⟩
+
+private theorem U.lowSum_eq_bodd (us : Vector (U 32) m)
+    (hvalid : ∀ i : Fin m, us[i].Valid ρ) :
+    ((us.toArray.map (fun u : U 32 => u.bits.bitsLE[0])).sum).eval ρ.bool =
+      Int.bodd ((us.toArray.map (fun u : U 32 => u.intVal)).sum.eval ρ.int) := by
+  rw [LC.eval_array_sum, LC.eval_array_sum]
+  rw [← Array.sum_toList, ← Array.sum_toList]
+  simp only [Array.toList_map, List.map_map]
+  rw [boolSum_bodd]
+  congr 1
+  rw [List.map_map]
+  apply List.map_congr_left
+  intro u hu
+  exact U.lowBit_eq_bodd u (vectorValid_toArray hvalid u (by simpa using hu))
+
+@[spec] theorem U.sumFixedAffineLow_sound {us : Vector (U 32) m}
+    (hvalid : ∀ i : Fin m, us[i].Valid ρ) :
+    ⦃⌜True⌝⦄ Sound.interp ρ (U.sumFixedAffineLow us)
+    ⦃⇓ out => ⌜out.Valid ρ ∧
+      out.eval ρ = (us.toArray.map (·.eval ρ)).sum⌝⦄ := by
+  unfold U.sumFixedAffineLow
+  unfold U.fromIntWithLowBitPair
+  mvcgen
+  case vc1.h.success r h =>
+    let hle : 32 ≤ 31 + Nat.clog 2 m + 1 := by omega
+    exact ⟨U.takeLE_valid r h.1 hle, by
+      rw [U.takeLE_eval r h.1 hle, h.2]
+      exact U.sumValue_eq_sum us.toArray (vectorValid_toArray hvalid)⟩
+
+@[spec] theorem U.sumFixedAffineLow_complete {us : Vector (U 32) m}
+    (hvalid : ∀ i : Fin m, us[i].Valid ρ) :
+    ⦃⌜True⌝⦄ Complete.interp ρ (U.sumFixedAffineLow us)
+    ⦃⇓ out => ⌜out.Valid ρ ∧
+      out.eval ρ = (us.toArray.map (·.eval ρ)).sum⌝⦄ := by
+  unfold U.sumFixedAffineLow
+  unfold U.fromIntWithLowBitPair
+  mvcgen
+  case vc1.h0 => exact U.sum_nonneg us.toArray (vectorValid_toArray hvalid)
+  case vc2.h2 =>
+    have hcap := U.sum_lt_capacity us.toArray (vectorValid_toArray hvalid)
+    simpa only [Vector.size_toArray,
+      show 31 + Nat.clog 2 m + 1 = 32 + Nat.clog 2 m by omega] using hcap
+  case vc3.hlow => exact U.lowSum_eq_bodd us hvalid
+  case vc4.h.success r h =>
+    let hle : 32 ≤ 31 + Nat.clog 2 m + 1 := by omega
+    exact ⟨U.takeLE_valid r h.1 hle, by
+      rw [U.takeLE_eval r h.1 hle, h.2]
+      exact U.sumValue_eq_sum us.toArray (vectorValid_toArray hvalid)⟩
+
 private theorem scheduleResult {w : Vector (U 32) 64}
     {wv : Vector (BitVec 32) 64} (hw : Vector.Rel ρ w wv)
     (i : Nat) (hi : i ∈ [16:64]) {s0 s1 out : U 32}
@@ -1320,11 +1447,10 @@ private theorem scheduleResult {w : Vector (U 32) 64}
     exact scheduleResult (Vector.Rel.refl hw) i hi
       (by assumption) (by assumption) ⟨hvalid, heval⟩
   case vc2 =>
-    intro hs1 u hu
-    simp only [Array.mem_def, List.mem_cons, List.mem_nil_iff, or_false] at hu
-    rcases hu with rfl | rfl | rfl | rfl
+    intro hs1 j
+    fin_cases j
     · exact U.valid_getElem! hw (by grind)
-    · exact (by assumption : U.Rel ρ u _).1
+    · exact (by assumption : U.Rel ρ _ _).1
     · exact U.valid_getElem! hw (by grind)
     · exact hs1.1
 
@@ -1339,11 +1465,10 @@ private theorem scheduleResult {w : Vector (U 32) 64}
     exact scheduleResult (Vector.Rel.refl hw) i hi
       (by assumption) (by assumption) ⟨hvalid, heval⟩
   case vc2 =>
-    intro hs1 u hu
-    simp only [Array.mem_def, List.mem_cons, List.mem_nil_iff, or_false] at hu
-    rcases hu with rfl | rfl | rfl | rfl
+    intro hs1 j
+    fin_cases j
     · exact U.valid_getElem! hw (by grind)
-    · exact (by assumption : U.Rel ρ u _).1
+    · exact (by assumption : U.Rel ρ _ _).1
     · exact U.valid_getElem! hw (by grind)
     · exact hs1.1
 
@@ -2391,6 +2516,76 @@ def RoundState.WFRel : WF.Post (RoundState (U n)) :=
     U.WFRel lv rv l.2.2.2.2.2.2.1 r.2.2.2.2.2.2.1 ∧
     U.WFRel lv rv l.2.2.2.2.2.2.2 r.2.2.2.2.2.2.2
 
+theorem U.fromIntWithLowBit_wf_full :
+    WF.GadgetSpec
+      (fun lv rv (l r : LC ℤ × LC Bool) =>
+        WF.LCEq lv.int rv.int l.1 r.1 ∧ WF.LCEq lv.bool rv.bool l.2 r.2)
+      (U.fromIntWithLowBitPair n)
+      (fun lv rv l r =>
+        (∀ i : Fin (n + 1), WF.LCEq lv.bool rv.bool
+          l.bits.bitsLE[i] r.bits.bitsLE[i]) ∧
+        (∀ i : Fin (n + 1), WF.LCEq lv.int rv.int l.intBits[i] r.intBits[i]) ∧
+        WF.LCEq lv.int rv.int l.intVal r.intVal) := by
+  unfold U.fromIntWithLowBitPair
+  wfgen' using [U.fromWord_wf_full] unfold [U.fromIntWithLowBit]
+  case vc1 hrel =>
+    rcases hrel with ⟨_, values, _, _, hleft, hright⟩
+    by_cases hi : i = 0
+    · simp [hi, WF.LCEq]
+      exact (by assumption :
+        WF.LCEq leftVal.int rightVal.int left.1 right.1 ∧
+        WF.LCEq leftVal.bool rightVal.bool left.2 right.2).2
+    · have hiv : i.val ≠ 0 := by
+        intro hzero
+        apply hi
+        exact Fin.ext hzero
+      simpa [hi, WF.LCEq, Fin.getElem_fin] using
+        (hleft (i.val - 1) (by omega)).trans
+          (hright (i.val - 1) (by omega)).symm
+  case vc2 h =>
+    unfold WF.LCEq at h
+    simp only [WF.evalArgs]
+    rw [h.1]
+  case vc3 h =>
+    unfold WF.ArgsEq
+    simp only [WF.evalArgs]
+    exact congrArg (fun x => h![x]) h.1
+
+theorem U.lceq_lowBit_sum {left right : Vector (U 32) m}
+    (h : WF.VectorRel U.WFRel lv rv left right) :
+    WF.LCEq lv.bool rv.bool
+      (left.toArray.map (fun x => x.bits.bitsLE[0])).sum
+      (right.toArray.map (fun x => x.bits.bitsLE[0])).sum := by
+  unfold WF.LCEq
+  rw [LC.eval_array_sum, LC.eval_array_sum]
+  apply congrArg Array.sum
+  apply Array.ext
+  · simp
+  · intro i hiLeft hiRight
+    simp only [Array.getElem_map]
+    exact (h ⟨i, by simpa using hiLeft⟩).2 0
+
+theorem U.sumFixedAffineLow_wf :
+    WF.GadgetSpec (WF.VectorRel (U.WFRel (n := 32)))
+      (U.sumFixedAffineLow (m := m)) U.WFRel := by
+  unfold WF.GadgetSpec
+  intro left right
+  unfold U.sumFixedAffineLow
+  apply WF.GadgetSpec.bind_rule U.fromIntWithLowBit_wf_full
+  · intro lv rv h
+    exact ⟨U.lceq_intVal_sum h, U.lceq_lowBit_sum h⟩
+  · intro A outL outR hout
+    apply WF.Rel.pure
+    intro lv rv hA
+    have h := hout lv rv hA
+    let hle : 32 ≤ 31 + Nat.clog 2 m + 1 := by omega
+    constructor
+    · apply WF.LCEq.uIntVal
+      intro i
+      simpa [U.takeLE, Fin.getElem_fin] using h.2.2.1 (i.castLE hle)
+    · intro i
+      simpa [U.takeLE, Fin.getElem_fin] using h.2.1 (i.castLE hle)
+
 theorem scheduleStep_wf (i : Nat) (hi : i ∈ [16:64]) :
     WF.GadgetSpec (WF.VectorRel U.WFRel) (scheduleStep i) U.WFRel := by
   unfold WF.GadgetSpec
@@ -2409,7 +2604,7 @@ theorem scheduleStep_wf (i : Nat) (hi : i ∈ [16:64]) :
       change Word.WFRel lv rv _ _ at hw
       exact ((hw.rotateRight 17).xor (hw.rotateRight 19)).xor (hw.shiftRight 10)
     · intro B s1L s1R hs1
-      apply WF.Rel.mono (U.sumFixed_wf.relHom B
+      apply WF.Rel.mono (U.sumFixedAffineLow_wf.relHom B
         #v[left[i - 16]!, s0L, left[i - 7]!, s1L]
         #v[right[i - 16]!, s0R, right[i - 7]!, s1R] (by
           intro lv rv h
@@ -2832,14 +3027,14 @@ private def finalRoundTailAt (out : U 32 × U 32) (r : RoundState (U 32))
     (s : Vector (U 32) 8) (i : Fin 8) : Circuit (U 32) :=
   if i = 0 then pure out.1
   else if i = 4 then pure out.2
-  else U.sumFixed #v[s[i], (finalRoundTailState r)[i]]
+  else U.sumFixedAffineLow #v[s[i], (finalRoundTailState r)[i]]
 
 private theorem finalRoundTail_eq (out : U 32 × U 32)
     (r : RoundState (U 32)) (s : Vector (U 32) 8) :
     finalRoundTail (out, r, s) =
       Vector.ofFnM (finalRoundTailAt out r s) := by
   simp [finalRoundTail, finalRoundTailAt, Vector.ofFnM_succ,
-    Vector.ofFnM_zero, U.sum2_eq_sumFixed, finalRoundTailState]
+    Vector.ofFnM_zero, finalRoundTailState]
 
 theorem finalRoundTail_wf :
     WF.GadgetSpec
@@ -2863,7 +3058,7 @@ theorem finalRoundTail_wf :
       · apply WF.Rel.pure
         intro lv rv h
         exact ⟨h, (hA lv rv h).1.2⟩
-      · apply U.sumFixed_wf.relHom
+      · apply U.sumFixedAffineLow_wf.relHom
         intro lv rv h
         have hin := hA lv rv h
         intro j

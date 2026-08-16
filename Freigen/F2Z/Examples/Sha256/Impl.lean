@@ -51,6 +51,31 @@ def U.maj2 (u v w : U n) : Circuit (LC ℤ) := do
   let uvw ← U.fromWord $ u.bits ^^^ v.bits ^^^ w.bits
   pure $ u.intVal + v.intVal + w.intVal - uvw.intVal
 
+/-- Decompose a nonnegative integer while supplying its least-significant bit
+as an existing affine F₂ expression.  Only the remaining `n` bits are hinted. -/
+def U.fromIntWithLowBit (n : Nat) (x : LC ℤ) (low : LC Bool) :
+    Circuit (U (n + 1)) := do
+  let upper : Vector (LC Bool) n ← hint h![x] fun h![(x : Int)] => match x with
+    | .ofNat value => pure $ Vector.ofFn fun i => value.testBit (i + 1)
+    | _ => fail s!"negative integer {x} in U.fromIntWithLowBit"
+  let bits : Vector (LC Bool) (n + 1) := Vector.ofFn fun i =>
+    if h : i.val = 0 then low else upper[i.val - 1]'(by omega)
+  let r ← U.fromWord { bitsLE := bits }
+  assertR1C 0 0 (x - r.intVal)
+  pure r
+
+def U.fromIntWithLowBitPair (n : Nat) (z : LC ℤ × LC Bool) :
+    Circuit (U (n + 1)) :=
+  U.fromIntWithLowBit n z.1 z.2
+
+/-- Sum words modulo `2^32`, deriving the low output bit as the XOR of the
+input low bits instead of allocating it as a fresh witness. -/
+def U.sumFixedAffineLow (us : Vector (U 32) m) : Circuit (U 32) := do
+  let total := (us.toArray.map (fun u => u.intVal)).sum
+  let low := (us.toArray.map (fun u => u.bits.bitsLE[0])).sum
+  let wide ← U.fromIntWithLowBitPair (31 + Nat.clog 2 m) (total, low)
+  pure $ wide.takeLE 32 (by omega)
+
 /-- Witness the 35-bit quotient of an even nonnegative integer by two.  The
 constraint proves the shift without allocating the known-zero low input bit. -/
 def U.fromDoubledInt35 (x : LC ℤ) : Circuit (U 35) := do
@@ -144,7 +169,7 @@ def scheduleStep (i : Nat) (w : Vector (U 32) 64) : Circuit (U 32) := do
   let wi2 := w[i - 2]!.bits
   let s1 ← U.fromWord $
     wi2.rotateRight 17 ^^^ wi2.rotateRight 19 ^^^ (wi2 >>> 10)
-  U.sum #[w[i - 16]!, s0, w[i - 7]!, s1]
+  U.sumFixedAffineLow #v[w[i - 16]!, s0, w[i - 7]!, s1]
 
 def roundStep (i : Nat) (hi : i ∈ [0:64])
     (x : Vector (U 32) 64 × RoundState (U 32)) : Circuit (RoundState (U 32)) := do
@@ -247,9 +272,12 @@ def finalRoundTail
   let out := x.1
   let r := x.2.1
   let s := x.2.2
-  pure #v[out.1, ←U.sum #[s[1], r.1], ←U.sum #[s[2], r.2.1],
-    ←U.sum #[s[3], r.2.2.1], out.2, ←U.sum #[s[5], r.2.2.2.2.1],
-    ←U.sum #[s[6], r.2.2.2.2.2.1], ←U.sum #[s[7], r.2.2.2.2.2.2.1]]
+  pure #v[out.1, ←U.sumFixedAffineLow #v[s[1], r.1],
+    ←U.sumFixedAffineLow #v[s[2], r.2.1],
+    ←U.sumFixedAffineLow #v[s[3], r.2.2.1], out.2,
+    ←U.sumFixedAffineLow #v[s[5], r.2.2.2.2.1],
+    ←U.sumFixedAffineLow #v[s[6], r.2.2.2.2.2.1],
+    ←U.sumFixedAffineLow #v[s[7], r.2.2.2.2.2.2.1]]
 
 /-- Fuse the terminal round with the two feed-forward words it produces. -/
 def finalRound (i : Nat) (hi : i ∈ [16:64])
