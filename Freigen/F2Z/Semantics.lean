@@ -57,7 +57,6 @@ instance : LawfulMonad NoMonad := LawfulMonad.mk' _
   (by intros; rfl)
   (by intros; rfl)
 
-
 abbrev RunnerM : Eff.Scope → Type → Type
 | .constraint => StateM CSBuilder
 | .hint => NoMonad

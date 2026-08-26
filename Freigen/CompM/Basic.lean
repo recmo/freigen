@@ -126,6 +126,86 @@ def op {γ : Γ} (e : E γ)
     CompM E γ (eS.output γ e) :=
   ⟨fun f => ITree.op e (fun t i => (blocks t i).run pure) f, by simp⟩
 
+private def liftLCo
+    {L R : Γ → Type u} [lS : Eff.Spec.{u, v} L] [rS : Eff.Spec.{u, v} R]
+    (i : Γ × Type v) (x : CompM L i.1 i.2) :
+    Eff.Step Γ (L ⊕ₑ R) (fun i => CompM L i.1 i.2) i :=
+  Eff.Step.casesOn (observe x)
+    (motive := fun i _ =>
+      Eff.Step Γ (L ⊕ₑ R) (fun i => CompM L i.1 i.2) i)
+    (fun value => Eff.Step.ret value)
+    (fun e blocks k =>
+      Eff.Step.op (show (L ⊕ₑ R) _ from Sum.inl e) blocks k)
+
+def liftL
+    {L R : Γ → Type u} [lS : Eff.Spec.{u, v} L] [rS : Eff.Spec.{u, v} R]
+    {γ : Γ} {α : Type v} (x : CompM L γ α) :
+    CompM (L ⊕ₑ R) γ α :=
+  corec (i := (γ, α)) (liftLCo (L := L) (R := R)) x
+
+private def liftRCo
+    {L R : Γ → Type u} [lS : Eff.Spec.{u, v} L] [rS : Eff.Spec.{u, v} R]
+    (i : Γ × Type v) (x : CompM R i.1 i.2) :
+    Eff.Step Γ (L ⊕ₑ R) (fun i => CompM R i.1 i.2) i :=
+  Eff.Step.casesOn (observe x)
+    (motive := fun i _ =>
+      Eff.Step Γ (L ⊕ₑ R) (fun i => CompM R i.1 i.2) i)
+    (fun value => Eff.Step.ret value)
+    (fun e blocks k =>
+      Eff.Step.op (show (L ⊕ₑ R) _ from Sum.inr e) blocks k)
+
+def liftR
+    {L R : Γ → Type u} [lS : Eff.Spec.{u, v} L] [rS : Eff.Spec.{u, v} R]
+    {γ : Γ} {α : Type v} (x : CompM R γ α) :
+    CompM (L ⊕ₑ R) γ α :=
+  corec (i := (γ, α)) (liftRCo (L := L) (R := R)) x
+
+abbrev OpMap
+    {Γ : Type u} (L R : Γ → Type u)
+    [Eff.Spec.{u, v} L] [Eff.Spec.{u, v} R]
+    (X : Γ × Type v → Type w) :=
+  {i : Γ × Type v} → Eff.Step Γ L X i → Eff.Step Γ R X i
+
+private def interpLCo
+    {L R : Γ → Type u} [lS : Eff.Spec.{u, v} L] [rS : Eff.Spec.{u, v} R]
+    (mapOp : OpMap L R (fun i => CompM (L ⊕ₑ R) i.1 i.2))
+    (i : Γ × Type v) (x : CompM (L ⊕ₑ R) i.1 i.2) :
+    Eff.Step Γ R (fun i => CompM (L ⊕ₑ R) i.1 i.2) i :=
+  Eff.Step.casesOn (observe x)
+    (motive := fun i _ =>
+      Eff.Step Γ R (fun i => CompM (L ⊕ₑ R) i.1 i.2) i)
+    (fun value => Eff.Step.ret value)
+    (fun e blocks k => match e with
+      | .inl e => mapOp (Eff.Step.op e blocks k)
+      | .inr e => Eff.Step.op e blocks k)
+
+def interpL
+    {L R : Γ → Type u} [lS : Eff.Spec.{u, v} L] [rS : Eff.Spec.{u, v} R]
+    {γ : Γ} {α : Type v} (x : CompM (L ⊕ₑ R) γ α)
+    (mapOp : OpMap L R (fun i => CompM (L ⊕ₑ R) i.1 i.2)) :
+    CompM R γ α :=
+  corec (i := (γ, α)) (interpLCo mapOp) x
+
+private def interpRCo
+    {L R : Γ → Type u} [lS : Eff.Spec.{u, v} L] [rS : Eff.Spec.{u, v} R]
+    (mapOp : OpMap R L (fun i => CompM (L ⊕ₑ R) i.1 i.2))
+    (i : Γ × Type v) (x : CompM (L ⊕ₑ R) i.1 i.2) :
+    Eff.Step Γ L (fun i => CompM (L ⊕ₑ R) i.1 i.2) i :=
+  Eff.Step.casesOn (observe x)
+    (motive := fun i _ =>
+      Eff.Step Γ L (fun i => CompM (L ⊕ₑ R) i.1 i.2) i)
+    (fun value => Eff.Step.ret value)
+    (fun e blocks k => match e with
+      | .inl e => Eff.Step.op e blocks k
+      | .inr e => mapOp (Eff.Step.op e blocks k))
+
+def interpR
+    {L R : Γ → Type u} [lS : Eff.Spec.{u, v} L] [rS : Eff.Spec.{u, v} R]
+    {γ : Γ} {α : Type v} (x : CompM (L ⊕ₑ R) γ α)
+    (mapOp : OpMap R L (fun i => CompM (L ⊕ₑ R) i.1 i.2)) :
+    CompM L γ α :=
+  corec (i := (γ, α)) (interpRCo mapOp) x
+
 def loop
     {γ : Γ} [Eff.Has Eff.Tau E]
     (body : α → CompM E γ (α ⊕ β)) (init : α) :
