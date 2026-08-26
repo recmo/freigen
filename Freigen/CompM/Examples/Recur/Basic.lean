@@ -61,4 +61,14 @@ def isEvenStack : Nat → CompM Eff.Tau () Bool := fix fun isEven => fun
 
 #eval runCounted 6 (isEvenStack 6)
 
+def add : Nat → Nat → CompM Eff.Tau () Nat := fun n => fix fun add => fun
+| 0 => pure n
+| m + 1 => do pure $ (←add m) + 1
+
+def mul : Nat → Nat → CompM Eff.Tau () Nat := fun n => fix fun mul => fun
+| 0 => pure 0
+| m + 1 => do CompM.liftR $ add n (←mul m)
+
+#eval runCounted 5 (mul 2 2)
+
 end Freigen.CompM.Examples.Recur
