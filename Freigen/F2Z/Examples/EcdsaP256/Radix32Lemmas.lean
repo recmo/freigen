@@ -904,6 +904,57 @@ def SignedRadix32StepPoint (rho : WF.Valuation) (u1 u2 : P256.Fn)
       P256.Reference.generator
   else withQ
 
+private theorem order_zsmul {q : P256.Reference.Point}
+    (horder : P256.scalarModulus • q = 0) (k : Int) :
+    P256.scalarModulus • (k • q) = 0 := by
+  cases k with
+  | ofNat n =>
+      simpa using Reference.Aux.order_nsmul horder n
+  | negSucc n =>
+      have h := Reference.Aux.order_nsmul horder (n + 1)
+      rw [negSucc_zsmul, neg_nsmul, h, neg_zero]
+
+theorem SignedRadix32StepPoint.order
+    {u1 u2 : P256.Fn} {q acc : P256.Reference.Point} {i : Nat}
+    (hacc : P256.scalarModulus • acc = 0)
+    (hq : P256.scalarModulus • q = 0) :
+    P256.scalarModulus • SignedRadix32StepPoint ρ u1 u2 q i acc = 0 := by
+  let exponent := 254 - i
+  have hdouble : P256.scalarModulus • (2 • acc) = 0 :=
+    Reference.Aux.order_nsmul hacc 2
+  by_cases hqDigit : exponent % 5 = 0
+  · have hqTerm := order_zsmul hq
+      (LC.eval ρ.int (boothDigit u2 (exponent / 5) (by omega)))
+    have hwithQ := Reference.Aux.order_add hdouble hqTerm
+    by_cases hgenerator : exponent % 8 = 0
+    · have hpoint : SignedRadix32StepPoint ρ u1 u2 q i acc =
+          (2 • acc) + LC.eval ρ.int
+              (boothDigit u2 (exponent / 5) (by omega)) • q +
+            (BitVec.extractLsb' exponent 8
+              (u1.val.eval ρ)).toNat • P256.Reference.generator := by
+        simp [SignedRadix32StepPoint, exponent, hqDigit, hgenerator]
+      rw [hpoint]
+      exact Reference.Aux.order_add hwithQ
+        (Reference.Aux.order_nsmul Reference.Aux.generator_order _)
+    · have hpoint : SignedRadix32StepPoint ρ u1 u2 q i acc =
+          (2 • acc) + LC.eval ρ.int
+            (boothDigit u2 (exponent / 5) (by omega)) • q := by
+        simp [SignedRadix32StepPoint, exponent, hqDigit, hgenerator]
+      rw [hpoint]
+      exact hwithQ
+  · by_cases hgenerator : exponent % 8 = 0
+    · have hpoint : SignedRadix32StepPoint ρ u1 u2 q i acc =
+          (2 • acc) + (BitVec.extractLsb' exponent 8
+            (u1.val.eval ρ)).toNat • P256.Reference.generator := by
+        simp [SignedRadix32StepPoint, exponent, hqDigit, hgenerator]
+      rw [hpoint]
+      exact Reference.Aux.order_add hdouble
+        (Reference.Aux.order_nsmul Reference.Aux.generator_order _)
+    · have hpoint : SignedRadix32StepPoint ρ u1 u2 q i acc = 2 • acc := by
+        simp [SignedRadix32StepPoint, exponent, hqDigit, hgenerator]
+      rw [hpoint]
+      exact hdouble
+
 private theorem generatorWindowRep_of_lookup {u : P256.Fn}
     (hu : u.val.Valid ρ) {start : Nat} {hfit : start + 8 ≤ 256}
     {out : P256.AffineSlope.Point}
