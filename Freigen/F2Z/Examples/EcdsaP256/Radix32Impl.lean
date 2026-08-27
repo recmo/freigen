@@ -48,11 +48,13 @@ def SignedDigit.magnitude (digit : SignedDigit) : LC ℤ :=
     Int.natAbs ((slot.val : Int) - 16) • digit.oneHot.intBits[slot]
 
 def SignedDigit.negative (digit : SignedDigit) : LC ℤ :=
-  ∑ slot : Fin 16,
-    digit.oneHot.intBits[(⟨slot.val, by omega⟩ : Fin 33)]
+  ∑ slot : Fin 33,
+    (if slot.val < 16 then (1 : Int) else 0) • digit.oneHot.intBits[slot]
 
 def SignedDigit.isSixteen (digit : SignedDigit) : LC ℤ :=
-  digit.oneHot.intBits[0] + digit.oneHot.intBits[32]
+  ∑ slot : Fin 33,
+    (if slot.val = 0 ∨ slot.val = 32 then (1 : Int) else 0) •
+      digit.oneHot.intBits[slot]
 
 def signedDigitIndicators (value : LC ℤ) : Circuit SignedDigit := do
   let oneHot ← indicators 33 (value + 16)

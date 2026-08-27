@@ -63,6 +63,84 @@ def SignedDigitSpec (rho : WF.Valuation) (value : LC ℤ)
     ∀ other : Fin 33,
       digit.oneHot.intBits[other].eval rho.int = 1 → other = slot
 
+private theorem SignedDigitSpec.bit_zero_or_one
+    (h : SignedDigitSpec ρ value digit) (slot : Fin 33) :
+    digit.oneHot.intBits[slot].eval ρ.int = 0 ∨
+      digit.oneHot.intBits[slot].eval ρ.int = 1 := by
+  have hbit := h.1 slot
+  cases hb : digit.oneHot.bits.bitsLE[slot].eval ρ.bool <;>
+    rw [hb] at hbit <;> simp at hbit
+  · exact Or.inl hbit
+  · exact Or.inr hbit
+
+private theorem SignedDigitSpec.bit_zero_of_ne
+    (h : SignedDigitSpec ρ value digit) {chosen other : Fin 33}
+    (hchosen : digit.oneHot.intBits[chosen].eval ρ.int = 1)
+    (hunique : ∀ j : Fin 33,
+      digit.oneHot.intBits[j].eval ρ.int = 1 → j = chosen)
+    (hne : other ≠ chosen) :
+    digit.oneHot.intBits[other].eval ρ.int = 0 := by
+  rcases h.bit_zero_or_one other with hzero | hone
+  · exact hzero
+  · exact (hne (hunique other hone)).elim
+
+private theorem SignedDigitSpec.weighted_eval
+    (h : SignedDigitSpec ρ value digit) (f : Fin 33 → Int)
+    {chosen : Fin 33}
+    (hchosen : digit.oneHot.intBits[chosen].eval ρ.int = 1)
+    (hunique : ∀ j : Fin 33,
+      digit.oneHot.intBits[j].eval ρ.int = 1 → j = chosen) :
+    (∑ slot : Fin 33, f slot • digit.oneHot.intBits[slot]).eval ρ.int =
+      f chosen := by
+  rw [LC.eval_sum]
+  simp only [LC.eval_smul]
+  apply Aux.sum_mul_oneHot
+  · exact hchosen
+  · intro other hne
+    exact h.bit_zero_of_ne hchosen hunique hne
+
+theorem SignedDigitSpec.value_eval (h : SignedDigitSpec ρ value digit) :
+    digit.value.eval ρ.int = value.eval ρ.int := by
+  rcases h.2 with ⟨chosen, hchosen, hvalue, hunique⟩
+  unfold SignedDigit.value
+  rw [h.weighted_eval (fun slot => (slot.val : Int) - 16)
+    hchosen hunique, hvalue]
+
+theorem SignedDigitSpec.magnitude_eval
+    (h : SignedDigitSpec ρ value digit) :
+    digit.magnitude.eval ρ.int = (value.eval ρ.int).natAbs := by
+  rcases h.2 with ⟨chosen, hchosen, hvalue, hunique⟩
+  unfold SignedDigit.magnitude
+  rw [LC.eval_sum]
+  simp only [LC.eval_nsmul, nsmul_eq_mul]
+  rw [Aux.sum_mul_oneHot
+    (fun slot : Fin 33 => (Int.natAbs ((slot.val : Int) - 16) : Int))
+    (fun slot => digit.oneHot.intBits[slot].eval ρ.int) chosen hchosen]
+  · rw [hvalue]
+  · intro other hne
+    exact h.bit_zero_of_ne hchosen hunique hne
+
+theorem SignedDigitSpec.negative_eval
+    (h : SignedDigitSpec ρ value digit) :
+    digit.negative.eval ρ.int = if value.eval ρ.int < 0 then 1 else 0 := by
+  rcases h.2 with ⟨chosen, hchosen, hvalue, hunique⟩
+  unfold SignedDigit.negative
+  rw [h.weighted_eval
+    (fun slot => if slot.val < 16 then (1 : Int) else 0)
+    hchosen hunique]
+  split <;> split <;> simp_all <;> omega
+
+theorem SignedDigitSpec.isSixteen_eval
+    (h : SignedDigitSpec ρ value digit) :
+    digit.isSixteen.eval ρ.int =
+      if value.eval ρ.int = -16 ∨ value.eval ρ.int = 16 then 1 else 0 := by
+  rcases h.2 with ⟨chosen, hchosen, hvalue, hunique⟩
+  unfold SignedDigit.isSixteen
+  rw [h.weighted_eval
+    (fun slot => if slot.val = 0 ∨ slot.val = 32 then (1 : Int) else 0)
+    hchosen hunique]
+  split <;> split <;> simp_all <;> omega
+
 private theorem signedDigitSpec_of_indicators {value : LC ℤ} {oneHot : U 33}
     (h : IndicatorsSpec ρ (value + 16) oneHot) :
     SignedDigitSpec ρ value ⟨oneHot⟩ := by
