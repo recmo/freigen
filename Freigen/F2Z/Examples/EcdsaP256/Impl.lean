@@ -44,7 +44,7 @@ abbrev VerifyInput := U 256 × PublicKey × Signature × Aux
 /-- Proof index for extending a consecutive-multiple table by one.  The index
 is erased from the generated circuit. -/
 def addMultiple (_k : Nat) (P Q : AffineSlope.Point) : Circuit AffineSlope.Point :=
-  AffineSlope.addComplete P Q
+  AffineSlope.addCompleteCollapsed P Q
 
 /-- Proof index for doubling an entry in a consecutive-multiple table.  The
 index is erased from the generated circuit. -/

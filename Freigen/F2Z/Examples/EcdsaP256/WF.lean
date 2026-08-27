@@ -1,5 +1,6 @@
 import Freigen.F2Z.Examples.EcdsaP256.Impl
 import Freigen.F2Z.Examples.P256.WF
+import Freigen.F2Z.Examples.P256.CollapsedWF
 
 /-!
 # Auxiliary quotient well-formedness proofs for ECDSA-P256
@@ -72,7 +73,7 @@ private theorem projective_ofElems_wfRel {lv rv : WF.Valuation}
 theorem materializeMultiples_wf_aux :
     WF.GadgetSpec Projective.WFRel materializeMultiples
       (WF.VectorRel AffineSlope.Point.WFRel) := by
-  wfgen' using [AffineSlope.addComplete_wf_aux,
+  wfgen' using [AffineSlope.addCompleteCollapsed_wf_aux,
     AffineSlope.doubleComplete_wf_aux]
     unfold [materializeMultiples, addMultiple, doubleMultiple]
   case vc1 =>

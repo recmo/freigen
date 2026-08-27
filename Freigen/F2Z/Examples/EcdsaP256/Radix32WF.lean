@@ -257,7 +257,7 @@ theorem generatorTail_wf_aux (exponent : Nat)
       (fun input => if _h : exponent % 8 = 0 then do
         let g ← lookupGeneratorByte
           (windowValue input.1 exponent 8 (hfit _h))
-        AffineSlope.addComplete input.2 g
+        AffineSlope.addCompleteCollapsed input.2 g
       else pure input.2)
       AffineSlope.Point.WFRel := by
   unfold WF.GadgetSpec
@@ -273,7 +273,7 @@ theorem generatorTail_wf_aux (exponent : Nat)
     · intro B gL gR hg
       apply WF.GadgetSpec.direct_rule
         (left := (left.2, gL)) (right := (right.2, gR))
-        AffineSlope.addComplete_wf_aux
+        AffineSlope.addCompleteCollapsed_wf_aux
       intro lv rv hB
       have h' := hg lv rv hB
       exact ⟨h'.1.2, h'.2⟩
@@ -317,7 +317,7 @@ theorem signedRadix32Step_wf_aux (i : Nat) (hi : i < 255) :
         · intro D qL qR hqPoint
           apply WF.GadgetSpec.bind_rule
             (left := (accDL, qL)) (right := (accDR, qR))
-            AffineSlope.addComplete_wf_aux
+            AffineSlope.addCompleteCollapsed_wf_aux
           · intro lv rv hD
             have hq' := hqPoint lv rv hD
             have hdig := hdigit lv rv hq'.1

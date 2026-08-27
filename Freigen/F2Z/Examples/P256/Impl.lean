@@ -343,6 +343,102 @@ def addComplete (P Q : Point) : Circuit Point := do
   let candidate ← addCandidate P Q control
   selectAddOutput P Q control candidate
 
+/-! ## Open-once complete addition
+
+These variants retain the same complete affine case split while opening each
+selected field representative only once.  The alternatives are enforced by
+gated integer R1Cs, which avoids bit-decomposing intermediate selection-tree
+nodes. -/
+
+def selectGated3Rep (width outBound : Nat) (description : String)
+    (gate1 gate2 gate3 : LC ℤ) (value1 value2 value3 : Rep) : Circuit Rep := do
+  let bits ← hint h![gate1, gate2, value1.intVal, value2.intVal, value3.intVal]
+    fun h![(g1 : Int), (g2 : Int), (v1 : Int), (v2 : Int), (v3 : Int)] =>
+      let value := if g1 = 1 then v1 else if g2 = 1 then v2 else v3
+      if _ : 0 ≤ value then
+        pure $ Vector.ofFn (n := width) fun i => value.toNat.testBit i
+      else fail s!"negative {description} selection {value}"
+  let word ← U.fromWord { bitsLE := bits }
+  let out : Rep := ⟨word.intVal, outBound⟩
+  assertR1C gate1 (out.intVal - value1.intVal) 0
+  assertR1C gate2 (out.intVal - value2.intVal) 0
+  assertR1C gate3 (out.intVal - value3.intVal) 0
+  pure out
+
+def selectGated4Rep (width outBound : Nat) (description : String)
+    (gate1 gate2 gate3 gate4 : LC ℤ)
+    (value1 value2 value3 value4 : Rep) : Circuit Rep := do
+  let bits ← hint
+    h![gate1, gate2, gate3,
+      value1.intVal, value2.intVal, value3.intVal, value4.intVal]
+    fun h![(g1 : Int), (g2 : Int), (g3 : Int),
+      (v1 : Int), (v2 : Int), (v3 : Int), (v4 : Int)] =>
+      let value := if g1 = 1 then v1 else if g2 = 1 then v2
+        else if g3 = 1 then v3 else v4
+      if _ : 0 ≤ value then
+        pure $ Vector.ofFn (n := width) fun i => value.toNat.testBit i
+      else fail s!"negative {description} selection {value}"
+  let word ← U.fromWord { bitsLE := bits }
+  let out : Rep := ⟨word.intVal, outBound⟩
+  assertR1C gate1 (out.intVal - value1.intVal) 0
+  assertR1C gate2 (out.intVal - value2.intVal) 0
+  assertR1C gate3 (out.intVal - value3.intVal) 0
+  assertR1C gate4 (out.intVal - value4.intVal) 0
+  pure out
+
+def selectCollapsedNumerator (P Q : Point)
+    (control : AddControl) (x2 : Rep) : Circuit Rep :=
+  selectGated3Rep 262 66 "collapsed numerator"
+    control.doubleCase (control.active - control.doubleCase)
+      (LC.ofConst 1 - control.active)
+    (sub (scale 3 x2) (ofElem three)) (sub Q.Y P.Y) (ofElem zero)
+
+def selectCollapsedDenominator (P Q : Point)
+    (control : AddControl) : Circuit Rep :=
+  selectGated3Rep 262 66 "collapsed denominator"
+    control.doubleCase (control.active - control.doubleCase)
+      (LC.ofConst 1 - control.active)
+    (scale 2 P.Y) (sub Q.X P.X) (ofElem one)
+
+def finishSelectSlopeOperandsCollapsed (P Q : Point)
+    (control : AddControl) (x2 : Rep) : Circuit SlopeOperands := do
+  let numerator ← selectCollapsedNumerator P Q control x2
+  let denominator ← selectCollapsedDenominator P Q control
+  pure ⟨numerator, denominator⟩
+
+def selectSlopeOperandsCollapsed (P Q : Point)
+    (control : AddControl) : Circuit SlopeOperands := do
+  let x2 ← Modular.Lazy.mul base P.X P.X
+  finishSelectSlopeOperandsCollapsed P Q control x2
+
+def addCandidateCollapsed (P Q : Point)
+    (control : AddControl) : Circuit (Rep × Rep) := do
+  let operands ← selectSlopeOperandsCollapsed P Q control
+  finishAddCandidate P Q operands
+
+def selectAddCoordinateCollapsed (Pcoord Qcoord candidate : Rep)
+    (P Q : Point) (control : AddControl) (bothInfinity : LC ℤ) :
+    Circuit Rep := do
+  selectGated4Rep 256 2 "collapsed output"
+    control.active P.infinity (Q.infinity - bothInfinity)
+      (control.finite - control.active)
+    candidate Qcoord Pcoord (ofElem zero)
+
+def selectAddOutputCollapsed (P Q : Point) (control : AddControl)
+    (candidate : Rep × Rep) : Circuit Point := do
+  let bothInfinity ← andBit P.infinity Q.infinity
+  let X ← selectAddCoordinateCollapsed P.X Q.X candidate.1
+    P Q control bothInfinity
+  let Y ← selectAddCoordinateCollapsed P.Y Q.Y candidate.2
+    P Q control bothInfinity
+  let finiteOpposite ← and3Bit control.sameX control.oppositeY control.finite
+  pure ⟨X, Y, bothInfinity + finiteOpposite⟩
+
+def addCompleteCollapsed (P Q : Point) : Circuit Point := do
+  let control ← classifyAdd P Q
+  let candidate ← addCandidateCollapsed P Q control
+  selectAddOutputCollapsed P Q control candidate
+
 end AffineSlope
 
 end Freigen.F2Z.Examples.P256

@@ -103,12 +103,12 @@ def signedRadix32Step (u1 u2 : Fn)
     have hdigit : exponent / 5 < 52 := by omega
     let digit ← signedDigitIndicators (boothDigit u2 (exponent / 5) hdigit)
     let q ← selectSignedRadix32Point digit qTable
-    AffineSlope.addComplete acc q
+    AffineSlope.addCompleteCollapsed acc q
   else pure acc
   if _hg : exponent % 8 = 0 then do
     have hfit : exponent + 8 ≤ 256 := by omega
     let g ← lookupGeneratorByte (windowValue u1 exponent 8 hfit)
-    AffineSlope.addComplete acc g
+    AffineSlope.addCompleteCollapsed acc g
   else pure acc
 
 def signedRadix32JointScalarMul (u1 u2 : Fn) (q : Projective) :

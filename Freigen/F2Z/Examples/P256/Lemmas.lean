@@ -614,6 +614,256 @@ def And3BitSpec (ρ : WF.Valuation) (x y z out : LC ℤ) : Prop :=
   unfold AffineSlope.selectFormula
   exact selectRep_complete hchoose hone honeFit hzero hzeroFit le_rfl
     (by norm_num [base, baseModulus]; native_decide)
+
+def Gated3Spec (ρ : WF.Valuation) (gate1 gate2 gate3 : LC ℤ)
+    (value1 value2 value3 out : AffineSlope.Rep) : Prop :=
+  (gate1.eval ρ.int = 1 →
+    Modular.Lazy.evalZMod base out ρ =
+      Modular.Lazy.evalZMod base value1 ρ) ∧
+  (gate2.eval ρ.int = 1 →
+    Modular.Lazy.evalZMod base out ρ =
+      Modular.Lazy.evalZMod base value2 ρ) ∧
+  (gate3.eval ρ.int = 1 →
+    Modular.Lazy.evalZMod base out ρ =
+      Modular.Lazy.evalZMod base value3 ρ)
+
+def Gated4Spec (ρ : WF.Valuation) (gate1 gate2 gate3 gate4 : LC ℤ)
+    (value1 value2 value3 value4 out : AffineSlope.Rep) : Prop :=
+  (gate1.eval ρ.int = 1 →
+    Modular.Lazy.evalZMod base out ρ =
+      Modular.Lazy.evalZMod base value1 ρ) ∧
+  (gate2.eval ρ.int = 1 →
+    Modular.Lazy.evalZMod base out ρ =
+      Modular.Lazy.evalZMod base value2 ρ) ∧
+  (gate3.eval ρ.int = 1 →
+    Modular.Lazy.evalZMod base out ρ =
+      Modular.Lazy.evalZMod base value3 ρ) ∧
+  (gate4.eval ρ.int = 1 →
+    Modular.Lazy.evalZMod base out ρ =
+      Modular.Lazy.evalZMod base value4 ρ)
+
+def Gated3Cases (ρ : WF.Valuation) (gate1 gate2 gate3 : LC ℤ) : Prop :=
+  (gate1.eval ρ.int = 1 ∧ gate2.eval ρ.int = 0 ∧
+      gate3.eval ρ.int = 0) ∨
+  (gate1.eval ρ.int = 0 ∧ gate2.eval ρ.int = 1 ∧
+      gate3.eval ρ.int = 0) ∨
+  (gate1.eval ρ.int = 0 ∧ gate2.eval ρ.int = 0 ∧
+      gate3.eval ρ.int = 1)
+
+def Gated4Cases (ρ : WF.Valuation)
+    (gate1 gate2 gate3 gate4 : LC ℤ) : Prop :=
+  (gate1.eval ρ.int = 1 ∧ gate2.eval ρ.int = 0 ∧
+      gate3.eval ρ.int = 0 ∧ gate4.eval ρ.int = 0) ∨
+  (gate1.eval ρ.int = 0 ∧ gate2.eval ρ.int = 1 ∧
+      gate3.eval ρ.int = 0 ∧ gate4.eval ρ.int = 0) ∨
+  (gate1.eval ρ.int = 0 ∧ gate2.eval ρ.int = 0 ∧
+      gate3.eval ρ.int = 1 ∧ gate4.eval ρ.int = 0) ∨
+  (gate1.eval ρ.int = 0 ∧ gate2.eval ρ.int = 0 ∧
+      gate3.eval ρ.int = 0 ∧ gate4.eval ρ.int = 1)
+
+@[spec] theorem selectGated3Rep_sound {width outBound : Nat}
+    {description : String} {gate1 gate2 gate3 : LC ℤ}
+    {value1 value2 value3 : AffineSlope.Rep} :
+    ⦃⌜True⌝⦄ Sound.interp ρ
+      (AffineSlope.selectGated3Rep width outBound description
+        gate1 gate2 gate3 value1 value2 value3)
+    ⦃⇓ out => ⌜Gated3Spec ρ gate1 gate2 gate3 value1 value2 value3 out⌝⦄ := by
+  mvcgen [AffineSlope.selectGated3Rep, Gated3Spec]
+  intro bits
+  mvcgen
+  rename_i out hout hgate1 hgate2 hgate3
+  constructor
+  · intro hg
+    unfold Modular.Lazy.evalZMod
+    have heq := hgate1.2
+    simp [hg] at heq
+    rw [show out.intVal.eval ρ.int = value1.intVal.eval ρ.int by
+      omega]
+  · constructor
+    · intro hg
+      unfold Modular.Lazy.evalZMod
+      have heq := hgate2.2
+      simp [hg] at heq
+      rw [show out.intVal.eval ρ.int = value2.intVal.eval ρ.int by omega]
+    · intro hg
+      unfold Modular.Lazy.evalZMod
+      have heq := hgate3.2
+      simp [hg] at heq
+      rw [show out.intVal.eval ρ.int = value3.intVal.eval ρ.int by omega]
+
+@[spec] theorem selectGated4Rep_sound {width outBound : Nat}
+    {description : String} {gate1 gate2 gate3 gate4 : LC ℤ}
+    {value1 value2 value3 value4 : AffineSlope.Rep} :
+    ⦃⌜True⌝⦄ Sound.interp ρ
+      (AffineSlope.selectGated4Rep width outBound description
+        gate1 gate2 gate3 gate4 value1 value2 value3 value4)
+    ⦃⇓ out => ⌜Gated4Spec ρ gate1 gate2 gate3 gate4
+      value1 value2 value3 value4 out⌝⦄ := by
+  mvcgen [AffineSlope.selectGated4Rep, Gated4Spec]
+  intro bits
+  mvcgen
+  rename_i out hout hgate1 hgate2 hgate3 hgate4
+  constructor
+  · intro hg
+    unfold Modular.Lazy.evalZMod
+    have heq := hgate1.2
+    simp [hg] at heq
+    rw [show out.intVal.eval ρ.int = value1.intVal.eval ρ.int by omega]
+  · constructor
+    · intro hg
+      unfold Modular.Lazy.evalZMod
+      have heq := hgate2.2
+      simp [hg] at heq
+      rw [show out.intVal.eval ρ.int = value2.intVal.eval ρ.int by omega]
+    · constructor
+      · intro hg
+        unfold Modular.Lazy.evalZMod
+        have heq := hgate3.2
+        simp [hg] at heq
+        rw [show out.intVal.eval ρ.int = value3.intVal.eval ρ.int by omega]
+      · intro hg
+        unfold Modular.Lazy.evalZMod
+        have heq := hgate4.2
+        simp [hg] at heq
+        rw [show out.intVal.eval ρ.int = value4.intVal.eval ρ.int by omega]
+
+theorem selectGated3Rep_complete {width outBound limit : Nat}
+    {description : String} {gate1 gate2 gate3 : LC ℤ}
+    {value1 value2 value3 : AffineSlope.Rep}
+    (hcases : Gated3Cases ρ gate1 gate2 gate3)
+    (hvalue1 : value1.Valid ρ)
+    (hvalue1Fit : value1.intVal.eval ρ.int < limit)
+    (hvalue2 : value2.Valid ρ)
+    (hvalue2Fit : value2.intVal.eval ρ.int < limit)
+    (hvalue3 : value3.Valid ρ)
+    (hvalue3Fit : value3.intVal.eval ρ.int < limit)
+    (hwidth : limit ≤ 2 ^ width)
+    (hbound : limit ≤ outBound * base.modulus) :
+    ⦃⌜True⌝⦄ Complete.interp ρ
+      (AffineSlope.selectGated3Rep width outBound description
+        gate1 gate2 gate3 value1 value2 value3)
+    ⦃⇓ out => ⌜Gated3Spec ρ gate1 gate2 gate3 value1 value2 value3 out ∧
+      out.Valid ρ ∧ out.intVal.eval ρ.int < limit ∧
+      out.bound = outBound⌝⦄ := by
+  mvcgen [AffineSlope.selectGated3Rep]
+  let value := if gate1.eval ρ.int = 1 then value1.intVal.eval ρ.int
+    else if gate2.eval ρ.int = 1 then value2.intVal.eval ρ.int
+    else value3.intVal.eval ρ.int
+  let bits : Vector Bool width := Vector.ofFn fun i => value.toNat.testBit i.val
+  refine ⟨bits, ?_, ?_⟩
+  · rcases hcases with h | h | h <;>
+      simp [WF.interpHint, WF.evalArgs, bits, value, h, hvalue1.1,
+        hvalue2.1, hvalue3.1]
+  · mvcgen
+    rename_i out hout
+    have hvalue0 : 0 ≤ value := by
+      rcases hcases with h | h | h <;>
+        simp [value, h, hvalue1.1, hvalue2.1, hvalue3.1]
+    have hvalueFit : value < limit := by
+      rcases hcases with h | h | h <;>
+        simp [value, h, hvalue1Fit, hvalue2Fit, hvalue3Fit]
+    have hfit : value.toNat < 2 ^ width := by
+      apply (Int.toNat_lt hvalue0).2
+      exact hvalueFit.trans_le (by exact_mod_cast hwidth)
+    have hword :
+        (Word.eval ρ.bool { bitsLE := Vector.map LC.ofConst bits }).toNat =
+          value.toNat := by
+      rw [show Vector.map LC.ofConst bits =
+          Vector.ofFn (n := width) fun i =>
+            LC.ofConst (value.toNat.testBit i.val) by
+        ext i
+        simp [bits]]
+      exact Modular.Aux.constWord_eval_toNat value.toNat hfit ρ
+    have houtVal : out.intVal.eval ρ.int = value := by
+      rw [U.Rel.intVal hout, hword, Int.toNat_of_nonneg hvalue0]
+    constructor
+    · rcases hcases with h | h | h <;> simp [h, value, houtVal]
+    · mvcgen
+      constructor
+      · rcases hcases with h | h | h <;> simp [h, value, houtVal]
+      · mvcgen
+        constructor
+        · rcases hcases with h | h | h <;> simp [h, value, houtVal]
+        · mvcgen
+          constructor
+          · rcases hcases with h | h | h <;>
+              simp [Gated3Spec, Modular.Lazy.evalZMod, h, value, houtVal]
+          · refine ⟨⟨U.intVal_nonneg out hout.1, ?_⟩, ?_⟩
+            · rw [houtVal]
+              exact hvalueFit.trans_le (by exact_mod_cast hbound)
+            · simpa [houtVal] using hvalueFit
+
+theorem selectGated4Rep_complete {width outBound limit : Nat}
+    {description : String} {gate1 gate2 gate3 gate4 : LC ℤ}
+    {value1 value2 value3 value4 : AffineSlope.Rep}
+    (hcases : Gated4Cases ρ gate1 gate2 gate3 gate4)
+    (hvalue1 : value1.Valid ρ)
+    (hvalue1Fit : value1.intVal.eval ρ.int < limit)
+    (hvalue2 : value2.Valid ρ)
+    (hvalue2Fit : value2.intVal.eval ρ.int < limit)
+    (hvalue3 : value3.Valid ρ)
+    (hvalue3Fit : value3.intVal.eval ρ.int < limit)
+    (hvalue4 : value4.Valid ρ)
+    (hvalue4Fit : value4.intVal.eval ρ.int < limit)
+    (hwidth : limit ≤ 2 ^ width)
+    (hbound : limit ≤ outBound * base.modulus) :
+    ⦃⌜True⌝⦄ Complete.interp ρ
+      (AffineSlope.selectGated4Rep width outBound description
+        gate1 gate2 gate3 gate4 value1 value2 value3 value4)
+    ⦃⇓ out => ⌜Gated4Spec ρ gate1 gate2 gate3 gate4
+      value1 value2 value3 value4 out ∧ out.Valid ρ ∧
+      out.intVal.eval ρ.int < limit ∧ out.bound = outBound⌝⦄ := by
+  mvcgen [AffineSlope.selectGated4Rep]
+  let value := if gate1.eval ρ.int = 1 then value1.intVal.eval ρ.int
+    else if gate2.eval ρ.int = 1 then value2.intVal.eval ρ.int
+    else if gate3.eval ρ.int = 1 then value3.intVal.eval ρ.int
+    else value4.intVal.eval ρ.int
+  let bits : Vector Bool width := Vector.ofFn fun i => value.toNat.testBit i.val
+  refine ⟨bits, ?_, ?_⟩
+  · rcases hcases with h | h | h | h <;>
+      simp [WF.interpHint, WF.evalArgs, bits, value, h, hvalue1.1,
+        hvalue2.1, hvalue3.1, hvalue4.1]
+  · mvcgen
+    rename_i out hout
+    have hvalue0 : 0 ≤ value := by
+      rcases hcases with h | h | h | h <;>
+        simp [value, h, hvalue1.1, hvalue2.1, hvalue3.1, hvalue4.1]
+    have hvalueFit : value < limit := by
+      rcases hcases with h | h | h | h <;>
+        simp [value, h, hvalue1Fit, hvalue2Fit, hvalue3Fit, hvalue4Fit]
+    have hfit : value.toNat < 2 ^ width := by
+      apply (Int.toNat_lt hvalue0).2
+      exact hvalueFit.trans_le (by exact_mod_cast hwidth)
+    have hword :
+        (Word.eval ρ.bool { bitsLE := Vector.map LC.ofConst bits }).toNat =
+          value.toNat := by
+      rw [show Vector.map LC.ofConst bits =
+          Vector.ofFn (n := width) fun i =>
+            LC.ofConst (value.toNat.testBit i.val) by
+        ext i
+        simp [bits]]
+      exact Modular.Aux.constWord_eval_toNat value.toNat hfit ρ
+    have houtVal : out.intVal.eval ρ.int = value := by
+      rw [U.Rel.intVal hout, hword, Int.toNat_of_nonneg hvalue0]
+    constructor
+    · rcases hcases with h | h | h | h <;> simp [h, value, houtVal]
+    · mvcgen
+      constructor
+      · rcases hcases with h | h | h | h <;> simp [h, value, houtVal]
+      · mvcgen
+        constructor
+        · rcases hcases with h | h | h | h <;> simp [h, value, houtVal]
+        · mvcgen
+          constructor
+          · rcases hcases with h | h | h | h <;> simp [h, value, houtVal]
+          · mvcgen
+            constructor
+            · rcases hcases with h | h | h | h <;>
+                simp [Gated4Spec, Modular.Lazy.evalZMod, h, value, houtVal]
+            · refine ⟨⟨U.intVal_nonneg out hout.1, ?_⟩, ?_⟩
+              · rw [houtVal]
+                exact hvalueFit.trans_le (by exact_mod_cast hbound)
+              · simpa [houtVal] using hvalueFit
 def AddControlSpec (ρ : WF.Valuation) (P Q : AffineSlope.Point)
     (control : AffineSlope.AddControl) : Prop :=
   Modular.Lazy.ZeroTestZModSpec base ρ
@@ -652,6 +902,19 @@ theorem AddControlSpec.active_bit {P Q : AffineSlope.Point}
       simp [hsame]
     rw [hactive, hgenericCase0]
     simpa using hdoubleCase.2
+
+theorem AddControlSpec.slope_gated_cases {P Q : AffineSlope.Point}
+    {control : AffineSlope.AddControl}
+    (h : AddControlSpec ρ P Q control) :
+    Gated3Cases ρ control.doubleCase
+      (control.active - control.doubleCase) (LC.ofConst 1 - control.active) := by
+  have hactiveBit := h.active_bit
+  rcases h with ⟨_, _, _, _, genericCase, _, hdoubleCase,
+    hgenericCase, hactive⟩
+  rcases hactiveBit with ha | ha <;>
+    rcases hdoubleCase.2 with hd | hd <;>
+    rcases hgenericCase.2 with hg | hg <;>
+    simp_all [Gated3Cases]
 
 @[spec] theorem classifyAdd_sound {P Q : AffineSlope.Point} :
   ⦃⌜True⌝⦄ Sound.interp ρ (AffineSlope.classifyAdd P Q)
@@ -825,6 +1088,58 @@ def SlopeOperandsSpec (ρ : WF.Valuation) (P Q : AffineSlope.Point)
   all_goals intros
   all_goals try assumption
   all_goals intros <;> assumption
+
+@[spec] theorem selectSlopeOperandsCollapsed_sound {P Q : AffineSlope.Point}
+    {control : AffineSlope.AddControl}
+    (hcontrol : AddControlSpec ρ P Q control) :
+    ⦃⌜True⌝⦄ Sound.interp ρ
+      (AffineSlope.selectSlopeOperandsCollapsed P Q control)
+    ⦃⇓ operands => ⌜SlopeOperandsSpec ρ P Q control operands⌝⦄ := by
+  mvcgen [AffineSlope.selectSlopeOperandsCollapsed,
+    AffineSlope.finishSelectSlopeOperandsCollapsed,
+    AffineSlope.selectCollapsedNumerator,
+    AffineSlope.selectCollapsedDenominator]
+  rename_i x2 hx2 numerator hnumerator denominator hdenominator
+  unfold SlopeOperandsSpec
+  constructor
+  · intro hactive
+    constructor
+    · intro hdouble
+      constructor
+      · calc
+          Modular.Lazy.evalZMod base numerator ρ =
+              Modular.Lazy.evalZMod base
+                (AffineSlope.sub (AffineSlope.scale 3 x2)
+                  (AffineSlope.ofElem three)) ρ := hnumerator.1 hdouble
+          _ = _ := by
+            simp [Modular.Lazy.MulZModSpec] at hx2
+            simp [hx2, AffineSlope.sub, AffineSlope.scale,
+              AffineSlope.ofElem]
+      · calc
+          Modular.Lazy.evalZMod base denominator ρ =
+              Modular.Lazy.evalZMod base (AffineSlope.scale 2 P.Y) ρ :=
+            hdenominator.1 hdouble
+          _ = _ := by simp [AffineSlope.scale]
+    · intro hdouble
+      have hgeneric :
+          (control.active - control.doubleCase).eval ρ.int = 1 := by
+        simp [hactive, hdouble]
+      constructor
+      · calc
+          Modular.Lazy.evalZMod base numerator ρ =
+              Modular.Lazy.evalZMod base (AffineSlope.sub Q.Y P.Y) ρ :=
+            hnumerator.2.1 hgeneric
+          _ = _ := by simp [AffineSlope.sub]
+      · calc
+          Modular.Lazy.evalZMod base denominator ρ =
+              Modular.Lazy.evalZMod base (AffineSlope.sub Q.X P.X) ρ :=
+            hdenominator.2.1 hgeneric
+          _ = _ := by simp [AffineSlope.sub]
+  · intro hactive
+    have hinactive : (LC.ofConst 1 - control.active).eval ρ.int = 1 := by
+      simp [hactive]
+    exact ⟨by simpa [AffineSlope.ofElem] using hnumerator.2.2 hinactive,
+      by simpa [AffineSlope.ofElem] using hdenominator.2.2 hinactive⟩
 
 theorem SlopeOperandsSpec.denominator_ne_zero
     {P Q : AffineSlope.Point} {control : AffineSlope.AddControl}

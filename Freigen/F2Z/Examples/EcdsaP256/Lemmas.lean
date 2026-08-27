@@ -237,7 +237,7 @@ theorem WindowDigitSpec.lt {out : LC ℤ}
     ⦃⇓ out => ⌜P256.Reference.NormalizedRep ρ out ((k + 1) • q)⌝⦄ := by
   unfold addMultiple
   apply Triple.iff_conseq.mp
-    (P256.AffineSlope.addComplete_sound_normalized hP hQ) (by simp)
+    (P256.AffineSlope.addCompleteCollapsed_sound_normalized hP hQ) (by simp)
   simp only [PostCond.entails, SPred.entails_nil]
   exact ⟨fun _ h => by simpa only [add_nsmul, one_nsmul] using h,
     ExceptConds.entails.refl _⟩
@@ -253,7 +253,7 @@ theorem WindowDigitSpec.lt {out : LC ℤ}
       ((k + 1) • q)⌝⦄ := by
   unfold addMultiple
   apply Triple.iff_conseq.mp
-    (P256.AffineSlope.addComplete_complete_mathlib hPvalid hQvalid hP hQ
+    (P256.AffineSlope.addCompleteCollapsed_complete_mathlib hPvalid hQvalid hP hQ
       (Reference.Aux.no_two_torsion_of_order
         (Reference.Aux.order_nsmul horder k))) (by simp)
   simp only [PostCond.entails, SPred.entails_nil]
