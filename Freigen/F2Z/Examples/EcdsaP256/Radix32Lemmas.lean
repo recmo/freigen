@@ -606,6 +606,20 @@ def SignedRadix32PointSpec (ρ : WF.Valuation) (value : LC ℤ)
       -((value.eval ρ.int).natAbs • q)
     else (value.eval ρ.int).natAbs • q)
 
+private theorem signedPoint_eq_zsmul (x : Int)
+    (q : P256.Reference.Point) :
+    (if x < 0 then -(x.natAbs • q) else x.natAbs • q) = x • q := by
+  cases x with
+  | ofNat n => simp
+  | negSucc n => simp
+
+theorem SignedRadix32PointSpec.zsmul
+    (h : SignedRadix32PointSpec ρ value out q) :
+    P256.Reference.NormalizedRep ρ out (value.eval ρ.int • q) := by
+  unfold SignedRadix32PointSpec at h
+  rw [signedPoint_eq_zsmul] at h
+  exact h
+
 @[spec] theorem selectSignedRadix32Point_sound
     {value : LC ℤ} {q : P256.Reference.Point}
     (hdigit : SignedDigitSpec ρ value digit)
@@ -876,5 +890,110 @@ theorem boothHorner_full {k : P256.Fn} (hk : k.val.Valid ρ) :
     boothHorner ρ k 51 = ((k.val.eval ρ).toNat : Int) := by
   rw [boothHorner_eq_prefix hk (by omega)]
   simp [radix32Prefix]
+
+def SignedRadix32StepPoint (rho : WF.Valuation) (u1 u2 : P256.Fn)
+    (q : P256.Reference.Point) (i : Nat)
+    (acc : P256.Reference.Point) : P256.Reference.Point :=
+  let exponent := 254 - i
+  let doubled := 2 • acc
+  let withQ := if hq : exponent % 5 = 0 then
+    doubled + (boothDigit u2 (exponent / 5) (by omega)).eval rho.int • q
+  else doubled
+  if exponent % 8 = 0 then
+    withQ + (BitVec.extractLsb' exponent 8 (u1.val.eval rho)).toNat •
+      P256.Reference.generator
+  else withQ
+
+private theorem generatorWindowRep_of_lookup {u : P256.Fn}
+    (hu : u.val.Valid ρ) {start : Nat} {hfit : start + 8 ≤ 256}
+    {out : P256.AffineSlope.Point}
+    (h : ∃ j : Fin 256,
+      (windowValue u start 8 hfit).eval ρ.int = j.val ∧
+        P256.Reference.NormalizedRep ρ out
+          (j.val • P256.Reference.generator)) :
+    P256.Reference.NormalizedRep ρ out
+      ((BitVec.extractLsb' start 8 (u.val.eval ρ)).toNat •
+        P256.Reference.generator) := by
+  rcases h with ⟨j, hj, hout⟩
+  have hw := windowValue_eval hu start 8 hfit
+  rw [hw] at hj
+  have hjval : j.val =
+      (BitVec.extractLsb' start 8 (u.val.eval ρ)).toNat := by
+    exact_mod_cast hj.symm
+  simpa [hjval] using hout
+
+@[spec] theorem signedRadix32Step_sound
+    {u1 u2 : P256.Fn} {q : P256.Reference.Point}
+    {i : Nat} {hi : i < 255} {acc : P256.AffineSlope.Point}
+    {accPoint : P256.Reference.Point}
+    (hu1 : u1.val.Valid ρ) (hu2 : u2.val.Valid ρ)
+    (hacc : P256.Reference.NormalizedRep ρ acc accPoint)
+    (htable : Radix32TableSpec ρ qTable q)
+    (hq : q ≠ 0) (horder : P256.scalarModulus • q = 0) :
+    ⦃⌜True⌝⦄ Sound.interp ρ (signedRadix32Step u1 u2 qTable i hi acc)
+    ⦃⇓ out => ⌜P256.Reference.NormalizedRep ρ out
+      (SignedRadix32StepPoint ρ u1 u2 q i accPoint)⌝⦄ := by
+  mvcgen [signedRadix32Step, SignedRadix32StepPoint]
+  case vc3.success =>
+    intro hdouble
+    split <;> mvcgen -trivial
+    case vc1.value =>
+      exact boothDigit u2 ((254 - i) / 5) (by omega)
+    case vc2.q => exact q
+    case vc3.hdigit => assumption
+    case vc4.htable => exact htable
+    case vc5.hq => exact hq
+    case vc6.horder => exact horder
+    case vc7.p => exact accPoint + accPoint
+    case vc8.q =>
+      exact (boothDigit u2 ((254 - i) / 5) (by omega)).eval ρ.int • q
+    case vc9.hP => exact hdouble
+    case vc10.hQ => exact SignedRadix32PointSpec.zsmul (by assumption)
+    case vc11.success =>
+      intro hwithQ
+      split <;> mvcgen -trivial
+      case vc2 =>
+        intro _
+        exact accPoint + accPoint +
+          (boothDigit u2 ((254 - i) / 5) (by omega)).eval ρ.int • q
+      case vc3 =>
+        intro _
+        exact (BitVec.extractLsb' (254 - i) 8
+          (u1.val.eval ρ)).toNat • P256.Reference.generator
+      case vc4 =>
+        intro _
+        exact hwithQ
+      case vc5 =>
+        intro hlookup
+        exact generatorWindowRep_of_lookup hu1 hlookup
+      case vc1.h.success.success =>
+        intro hout
+        unfold SignedRadix32StepPoint
+        simp_all [two_nsmul]
+      case vc1.isFalse =>
+        unfold SignedRadix32StepPoint
+        simp_all [two_nsmul]
+    case vc1.h =>
+      split <;> mvcgen -trivial
+      case vc2 =>
+        intro _
+        exact accPoint + accPoint
+      case vc3 =>
+        intro _
+        exact (BitVec.extractLsb' (254 - i) 8
+          (u1.val.eval ρ)).toNat • P256.Reference.generator
+      case vc4 =>
+        intro _
+        exact hdouble
+      case vc5 =>
+        intro hlookup
+        exact generatorWindowRep_of_lookup hu1 hlookup
+      case vc1.h.success.success =>
+        intro hout
+        unfold SignedRadix32StepPoint
+        simp_all [two_nsmul]
+      case vc1.isFalse =>
+        unfold SignedRadix32StepPoint
+        simp_all [two_nsmul]
 
 end Freigen.F2Z.Examples.EcdsaP256
