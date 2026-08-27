@@ -1047,4 +1047,127 @@ private theorem generatorWindowRep_of_lookup {u : P256.Fn}
         unfold SignedRadix32StepPoint
         simp_all [two_nsmul]
 
+@[spec] theorem signedRadix32Step_complete
+    {u1 u2 : P256.Fn} {q : P256.Reference.Point}
+    {i : Nat} {hi : i < 255} {acc : P256.AffineSlope.Point}
+    {accPoint : P256.Reference.Point}
+    (hu1 : u1.val.Valid ρ) (hu2 : u2.val.Valid ρ)
+    (haccValid : acc.Valid ρ)
+    (hacc : P256.Reference.NormalizedRep ρ acc accPoint)
+    (haccOrder : P256.scalarModulus • accPoint = 0)
+    (htableValid : Radix32TableValid ρ qTable)
+    (htable : Radix32TableSpec ρ qTable q)
+    (hq : q ≠ 0) (horder : P256.scalarModulus • q = 0) :
+    ⦃⌜True⌝⦄ Complete.interp ρ
+      (signedRadix32Step u1 u2 qTable i hi acc)
+    ⦃⇓ out => ⌜out.Valid ρ ∧ P256.Reference.NormalizedRep ρ out
+      (SignedRadix32StepPoint ρ u1 u2 q i accPoint)⌝⦄ := by
+  mvcgen [signedRadix32Step, SignedRadix32StepPoint]
+  case vc4.hdouble =>
+    exact Reference.Aux.no_two_torsion_of_order haccOrder
+  case vc5.success =>
+    rename_i accD
+    intro haccDValid hdouble
+    split <;> mvcgen -trivial
+    case vc1.hlow =>
+      exact (boothDigit_bounds hu2 ((254 - i) / 5) (by omega)).1
+    case vc2.hhigh =>
+      exact (boothDigit_bounds hu2 ((254 - i) / 5) (by omega)).2
+    case vc3.value =>
+      exact boothDigit u2 ((254 - i) / 5) (by omega)
+    case vc4.q => exact q
+    case vc5.hdigit => assumption
+    case vc6.htableValid => exact htableValid
+    case vc7.htable => exact htable
+    case vc8.hq => exact hq
+    case vc9.horder => exact horder
+    case vc10.q =>
+      exact (boothDigit u2 ((254 - i) / 5) (by omega)).eval ρ.int • q
+    case vc11.p => exact accPoint + accPoint
+    case vc12.hPvalid => exact haccDValid
+    case vc13.hQvalid => exact ‹_ ∧ SignedRadix32PointSpec _ _ _ _› |>.1
+    case vc14.hP => exact hdouble
+    case vc15.hQ =>
+      exact SignedRadix32PointSpec.zsmul
+        (‹_ ∧ SignedRadix32PointSpec _ _ _ _› |>.2)
+    case vc16.hnoTwoTorsion =>
+      apply Reference.Aux.no_two_torsion_of_order
+      simpa [two_nsmul] using Reference.Aux.order_nsmul haccOrder 2
+    case vc17.success =>
+      rename_i digit hdigit qPoint hqPoint accQ
+      intro haccQValid hwithQ
+      split <;> mvcgen -trivial
+      case vc1.hd0 =>
+        rw [windowValue_eval hu1]
+        exact_mod_cast Nat.zero_le _
+      case vc2.hdlt =>
+        rw [windowValue_eval hu1]
+        exact_mod_cast (BitVec.extractLsb' (254 - i) 8
+          (u1.val.eval ρ)).isLt
+      case vc4 =>
+        intro _
+        exact accPoint + accPoint +
+          (boothDigit u2 ((254 - i) / 5) (by omega)).eval ρ.int • q
+      case vc5 =>
+        intro _
+        exact (BitVec.extractLsb' (254 - i) 8
+          (u1.val.eval ρ)).toNat • P256.Reference.generator
+      case vc6 => intros; exact haccQValid
+      case vc7 => intro hvalid _; exact hvalid
+      case vc8 => intro _; exact hwithQ
+      case vc9 =>
+        intro hlookup
+        exact generatorWindowRep_of_lookup hu1 hlookup.2
+      case vc10 =>
+        intro _
+        apply Reference.Aux.no_two_torsion_of_order
+        exact Reference.Aux.order_add
+          (Reference.Aux.order_nsmul haccOrder 2)
+          (order_zsmul horder
+            ((boothDigit u2 ((254 - i) / 5) (by omega)).eval ρ.int))
+      case vc3.h.success.success =>
+        intro houtValid hout
+        exact ⟨houtValid, by
+          unfold SignedRadix32StepPoint
+          simp_all [two_nsmul]⟩
+      case vc1.isFalse =>
+        exact ⟨haccQValid, by
+          unfold SignedRadix32StepPoint
+          simp_all [two_nsmul]⟩
+    case vc1.h =>
+      split <;> mvcgen -trivial
+      case vc1.hd0 =>
+        rw [windowValue_eval hu1]
+        exact_mod_cast Nat.zero_le _
+      case vc2.hdlt =>
+        rw [windowValue_eval hu1]
+        exact_mod_cast (BitVec.extractLsb' (254 - i) 8
+          (u1.val.eval ρ)).isLt
+      case vc4 =>
+        intro _
+        exact accPoint + accPoint
+      case vc5 =>
+        intro _
+        exact (BitVec.extractLsb' (254 - i) 8
+          (u1.val.eval ρ)).toNat • P256.Reference.generator
+      case vc6 => intros; exact haccDValid
+      case vc7 => intro hvalid _; exact hvalid
+      case vc8 => intro _; exact hdouble
+      case vc9 =>
+        intro hlookup
+        exact generatorWindowRep_of_lookup hu1 hlookup.2
+      case vc10 =>
+        intro _
+        apply Reference.Aux.no_two_torsion_of_order
+        exact Reference.Aux.order_nsmul haccOrder 2
+      case vc3.h.success.success =>
+        intro houtValid hout
+        exact ⟨houtValid, by
+          unfold SignedRadix32StepPoint
+          simp_all [two_nsmul]⟩
+      case vc1.isFalse =>
+        exact ⟨haccDValid, by
+          unfold SignedRadix32StepPoint
+          simp_all [two_nsmul]⟩
+
 end Freigen.F2Z.Examples.EcdsaP256
