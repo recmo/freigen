@@ -1279,4 +1279,131 @@ def SignedRadix32FoldPoint (rho : WF.Valuation) (u1 u2 : P256.Fn)
     intro hvalid hnormalized _
     exact ⟨hvalid, hnormalized⟩
 
+def signedRadix32GeneratorCoeff (rho : WF.Valuation) (u1 : P256.Fn) :
+    Nat → Nat
+  | 0 => 0
+  | count + 1 =>
+      2 * signedRadix32GeneratorCoeff rho u1 count +
+        if h : (254 - count) % 8 = 0 then
+          (BitVec.extractLsb' (254 - count) 8 (u1.val.eval rho)).toNat
+        else 0
+
+def signedRadix32BoothCoeff (rho : WF.Valuation) (u2 : P256.Fn) :
+    Nat → Int
+  | 0 => (boothDigit u2 51 (by omega)).eval rho.int
+  | count + 1 =>
+      2 * signedRadix32BoothCoeff rho u2 count +
+        if h : (254 - count) % 5 = 0 then
+          (boothDigit u2 ((254 - count) / 5) (by omega)).eval rho.int
+        else 0
+
+theorem SignedRadix32FoldPoint_range (u1 u2 : P256.Fn)
+    (q : P256.Reference.Point) {count : Nat} (hcount : count ≤ 255) :
+    SignedRadix32FoldPoint ρ u1 u2 q (List.range count) =
+      signedRadix32GeneratorCoeff ρ u1 count • P256.Reference.generator +
+        signedRadix32BoothCoeff ρ u2 count • q := by
+  induction count with
+  | zero =>
+      simp [SignedRadix32FoldPoint, signedRadix32GeneratorCoeff,
+        signedRadix32BoothCoeff]
+  | succ count ih =>
+      rw [List.range_succ, SignedRadix32FoldPoint, List.foldl_append]
+      change SignedRadix32StepPoint ρ u1 u2 q count
+        (SignedRadix32FoldPoint ρ u1 u2 q (List.range count)) = _
+      rw [ih (by omega)]
+      unfold SignedRadix32StepPoint
+      simp only [signedRadix32GeneratorCoeff, signedRadix32BoothCoeff]
+      split <;> split
+      all_goals
+        simp_all [nsmul_add, add_nsmul, add_zsmul, mul_zsmul]
+        have hgeneratorDouble :
+            2 • (signedRadix32GeneratorCoeff ρ u1 count •
+              P256.Reference.generator) =
+              (2 * signedRadix32GeneratorCoeff ρ u1 count) •
+                P256.Reference.generator := by
+          rw [← mul_nsmul, Nat.mul_comm]
+        rw [hgeneratorDouble]
+        abel
+
+theorem signedRadix32BoothCoeff_five_mul (u2 : P256.Fn)
+    {count : Nat} (hcount : count ≤ 51) :
+    signedRadix32BoothCoeff ρ u2 (5 * count) = boothHorner ρ u2 count := by
+  induction count with
+  | zero => rfl
+  | succ count ih =>
+      have hcountLt : count < 51 := by omega
+      have h0 : (254 - (5 * count)) % 5 ≠ 0 := by omega
+      have h1 : (254 - (5 * count + 1)) % 5 ≠ 0 := by omega
+      have h2 : (254 - (5 * count + 2)) % 5 ≠ 0 := by omega
+      have h3 : (254 - (5 * count + 3)) % 5 ≠ 0 := by omega
+      have h4 : (254 - (5 * count + 4)) % 5 = 0 := by omega
+      have hindex : (254 - (5 * count + 4)) / 5 = 50 - count := by omega
+      rw [show 5 * (count + 1) = 5 * count + 5 by omega]
+      simp only [show 5 * count + 5 = ((((5 * count + 1) + 1) + 1) + 1) + 1
+        by omega, signedRadix32BoothCoeff]
+      rw [dif_neg h0, dif_neg h1, dif_neg h2, dif_neg h3, dif_pos h4,
+        ih (by omega), boothHorner, dif_pos hcountLt]
+      simp only [hindex]
+      ring
+
+theorem signedRadix32GeneratorCoeff_event (u1 : P256.Fn)
+    {block : Nat} (hblock : block < 32) :
+    signedRadix32GeneratorCoeff ρ u1 (8 * block + 7) =
+      scalarPrefix ρ u1 (block + 1) := by
+  induction block with
+  | zero =>
+      rw [show 8 * 0 + 7 = ((((((0 + 1) + 1) + 1) + 1) + 1) + 1) + 1 by
+        omega]
+      simp only [signedRadix32GeneratorCoeff]
+      norm_num
+      rw [scalarPrefix_succ (ρ := ρ) (k := u1) (i := 0) (by omega),
+        scalarPrefix_zero]
+      simp [byteValue]
+  | succ block ih =>
+      have hblockLt : block + 1 < 32 := by omega
+      let start := 8 * block + 7
+      have h0 : (254 - start) % 8 ≠ 0 := by dsimp [start]; omega
+      have h1 : (254 - (start + 1)) % 8 ≠ 0 := by dsimp [start]; omega
+      have h2 : (254 - (start + 2)) % 8 ≠ 0 := by dsimp [start]; omega
+      have h3 : (254 - (start + 3)) % 8 ≠ 0 := by dsimp [start]; omega
+      have h4 : (254 - (start + 4)) % 8 ≠ 0 := by dsimp [start]; omega
+      have h5 : (254 - (start + 5)) % 8 ≠ 0 := by dsimp [start]; omega
+      have h6 : (254 - (start + 6)) % 8 ≠ 0 := by dsimp [start]; omega
+      have h7 : (254 - (start + 7)) % 8 = 0 := by dsimp [start]; omega
+      have hindex : 254 - (start + 7) = 248 - 8 * (block + 1) := by
+        dsimp [start]
+        omega
+      rw [show 8 * (block + 1) + 7 = start + 8 by dsimp [start]; omega]
+      simp only [show start + 8 = (((((((start + 1) + 1) + 1) + 1) + 1) + 1) + 1) + 1
+        by omega, signedRadix32GeneratorCoeff]
+      rw [dif_neg h0, dif_neg h1, dif_neg h2, dif_neg h3, dif_neg h4,
+        dif_neg h5, dif_neg h6, dif_pos h7, ih (by omega)]
+      rw [scalarPrefix_succ (ρ := ρ) (k := u1) (i := block + 1) hblockLt]
+      simp only [hindex, byteValue]
+      ring
+
+theorem signedRadix32GeneratorCoeff_full (u1 : P256.Fn) :
+    signedRadix32GeneratorCoeff ρ u1 255 = (u1.val.eval ρ).toNat := by
+  rw [show 255 = 8 * 31 + 7 by norm_num,
+    signedRadix32GeneratorCoeff_event (ρ := ρ) u1 (block := 31) (by omega),
+    scalarPrefix_full]
+
+theorem signedRadix32BoothCoeff_full {u2 : P256.Fn}
+    (hu2 : u2.val.Valid ρ) :
+    signedRadix32BoothCoeff ρ u2 255 = ((u2.val.eval ρ).toNat : Int) := by
+  rw [show 255 = 5 * 51 by norm_num,
+    signedRadix32BoothCoeff_five_mul (ρ := ρ) u2 (count := 51) (by omega),
+    boothHorner_full hu2]
+
+theorem SignedRadix32FoldPoint_full (u1 u2 : P256.Fn)
+    (q : P256.Reference.Point) (hu2 : u2.val.Valid ρ) :
+    SignedRadix32FoldPoint ρ u1 u2 q [:255].toList =
+      (u1.val.eval ρ).toNat • P256.Reference.generator +
+        (u2.val.eval ρ).toNat • q := by
+  rw [show [:255].toList = List.range 255 by rfl,
+    SignedRadix32FoldPoint_range u1 u2 q (by omega),
+    signedRadix32GeneratorCoeff_full,
+    signedRadix32BoothCoeff_full hu2]
+  rfl
+
 end Freigen.F2Z.Examples.EcdsaP256
