@@ -1170,4 +1170,113 @@ private theorem generatorWindowRep_of_lookup {u : P256.Fn}
           unfold SignedRadix32StepPoint
           simp_all [two_nsmul]⟩
 
+def SignedRadix32FoldPoint (rho : WF.Valuation) (u1 u2 : P256.Fn)
+    (q : P256.Reference.Point) (indices : List Nat) :
+    P256.Reference.Point :=
+  indices.foldl (fun acc i =>
+    SignedRadix32StepPoint rho u1 u2 q i acc)
+    ((boothDigit u2 51 (by omega)).eval rho.int • q)
+
+@[spec] theorem signedRadix32JointScalarMul_sound
+    {u1 u2 : P256.Fn} {Q : P256.Projective}
+    {q : P256.Reference.Point}
+    (hu1 : u1.val.Valid ρ) (hu2 : u2.val.Valid ρ)
+    (hQ : P256.Reference.Represents ρ
+      (P256.AffineSlope.ofElems Q.X Q.Y) q)
+    (hq : q ≠ 0) (horder : P256.scalarModulus • q = 0) :
+    ⦃⌜True⌝⦄ Sound.interp ρ (signedRadix32JointScalarMul u1 u2 Q)
+    ⦃⇓ out => ⌜P256.Reference.NormalizedRep ρ out
+      (SignedRadix32FoldPoint ρ u1 u2 q [:255].toList)⌝⦄ := by
+  mvcgen -trivial [signedRadix32JointScalarMul, WF.foldRange] invariants
+  · ⇓⟨cur, out⟩ => ⌜P256.Reference.NormalizedRep ρ out
+      (SignedRadix32FoldPoint ρ u1 u2 q cur.prefix)⌝
+  case vc1.q => exact q
+  case vc2.hP => exact hQ
+  case vc3.value => exact boothDigit u2 51 (by omega)
+  case vc4.q => exact q
+  case vc5.hdigit => assumption
+  case vc6.htable => assumption
+  case vc7.hq => exact hq
+  case vc8.horder => exact horder
+  case vc9.q => exact q
+  case vc10.accPoint pref cur suff hsplit b hprev =>
+    exact SignedRadix32FoldPoint ρ u1 u2 q pref
+  case vc11.hu1 => exact hu1
+  case vc12.hu2 => exact hu2
+  case vc13.hacc => assumption
+  case vc14.htable => assumption
+  case vc15.hq => exact hq
+  case vc16.horder => exact horder
+  case vc17.success pref cur hstep =>
+    unfold SignedRadix32FoldPoint at hstep ⊢
+    rw [List.foldl_append]
+    simpa using hstep
+  case vc18.pre =>
+    unfold SignedRadix32FoldPoint
+    simpa using SignedRadix32PointSpec.zsmul ‹SignedRadix32PointSpec _ _ _ _›
+  case vc19.post.success => intro h; exact h
+
+@[spec] theorem signedRadix32JointScalarMul_complete
+    {u1 u2 : P256.Fn} {Q : P256.Projective}
+    {q : P256.Reference.Point}
+    (hu1 : u1.val.Valid ρ) (hu2 : u2.val.Valid ρ)
+    (hQvalid : Q.Valid ρ)
+    (hQ : P256.Reference.Represents ρ
+      (P256.AffineSlope.ofElems Q.X Q.Y) q)
+    (hq : q ≠ 0) (horder : P256.scalarModulus • q = 0) :
+    ⦃⌜True⌝⦄ Complete.interp ρ (signedRadix32JointScalarMul u1 u2 Q)
+    ⦃⇓ out => ⌜out.Valid ρ ∧ P256.Reference.NormalizedRep ρ out
+      (SignedRadix32FoldPoint ρ u1 u2 q [:255].toList)⌝⦄ := by
+  mvcgen -trivial [signedRadix32JointScalarMul, WF.foldRange] invariants
+  · ⇓⟨cur, out⟩ => ⌜out.Valid ρ ∧
+      P256.Reference.NormalizedRep ρ out
+        (SignedRadix32FoldPoint ρ u1 u2 q cur.prefix) ∧
+      P256.scalarModulus •
+        SignedRadix32FoldPoint ρ u1 u2 q cur.prefix = 0⌝
+  case vc1.q => exact q
+  case vc2.hPvalid => exact hQvalid
+  case vc3.hP => exact hQ
+  case vc4.horder => exact horder
+  case vc5.hlow => exact (boothDigit_bounds hu2 51 (by omega)).1
+  case vc6.hhigh => exact (boothDigit_bounds hu2 51 (by omega)).2
+  case vc7.value => exact boothDigit u2 51 (by omega)
+  case vc8.q => exact q
+  case vc9.hdigit => assumption
+  case vc10.htableValid => exact (by aesop)
+  case vc11.htable => exact (by aesop)
+  case vc12.hq => exact hq
+  case vc13.horder => exact horder
+  case vc14.q => exact q
+  case vc15.accPoint pref cur suff hsplit b hprev =>
+    exact SignedRadix32FoldPoint ρ u1 u2 q pref
+  case vc16.hu1 => exact hu1
+  case vc17.hu2 => exact hu2
+  case vc18.haccValid => exact (by aesop)
+  case vc19.hacc => exact (by aesop)
+  case vc20.haccOrder => exact (by aesop)
+  case vc21.htableValid => exact (by aesop)
+  case vc22.htable => exact (by aesop)
+  case vc23.hq => exact hq
+  case vc24.horder => exact horder
+  case vc25.success pref cur hstep =>
+    rename_i table htable suff hsplit acc hprev
+    refine ⟨hstep.1, ?_, ?_⟩
+    · unfold SignedRadix32FoldPoint at hstep ⊢
+      rw [List.foldl_append]
+      simpa using hstep.2
+    · unfold SignedRadix32FoldPoint
+      rw [List.foldl_append]
+      exact SignedRadix32StepPoint.order
+        (ρ := ρ) (i := suff) pref.2.2 horder
+  case vc26.pre =>
+    rename_i table htable digit hdigit initial hinitial
+    refine ⟨hinitial.1, ?_, ?_⟩
+    · unfold SignedRadix32FoldPoint
+      simpa using SignedRadix32PointSpec.zsmul hinitial.2
+    · unfold SignedRadix32FoldPoint
+      exact order_zsmul horder _
+  case vc27.post.success =>
+    intro hvalid hnormalized _
+    exact ⟨hvalid, hnormalized⟩
+
 end Freigen.F2Z.Examples.EcdsaP256
