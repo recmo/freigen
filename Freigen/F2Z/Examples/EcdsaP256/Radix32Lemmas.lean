@@ -747,4 +747,134 @@ theorem boothDigit_bounds {k : P256.Fn} (hk : k.val.Valid ρ)
     simp only [LC.eval_add]
     omega
 
+def radix32ChunkValue (rho : WF.Valuation) (k : P256.Fn)
+    (i : Nat) : Nat :=
+  (BitVec.extractLsb' (5 * i) 5 (k.val.eval rho)).toNat
+
+def boothTopBitValue (rho : WF.Valuation) (k : P256.Fn)
+    (i : Nat) : Nat :=
+  (BitVec.extractLsb' (5 * i + 4) 1 (k.val.eval rho)).toNat
+
+theorem radix32ChunkValue_split {k : P256.Fn} {i : Nat} :
+    radix32ChunkValue ρ k i =
+      (BitVec.extractLsb' (5 * i) 4 (k.val.eval ρ)).toNat +
+        16 * boothTopBitValue ρ k i := by
+  unfold radix32ChunkValue boothTopBitValue
+  simp only [BitVec.extractLsb'_toNat, Nat.reducePow]
+  rw [show 5 * i + 4 = 5 * i + 4 by omega, Nat.shiftRight_add]
+  omega
+
+theorem boothDigit_eval_regular {k : P256.Fn} (hk : k.val.Valid ρ)
+    (i : Nat) (hi : i < 51) :
+    (boothDigit k i (by omega)).eval ρ.int =
+      (radix32ChunkValue ρ k i : Int) +
+        (if i = 0 then 0 else (boothTopBitValue ρ k (i - 1) : Int)) -
+        32 * (boothTopBitValue ρ k i : Int) := by
+  unfold boothDigit
+  simp only [dif_pos hi, LC.eval_sub, LC.eval_add, LC.eval_nsmul,
+    nsmul_eq_mul]
+  rw [windowValue_eval hk, windowValue_eval hk]
+  have hsplit := radix32ChunkValue_split (ρ := ρ) (k := k) (i := i)
+  have htop :
+      ((BitVec.extractLsb' (5 * i + 4) 1
+        (k.val.eval ρ)).toNat : Int) = boothTopBitValue ρ k i := rfl
+  rw [htop]
+  by_cases hzero : i = 0
+  · simp [hzero] at hsplit ⊢
+    omega
+  · simp only [if_neg hzero]
+    rw [windowValue_eval hk]
+    have hstart : 5 * i - 1 = 5 * (i - 1) + 4 := by omega
+    rw [hstart]
+    change ((BitVec.extractLsb' (5 * i) 4
+        (k.val.eval ρ)).toNat : Int) +
+        (boothTopBitValue ρ k (i - 1) : Int) -
+        16 * (boothTopBitValue ρ k i : Int) = _
+    omega
+
+def radix32Prefix (rho : WF.Valuation) (k : P256.Fn)
+    (count : Nat) : Nat :=
+  (k.val.eval rho).toNat / 2 ^ (255 - 5 * count)
+
+theorem radix32Prefix_succ {k : P256.Fn} {count : Nat}
+    (hcount : count < 51) :
+    radix32Prefix ρ k (count + 1) =
+      32 * radix32Prefix ρ k count +
+        radix32ChunkValue ρ k (50 - count) := by
+  unfold radix32Prefix radix32ChunkValue
+  simp only [BitVec.extractLsb'_toNat, Nat.reducePow]
+  rw [show 255 - 5 * count = (250 - 5 * count) + 5 by omega,
+    show 255 - 5 * (count + 1) = 250 - 5 * count by omega,
+    show 5 * (50 - count) = 250 - 5 * count by omega,
+    Nat.shiftRight_eq_div_pow, pow_add]
+  norm_num
+  rw [← Nat.div_div_eq_div_mul]
+  exact (Nat.div_add_mod _ 32).symm
+
+theorem boothDigit_eval_top {k : P256.Fn} (hk : k.val.Valid ρ) :
+    (boothDigit k 51 (by omega)).eval ρ.int =
+      (radix32Prefix ρ k 0 : Int) +
+        (boothTopBitValue ρ k 50 : Int) := by
+  unfold boothDigit radix32Prefix boothTopBitValue
+  rw [dif_neg (by omega)]
+  simp only [LC.eval_add]
+  rw [windowValue_eval hk, windowValue_eval hk]
+  simp only [BitVec.extractLsb'_toNat, Nat.reducePow]
+  rw [Nat.shiftRight_eq_div_pow, Nat.shiftRight_eq_div_pow]
+  norm_num
+  have hklt := (k.val.eval ρ).isLt
+  omega
+
+theorem boothDigit_prefix_succ {k : P256.Fn} (hk : k.val.Valid ρ)
+    {count : Nat} (hcount : count < 51) :
+    32 * ((radix32Prefix ρ k count : Int) +
+      boothTopBitValue ρ k (50 - count)) +
+        (boothDigit k (50 - count) (by omega)).eval ρ.int =
+      (radix32Prefix ρ k (count + 1) : Int) +
+        (if count + 1 = 51 then 0
+          else boothTopBitValue ρ k (50 - (count + 1))) := by
+  rw [boothDigit_eval_regular hk (50 - count) (by omega),
+    radix32Prefix_succ hcount]
+  by_cases hlast : count + 1 = 51
+  · rw [if_pos hlast]
+    have hi : 50 - count = 0 := by omega
+    simp [hi]
+    push_cast
+    ring
+  · rw [if_neg hlast]
+    have hi : 50 - count ≠ 0 := by omega
+    rw [if_neg hi]
+    have hindex : 50 - count - 1 = 50 - (count + 1) := by omega
+    rw [hindex]
+    push_cast
+    ring
+
+def boothHorner (rho : WF.Valuation) (k : P256.Fn) : Nat → Int
+  | 0 => (boothDigit k 51 (by omega)).eval rho.int
+  | count + 1 =>
+      32 * boothHorner rho k count +
+        if hcount : count < 51 then
+          (boothDigit k (50 - count) (by omega)).eval rho.int
+        else 0
+
+theorem boothHorner_eq_prefix {k : P256.Fn} (hk : k.val.Valid ρ)
+    {count : Nat} (hcount : count ≤ 51) :
+    boothHorner ρ k count =
+      (radix32Prefix ρ k count : Int) +
+        (if count = 51 then 0
+          else boothTopBitValue ρ k (50 - count)) := by
+  induction count with
+  | zero =>
+      simp [boothHorner, boothDigit_eval_top hk]
+  | succ count ih =>
+      have hcountLt : count < 51 := by omega
+      rw [boothHorner, dif_pos hcountLt, ih (by omega),
+        if_neg (by omega : count ≠ 51),
+        boothDigit_prefix_succ hk hcountLt]
+
+theorem boothHorner_full {k : P256.Fn} (hk : k.val.Valid ρ) :
+    boothHorner ρ k 51 = ((k.val.eval ρ).toNat : Int) := by
+  rw [boothHorner_eq_prefix hk (by omega)]
+  simp [radix32Prefix]
+
 end Freigen.F2Z.Examples.EcdsaP256
