@@ -599,6 +599,70 @@ private theorem normalizedRep_y_pos_of_nonzero_order
           rw [houtVal]
           simp [value, hone]
 
+def SignedRadix32PointSpec (ρ : WF.Valuation) (value : LC ℤ)
+    (out : P256.AffineSlope.Point) (q : P256.Reference.Point) : Prop :=
+  P256.Reference.NormalizedRep ρ out
+    (if value.eval ρ.int < 0 then
+      -((value.eval ρ.int).natAbs • q)
+    else (value.eval ρ.int).natAbs • q)
+
+@[spec] theorem selectSignedRadix32Point_sound
+    {value : LC ℤ} {q : P256.Reference.Point}
+    (hdigit : SignedDigitSpec ρ value digit)
+    (htable : Radix32TableSpec ρ table q)
+    (hq : q ≠ 0) (horder : P256.scalarModulus • q = 0) :
+    ⦃⌜True⌝⦄ Sound.interp ρ (selectSignedRadix32Point digit table)
+    ⦃⇓ out => ⌜SignedRadix32PointSpec ρ value out q⌝⦄ := by
+  mvcgen [selectSignedRadix32Point, SignedRadix32PointSpec]
+  case vc7.success.success =>
+    intro hout
+    simpa [ApplyPointSignSpec, SignedRadix32PointSpec,
+      hdigit.negative_eval] using hout
+  case vc9 =>
+    intro _
+    rw [hdigit.negative_eval]
+    split <;> simp
+  case vc10 =>
+    intro h
+    exact h
+
+@[spec] theorem selectSignedRadix32Point_complete
+    {value : LC ℤ} {q : P256.Reference.Point}
+    (hdigit : SignedDigitSpec ρ value digit)
+    (htableValid : Radix32TableValid ρ table)
+    (htable : Radix32TableSpec ρ table q)
+    (hq : q ≠ 0) (horder : P256.scalarModulus • q = 0) :
+    ⦃⌜True⌝⦄ Complete.interp ρ (selectSignedRadix32Point digit table)
+    ⦃⇓ out => ⌜out.Valid ρ ∧ SignedRadix32PointSpec ρ value out q⌝⦄ := by
+  mvcgen [selectSignedRadix32Point, SignedRadix32PointSpec]
+  case vc8.success.success =>
+    intro houtValid hout
+    exact ⟨houtValid, by simpa [ApplyPointSignSpec,
+      SignedRadix32PointSpec, hdigit.negative_eval] using hout⟩
+  case vc10 =>
+    intros
+    rw [hdigit.negative_eval]
+    split <;> simp
+  case vc11 =>
+    intro hvalid _
+    exact hvalid
+  case vc12 =>
+    intro h
+    exact h.2
+  case vc13 =>
+    intro h hnegative
+    have hvalueNeg : value.eval ρ.int < 0 := by
+      rw [hdigit.negative_eval] at hnegative
+      split at hnegative <;> omega
+    apply nsmul_ne_zero_of_prime_order hq horder
+    · exact Int.natAbs_ne_zero.mpr (by omega)
+    · have hm := hdigit.magnitude_le_sixteen
+      rw [hdigit.magnitude_eval] at hm
+      exact lt_of_le_of_lt (by exact_mod_cast hm) (by native_decide)
+  case vc14 =>
+    intro _
+    exact Reference.Aux.order_nsmul horder _
+
 private theorem signedDigitSpec_of_indicators {value : LC ℤ} {oneHot : U 33}
     (h : IndicatorsSpec ρ (value + 16) oneHot) :
     SignedDigitSpec ρ value ⟨oneHot⟩ := by
