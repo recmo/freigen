@@ -95,4 +95,56 @@ private theorem signedDigitSpec_of_indicators {value : LC ℤ} {oneHot : U 33}
   case vc3.success =>
     exact signedDigitSpec_of_indicators ‹IndicatorsSpec ρ (value + 16) _›
 
+theorem boothDigit_bounds {k : P256.Fn} (hk : k.val.Valid ρ)
+    (i : Nat) (hi : i < 52) :
+    -16 ≤ (boothDigit k i hi).eval ρ.int ∧
+      (boothDigit k i hi).eval ρ.int ≤ 16 := by
+  unfold boothDigit
+  split
+  · rename_i hlt
+    have hlow := windowValue_eval hk (5 * i) 4 (by omega)
+    have hlow0 : 0 ≤ (windowValue k (5 * i) 4 (by omega)).eval ρ.int := by
+      rw [hlow]
+      exact_mod_cast Nat.zero_le _
+    have hlow16 : (windowValue k (5 * i) 4 (by omega)).eval ρ.int < 16 := by
+      rw [hlow]
+      exact_mod_cast (BitVec.extractLsb' (5 * i) 4 (k.val.eval ρ)).isLt
+    have htop := windowValue_eval hk (5 * i + 4) 1 (by omega)
+    have htop0 : 0 ≤ (windowValue k (5 * i + 4) 1 (by omega)).eval ρ.int := by
+      rw [htop]
+      exact_mod_cast Nat.zero_le _
+    have htop2 : (windowValue k (5 * i + 4) 1 (by omega)).eval ρ.int < 2 := by
+      rw [htop]
+      exact_mod_cast (BitVec.extractLsb' (5 * i + 4) 1 (k.val.eval ρ)).isLt
+    by_cases hzero : i = 0
+    · simp only [if_pos hzero, LC.eval_sub, LC.eval_add, LC.eval_zero,
+        LC.eval_nsmul, nsmul_eq_mul, add_zero]
+      omega
+    · have hp := windowValue_eval hk (5 * i - 1) 1 (by omega)
+      have hp0 : 0 ≤ (windowValue k (5 * i - 1) 1 (by omega)).eval ρ.int := by
+        rw [hp]
+        exact_mod_cast Nat.zero_le _
+      have hp2 : (windowValue k (5 * i - 1) 1 (by omega)).eval ρ.int < 2 := by
+        rw [hp]
+        exact_mod_cast (BitVec.extractLsb' (5 * i - 1) 1 (k.val.eval ρ)).isLt
+      simp only [if_neg hzero, LC.eval_sub, LC.eval_add, LC.eval_nsmul,
+        nsmul_eq_mul]
+      omega
+  · have h254 := windowValue_eval hk 254 1 (by omega)
+    have h255 := windowValue_eval hk 255 1 (by omega)
+    have h2540 : 0 ≤ (windowValue k 254 1 (by omega)).eval ρ.int := by
+      rw [h254]
+      exact_mod_cast Nat.zero_le _
+    have h2542 : (windowValue k 254 1 (by omega)).eval ρ.int < 2 := by
+      rw [h254]
+      exact_mod_cast (BitVec.extractLsb' 254 1 (k.val.eval ρ)).isLt
+    have h2550 : 0 ≤ (windowValue k 255 1 (by omega)).eval ρ.int := by
+      rw [h255]
+      exact_mod_cast Nat.zero_le _
+    have h2552 : (windowValue k 255 1 (by omega)).eval ρ.int < 2 := by
+      rw [h255]
+      exact_mod_cast (BitVec.extractLsb' 255 1 (k.val.eval ρ)).isLt
+    simp only [LC.eval_add]
+    omega
+
 end Freigen.F2Z.Examples.EcdsaP256

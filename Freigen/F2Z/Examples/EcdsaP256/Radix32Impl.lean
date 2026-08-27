@@ -60,12 +60,13 @@ def signedDigitIndicators (value : LC ℤ) : Circuit SignedDigit := do
 
 def boothDigit (k : Fn) (i : Nat) (hi : i < 52) : LC ℤ :=
   if _h : i < 51 then
-    let chunk := windowValue k (5 * i) 5 (by omega)
-    let previous := if _hzero : i = 0 then 0
-      else k.val.intBits[5 * i - 1]'(by omega)
-    chunk + previous - 32 • k.val.intBits[5 * i + 4]'(by omega)
+    let low := windowValue k (5 * i) 4 (by omega)
+    let previous := if i = 0 then 0
+      else windowValue k (5 * i - 1) 1 (by omega)
+    let top := windowValue k (5 * i + 4) 1 (by omega)
+    low + previous - 16 • top
   else
-    k.val.intBits[255] + k.val.intBits[254]
+    windowValue k 255 1 (by omega) + windowValue k 254 1 (by omega)
 
 def selectRadix32Magnitude (digit : SignedDigit) (table : Radix32Table) :
     Circuit AffineSlope.Point := do
