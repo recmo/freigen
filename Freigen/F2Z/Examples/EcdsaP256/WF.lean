@@ -1087,7 +1087,7 @@ def VerifyDigestBits.WFRel (lv rv : WF.Valuation)
     (fun lv rv left right => WF.LCEq lv.bool rv.bool left right)
     lv rv left right
 
-private theorem mapM_fromWord_wf_full :
+theorem mapM_fromWord_wf_full :
     WF.GadgetSpec (WF.VectorRel Word.WFRel)
       (fun xs : Vector (Word n) m => xs.mapM U.fromWord)
       (WF.VectorRel U.FullWFRel) := by
@@ -1100,7 +1100,7 @@ private theorem mapM_fromWord_wf_full :
   have hi := h.2 i
   exact ⟨⟨hi.2.2, hi.1⟩, hi.2.1⟩
 
-private theorem verifyDigestInputWords_wf
+theorem verifyDigestInputWords_wf
     {lv rv : WF.Valuation}
     {left right : Vector (LC Bool) verifyDigestInputBits}
     (h : VerifyDigestBits.WFRel lv rv left right) :
