@@ -229,27 +229,29 @@ theorem WindowDigitSpec.lt {out : LC ℤ}
   mvcgen [windowDigit, WindowDigitSpec]
   exact windowValue_eval hk _ _ _
 
-theorem addComplete_multiple_sound
+@[spec] theorem addMultiple_sound
     {P Q : P256.AffineSlope.Point} {q : P256.Reference.Point} {k : Nat}
     (hP : P256.Reference.NormalizedRep ρ P (k • q))
     (hQ : P256.Reference.NormalizedRep ρ Q q) :
-    ⦃⌜True⌝⦄ Sound.interp ρ (P256.AffineSlope.addComplete P Q)
+    ⦃⌜True⌝⦄ Sound.interp ρ (addMultiple k P Q)
     ⦃⇓ out => ⌜P256.Reference.NormalizedRep ρ out ((k + 1) • q)⌝⦄ := by
+  unfold addMultiple
   apply Triple.iff_conseq.mp
     (P256.AffineSlope.addComplete_sound_normalized hP hQ) (by simp)
   simp only [PostCond.entails, SPred.entails_nil]
   exact ⟨fun _ h => by simpa only [add_nsmul, one_nsmul] using h,
     ExceptConds.entails.refl _⟩
 
-theorem addComplete_multiple_complete
+@[spec] theorem addMultiple_complete
     {P Q : P256.AffineSlope.Point} {q : P256.Reference.Point} {k : Nat}
     (hPvalid : P.Valid ρ) (hQvalid : Q.Valid ρ)
     (hP : P256.Reference.NormalizedRep ρ P (k • q))
     (hQ : P256.Reference.NormalizedRep ρ Q q)
     (horder : P256.scalarModulus • q = 0) :
-    ⦃⌜True⌝⦄ Complete.interp ρ (P256.AffineSlope.addComplete P Q)
+    ⦃⌜True⌝⦄ Complete.interp ρ (addMultiple k P Q)
     ⦃⇓ out => ⌜out.Valid ρ ∧ P256.Reference.NormalizedRep ρ out
       ((k + 1) • q)⌝⦄ := by
+  unfold addMultiple
   apply Triple.iff_conseq.mp
     (P256.AffineSlope.addComplete_complete_mathlib hPvalid hQvalid hP hQ
       (Reference.Aux.no_two_torsion_of_order
@@ -257,6 +259,35 @@ theorem addComplete_multiple_complete
   simp only [PostCond.entails, SPred.entails_nil]
   exact ⟨fun _ h => ⟨h.1, by
       simpa only [add_nsmul, one_nsmul] using h.2⟩,
+    ExceptConds.entails.refl _⟩
+
+@[spec] theorem doubleMultiple_sound
+    {P : P256.AffineSlope.Point} {q : P256.Reference.Point} {k : Nat}
+    (hP : P256.Reference.NormalizedRep ρ P (k • q)) :
+    ⦃⌜True⌝⦄ Sound.interp ρ (doubleMultiple k P)
+    ⦃⇓ out => ⌜P256.Reference.NormalizedRep ρ out ((k + k) • q)⌝⦄ := by
+  unfold doubleMultiple
+  apply Triple.iff_conseq.mp
+    (P256.AffineSlope.doubleComplete_sound_mathlib hP) (by simp)
+  simp only [PostCond.entails, SPred.entails_nil]
+  exact ⟨fun _ h => by simpa only [add_nsmul] using h,
+    ExceptConds.entails.refl _⟩
+
+@[spec] theorem doubleMultiple_complete
+    {P : P256.AffineSlope.Point} {q : P256.Reference.Point} {k : Nat}
+    (hPvalid : P.Valid ρ)
+    (hP : P256.Reference.NormalizedRep ρ P (k • q))
+    (horder : P256.scalarModulus • q = 0) :
+    ⦃⌜True⌝⦄ Complete.interp ρ (doubleMultiple k P)
+    ⦃⇓ out => ⌜out.Valid ρ ∧ P256.Reference.NormalizedRep ρ out
+      ((k + k) • q)⌝⦄ := by
+  unfold doubleMultiple
+  apply Triple.iff_conseq.mp
+    (P256.AffineSlope.doubleComplete_complete_mathlib hPvalid hP
+      (Reference.Aux.no_two_torsion_of_order
+        (Reference.Aux.order_nsmul horder k))) (by simp)
+  simp only [PostCond.entails, SPred.entails_nil]
+  exact ⟨fun _ h => ⟨h.1, by simpa only [add_nsmul] using h.2⟩,
     ExceptConds.entails.refl _⟩
 
 theorem ofElems_valid {P : P256.Projective} (hP : P.Valid ρ) :
@@ -278,8 +309,8 @@ theorem ofElems_valid {P : P256.Projective} (hP : P.Valid ρ) :
     intro hq
     have hinf := P256.Reference.Aux.represents_zero (hq ▸ hP)
     simp [P256.AffineSlope.ofElems] at hinf
-  mvcgen [-P256.AffineSlope.addComplete_sound_normalized,
-    addComplete_multiple_sound, materializeMultiples]
+  mvcgen [addMultiple_sound, doubleMultiple_sound,
+    materializeMultiples]
   all_goals first
     | exact 1
     | simpa using hP'
@@ -313,22 +344,8 @@ theorem ofElems_valid {P : P256.Projective} (hP : P.Valid ρ) :
     exact ⟨rfl, Modular.Lazy.ofElem_valid P256.base hz, hz.2,
       rfl, Modular.Lazy.ofElem_valid P256.base hz, hz.2,
       by simp [P256.AffineSlope.infinity]⟩
-  mvcgen [-P256.AffineSlope.addComplete_complete_mathlib,
-    addComplete_multiple_complete, materializeMultiples]
-  case vc2.k => exact 1
-  case vc9.k => exact 2
-  case vc16.k => exact 3
-  case vc23.k => exact 4
-  case vc30.k => exact 5
-  case vc37.k => exact 6
-  case vc44.k => exact 7
-  case vc51.k => exact 8
-  case vc58.k => exact 9
-  case vc65.k => exact 10
-  case vc72.k => exact 11
-  case vc79.k => exact 12
-  case vc86.k => exact 13
-  case vc93.k => exact 14
+  mvcgen [addMultiple_complete, doubleMultiple_complete,
+    materializeMultiples]
   all_goals first
     | exact q
     | exact horder

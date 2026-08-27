@@ -41,23 +41,33 @@ structure Aux where
 /-- Packed input to the standalone prehashed verifier. -/
 abbrev VerifyInput := U 256 × PublicKey × Signature × Aux
 
+/-- Proof index for extending a consecutive-multiple table by one.  The index
+is erased from the generated circuit. -/
+def addMultiple (_k : Nat) (P Q : AffineSlope.Point) : Circuit AffineSlope.Point :=
+  AffineSlope.addComplete P Q
+
+/-- Proof index for doubling an entry in a consecutive-multiple table.  The
+index is erased from the generated circuit. -/
+def doubleMultiple (_k : Nat) (P : AffineSlope.Point) : Circuit AffineSlope.Point :=
+  AffineSlope.doubleComplete P
+
 def materializeMultiples (P : Projective) :
     Circuit (Vector AffineSlope.Point 16) := do
   let p1 := AffineSlope.ofElems P.X P.Y
-  let p2 ← AffineSlope.addComplete p1 p1
-  let p3 ← AffineSlope.addComplete p2 p1
-  let p4 ← AffineSlope.addComplete p3 p1
-  let p5 ← AffineSlope.addComplete p4 p1
-  let p6 ← AffineSlope.addComplete p5 p1
-  let p7 ← AffineSlope.addComplete p6 p1
-  let p8 ← AffineSlope.addComplete p7 p1
-  let p9 ← AffineSlope.addComplete p8 p1
-  let p10 ← AffineSlope.addComplete p9 p1
-  let p11 ← AffineSlope.addComplete p10 p1
-  let p12 ← AffineSlope.addComplete p11 p1
-  let p13 ← AffineSlope.addComplete p12 p1
-  let p14 ← AffineSlope.addComplete p13 p1
-  let p15 ← AffineSlope.addComplete p14 p1
+  let p2 ← doubleMultiple 1 p1
+  let p3 ← addMultiple 2 p2 p1
+  let p4 ← doubleMultiple 2 p2
+  let p5 ← addMultiple 4 p4 p1
+  let p6 ← doubleMultiple 3 p3
+  let p7 ← addMultiple 6 p6 p1
+  let p8 ← doubleMultiple 4 p4
+  let p9 ← addMultiple 8 p8 p1
+  let p10 ← doubleMultiple 5 p5
+  let p11 ← addMultiple 10 p10 p1
+  let p12 ← doubleMultiple 6 p6
+  let p13 ← addMultiple 12 p12 p1
+  let p14 ← doubleMultiple 7 p7
+  let p15 ← addMultiple 14 p14 p1
   pure #v[AffineSlope.infinity, p1, p2, p3, p4, p5, p6, p7, p8,
     p9, p10, p11, p12, p13, p14, p15]
 

@@ -72,8 +72,9 @@ private theorem projective_ofElems_wfRel {lv rv : WF.Valuation}
 theorem materializeMultiples_wf_aux :
     WF.GadgetSpec Projective.WFRel materializeMultiples
       (WF.VectorRel AffineSlope.Point.WFRel) := by
-  wfgen' using [AffineSlope.addComplete_wf_aux]
-    unfold [materializeMultiples]
+  wfgen' using [AffineSlope.addComplete_wf_aux,
+    AffineSlope.doubleComplete_wf_aux]
+    unfold [materializeMultiples, addMultiple, doubleMultiple]
   case vc1 =>
     rename_i _ _ _ h1 _ _ _ h2 _ _ _ h3 _ _ _ h4
       _ _ _ h5 _ _ _ h6 _ _ _ h7 _ _ _ h8 _ _ _ h9
