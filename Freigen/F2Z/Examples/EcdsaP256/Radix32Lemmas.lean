@@ -254,21 +254,84 @@ private theorem nsmul_ne_zero_of_prime_order {q : P256.Reference.Point}
     exact hzero
   exact (Nat.not_dvd_of_pos_of_lt (Nat.pos_of_ne_zero hk0) hk) hdvd
 
+def SelectBitSpec (rho : WF.Valuation) (choose whenOne whenZero out : LC ℤ) :
+    Prop :=
+  (choose.eval rho.int = 1 → out.eval rho.int = whenOne.eval rho.int) ∧
+  (choose.eval rho.int = 0 → out.eval rho.int = whenZero.eval rho.int) ∧
+  (out.eval rho.int = 0 ∨ out.eval rho.int = 1)
+
+@[spec] theorem selectBit_sound {choose whenOne whenZero : LC ℤ} :
+    ⦃⌜True⌝⦄ Sound.interp ρ (selectBit choose whenOne whenZero)
+    ⦃⇓ out => ⌜SelectBitSpec ρ choose whenOne whenZero out⌝⦄ := by
+  mvcgen [selectBit, SelectBitSpec]
+  intro bits
+  mvcgen
+  rename_i out hout hmul
+  constructor
+  · intro hc
+    simp only [LC.eval_sub, hc, one_mul] at hmul
+    omega
+  · constructor
+    · intro hc
+      simp only [LC.eval_sub, hc, zero_mul] at hmul
+      omega
+    · have hz := hout.1 (0 : Fin 1)
+      cases hb : out.bits.bitsLE[0].eval ρ.bool <;> simp [hb] at hz
+      · left
+        simp [U.intVal, hz]
+      · right
+        simp [U.intVal, hz]
+
+@[spec] theorem selectBit_complete {choose whenOne whenZero : LC ℤ}
+    (hchoose : choose.eval ρ.int = 0 ∨ choose.eval ρ.int = 1)
+    (hone : whenOne.eval ρ.int = 0 ∨ whenOne.eval ρ.int = 1)
+    (hzero : whenZero.eval ρ.int = 0 ∨ whenZero.eval ρ.int = 1) :
+    ⦃⌜True⌝⦄ Complete.interp ρ (selectBit choose whenOne whenZero)
+    ⦃⇓ out => ⌜SelectBitSpec ρ choose whenOne whenZero out⌝⦄ := by
+  mvcgen [selectBit]
+  let value : Bool := if choose.eval ρ.int = 1 then
+    whenOne.eval ρ.int = 1 else whenZero.eval ρ.int = 1
+  let bits : Vector Bool 1 := Vector.ofFn fun _ => value
+  refine ⟨bits, ?_, ?_⟩
+  · simp [WF.interpHint, WF.evalArgs, bits, value]
+  · mvcgen
+    rename_i out hout
+    have hword :
+        (Word.eval ρ.bool { bitsLE := Vector.map LC.ofConst bits }).toNat =
+          if value then 1 else 0 := by
+      cases hv : value <;>
+        simp [Word.eval, BitVec.toNat_ofFnLE, bits, hv, Nat.ofBits] <;>
+        native_decide
+    have houtVal : out.intVal.eval ρ.int = if value then 1 else 0 := by
+      rw [U.Rel.intVal hout]
+      exact_mod_cast hword
+    constructor
+    · rcases hchoose with hc | hc <;> rcases hone with ho | ho <;>
+        rcases hzero with hz | hz <;>
+        simp [value, hc, ho, hz] at houtVal ⊢ <;> omega
+    · mvcgen
+      unfold SelectBitSpec
+      rcases hchoose with hc | hc <;> rcases hone with ho | ho <;>
+        rcases hzero with hz | hz <;>
+        simp [value, hc, ho, hz] at houtVal ⊢ <;> omega
+
 private theorem radix32MagnitudeSpec_of_select
     {value : LC ℤ} {q : P256.Reference.Point}
     (hdigit : SignedDigitSpec ρ value digit)
     (htable : Radix32TableSpec ρ table q)
-    (hq : q ≠ 0) (horder : P256.scalarModulus • q = 0)
     {low : P256.AffineSlope.Point} {X Y : P256.AffineSlope.Rep}
+    {infinity : LC ℤ}
     (hlowExists : ∃ i : Fin 16,
       (digit.magnitude - 16 • digit.isSixteen).eval ρ.int = i.val ∧
       P256.Reference.NormalizedRep ρ low (i.val • q))
     (hX : P256.AffineSlope.SelectZModSpec ρ digit.isSixteen
       table.p16.X low.X X)
     (hY : P256.AffineSlope.SelectZModSpec ρ digit.isSixteen
-      table.p16.Y low.Y Y) :
+      table.p16.Y low.Y Y)
+    (hinfinity : SelectBitSpec ρ digit.isSixteen
+      table.p16.infinity low.infinity infinity) :
     Radix32MagnitudeSpec ρ value
-      ⟨X, Y, low.infinity - digit.isSixteen⟩ q := by
+      ⟨X, Y, infinity⟩ q := by
   rcases hlowExists with ⟨i, hilow, hlow⟩
   have hs := hdigit.isSixteen_eval
   by_cases hsixteen : value.eval ρ.int = -16 ∨ value.eval ρ.int = 16
@@ -280,8 +343,6 @@ private theorem radix32MagnitudeSpec_of_select
       omega
     have hieq : i = 0 := Fin.eq_of_val_eq hi0
     subst i
-    have hlowInfinity : low.infinity.eval ρ.int = 1 := by
-      exact P256.Reference.Aux.represents_zero hlow.1
     unfold Radix32MagnitudeSpec
     have habs : (value.eval ρ.int).natAbs = 16 := by
       rcases hsixteen with hneg | hpos
@@ -290,15 +351,8 @@ private theorem radix32MagnitudeSpec_of_select
       · rw [hpos]
         decide
     rw [habs]
-    have hp16Nonzero : 16 • q ≠ 0 :=
-      nsmul_ne_zero_of_prime_order hq horder (by omega) (by native_decide)
-    have hp16Infinity : table.p16.infinity.eval ρ.int = 0 := by
-      rcases hp : (16 • q) with _ | ⟨px, py, hpCurve⟩
-      · exact (hp16Nonzero hp).elim
-      · exact (P256.Reference.Aux.represents_some (hp ▸ htable.2.1)).1
     apply normalizedRep_of_coordinate_eq htable.2
-    · simp only [LC.eval_sub, hs]
-      omega
+    · exact hinfinity.1 hs
     · exact hX.1 hs
     · exact hY.1 hs
   · rw [if_neg hsixteen] at hs
@@ -310,22 +364,20 @@ private theorem radix32MagnitudeSpec_of_select
         ((value.eval ρ.int).natAbs • q) := by
       simpa [hiAbs] using hlow
     apply normalizedRep_of_coordinate_eq hlow'
-    · simp only [LC.eval_sub, hs]
-      omega
+    · exact hinfinity.2.1 hs
     · exact hX.2 hs
     · exact hY.2 hs
 
 @[spec] theorem selectRadix32Magnitude_sound
     {value : LC ℤ} {q : P256.Reference.Point}
     (hdigit : SignedDigitSpec ρ value digit)
-    (htable : Radix32TableSpec ρ table q)
-    (hq : q ≠ 0) (horder : P256.scalarModulus • q = 0) :
+    (htable : Radix32TableSpec ρ table q) :
     ⦃⌜True⌝⦄ Sound.interp ρ (selectRadix32Magnitude digit table)
     ⦃⇓ out => ⌜Radix32MagnitudeSpec ρ value out q⌝⦄ := by
   mvcgen [selectRadix32Magnitude, Radix32MagnitudeSpec]
   case vc2.htable => exact htable.1
   case vc3.success =>
-    rename_i low hlow X hX Y hY
+    rename_i low hlow X hX Y hY infinity hinfinity
     rcases hlow with ⟨i, hilow, hlow⟩
     have hs := hdigit.isSixteen_eval
     by_cases hsixteen : value.eval ρ.int = -16 ∨ value.eval ρ.int = 16
@@ -337,12 +389,6 @@ private theorem radix32MagnitudeSpec_of_select
         omega
       have hieq : i = 0 := Fin.eq_of_val_eq hi0
       subst i
-      have hlowInfinity : low.infinity.eval ρ.int = 1 := by
-        rcases hlow.1.1 with hinf | hinf
-        · have hc := hlow.1.2
-          simp [P256.Reference.circuitCoordinates, hinf,
-            P256.Reference.coordinates] at hc
-        · exact hinf
       unfold Radix32MagnitudeSpec
       have habs : (value.eval ρ.int).natAbs = 16 := by
         rcases hsixteen with hneg | hpos
@@ -351,15 +397,8 @@ private theorem radix32MagnitudeSpec_of_select
         · rw [hpos]
           decide
       rw [habs]
-      have hp16Nonzero : 16 • q ≠ 0 :=
-        nsmul_ne_zero_of_prime_order hq horder (by omega) (by native_decide)
-      have hp16Infinity : table.p16.infinity.eval ρ.int = 0 := by
-        rcases hp : (16 • q) with _ | ⟨px, py, hpCurve⟩
-        · exact (hp16Nonzero hp).elim
-        · exact (P256.Reference.Aux.represents_some (hp ▸ htable.2.1)).1
       apply normalizedRep_of_coordinate_eq htable.2
-      · simp only [LC.eval_sub, hs]
-        omega
+      · exact hinfinity.1 hs
       · exact hX.1 hs
       · exact hY.1 hs
     · rw [if_neg hsixteen] at hs
@@ -371,8 +410,7 @@ private theorem radix32MagnitudeSpec_of_select
           ((value.eval ρ.int).natAbs • q) := by
         simpa [hiAbs] using hlow
       apply normalizedRep_of_coordinate_eq hlow'
-      · simp only [LC.eval_sub, hs]
-        omega
+      · exact hinfinity.2.1 hs
       · exact hX.2 hs
       · exact hY.2 hs
 
@@ -404,14 +442,19 @@ private theorem radix32MagnitudeSpec_of_select
   case vc15.hzeroCanonical =>
     rename_i low hlow X hX
     exact hlow.1.2.2.2.2.2.1
-  case vc16.success =>
+  case vc16.hchoose => exact hdigit.isSixteen_bit
+  case vc17.hone => exact htableValid.2.2.2.2.2.2.2
+  case vc18.hzero =>
     rename_i low hlow X hX Y hY
+    exact hlow.1.2.2.2.2.2.2
+  case vc19.success =>
+    rename_i low hlow X hX Y hY infinity hinfinity
     have hspec : Radix32MagnitudeSpec ρ value
-        ⟨X, Y, low.infinity - digit.isSixteen⟩ q :=
-      radix32MagnitudeSpec_of_select hdigit htable hq horder
-        hlow.2 hX.1 hY.1
+        ⟨X, Y, infinity⟩ q :=
+      radix32MagnitudeSpec_of_select hdigit htable
+        hlow.2 hX.1 hY.1 hinfinity
     exact ⟨⟨hX.2.2.2, hX.2.1, hX.2.2.1,
-      hY.2.2.2, hY.2.1, hY.2.2.1, hspec.1.1⟩, hspec⟩
+      hY.2.2.2, hY.2.1, hY.2.2.1, hinfinity.2.2⟩, hspec⟩
 
 def ApplyPointSignSpec (ρ : WF.Valuation) (negative : LC ℤ)
     (out : P256.AffineSlope.Point) (q : P256.Reference.Point) : Prop :=
@@ -623,20 +666,19 @@ theorem SignedRadix32PointSpec.zsmul
 @[spec] theorem selectSignedRadix32Point_sound
     {value : LC ℤ} {q : P256.Reference.Point}
     (hdigit : SignedDigitSpec ρ value digit)
-    (htable : Radix32TableSpec ρ table q)
-    (hq : q ≠ 0) (horder : P256.scalarModulus • q = 0) :
+    (htable : Radix32TableSpec ρ table q) :
     ⦃⌜True⌝⦄ Sound.interp ρ (selectSignedRadix32Point digit table)
     ⦃⇓ out => ⌜SignedRadix32PointSpec ρ value out q⌝⦄ := by
   mvcgen [selectSignedRadix32Point, SignedRadix32PointSpec]
-  case vc7.success.success =>
+  case vc5.success.success =>
     intro hout
     simpa [ApplyPointSignSpec, SignedRadix32PointSpec,
       hdigit.negative_eval] using hout
-  case vc9 =>
+  case vc7 =>
     intro _
     rw [hdigit.negative_eval]
     split <;> simp
-  case vc10 =>
+  case vc8 =>
     intro h
     exact h
 
@@ -979,8 +1021,7 @@ private theorem generatorWindowRep_of_lookup {u : P256.Fn}
     {accPoint : P256.Reference.Point}
     (hu1 : u1.val.Valid ρ) (hu2 : u2.val.Valid ρ)
     (hacc : P256.Reference.NormalizedRep ρ acc accPoint)
-    (htable : Radix32TableSpec ρ qTable q)
-    (hq : q ≠ 0) (horder : P256.scalarModulus • q = 0) :
+    (htable : Radix32TableSpec ρ qTable q) :
     ⦃⌜True⌝⦄ Sound.interp ρ (signedRadix32Step u1 u2 qTable i hi acc)
     ⦃⇓ out => ⌜P256.Reference.NormalizedRep ρ out
       (SignedRadix32StepPoint ρ u1 u2 q i accPoint)⌝⦄ := by
@@ -993,14 +1034,12 @@ private theorem generatorWindowRep_of_lookup {u : P256.Fn}
     case vc2.q => exact q
     case vc3.hdigit => assumption
     case vc4.htable => exact htable
-    case vc5.hq => exact hq
-    case vc6.horder => exact horder
-    case vc7.p => exact accPoint + accPoint
-    case vc8.q =>
+    case vc5.p => exact accPoint + accPoint
+    case vc6.q =>
       exact (boothDigit u2 ((254 - i) / 5) (by omega)).eval ρ.int • q
-    case vc9.hP => exact hdouble
-    case vc10.hQ => exact SignedRadix32PointSpec.zsmul (by assumption)
-    case vc11.success =>
+    case vc7.hP => exact hdouble
+    case vc8.hQ => exact SignedRadix32PointSpec.zsmul (by assumption)
+    case vc9.success =>
       intro hwithQ
       split <;> mvcgen -trivial
       case vc2 =>
@@ -1182,8 +1221,7 @@ def SignedRadix32FoldPoint (rho : WF.Valuation) (u1 u2 : P256.Fn)
     {q : P256.Reference.Point}
     (hu1 : u1.val.Valid ρ) (hu2 : u2.val.Valid ρ)
     (hQ : P256.Reference.Represents ρ
-      (P256.AffineSlope.ofElems Q.X Q.Y) q)
-    (hq : q ≠ 0) (horder : P256.scalarModulus • q = 0) :
+      (P256.AffineSlope.ofElems Q.X Q.Y) q) :
     ⦃⌜True⌝⦄ Sound.interp ρ (signedRadix32JointScalarMul u1 u2 Q)
     ⦃⇓ out => ⌜P256.Reference.NormalizedRep ρ out
       (SignedRadix32FoldPoint ρ u1 u2 q [:255].toList)⌝⦄ := by
@@ -1196,25 +1234,21 @@ def SignedRadix32FoldPoint (rho : WF.Valuation) (u1 u2 : P256.Fn)
   case vc4.q => exact q
   case vc5.hdigit => assumption
   case vc6.htable => assumption
-  case vc7.hq => exact hq
-  case vc8.horder => exact horder
-  case vc9.q => exact q
-  case vc10.accPoint pref cur suff hsplit b hprev =>
+  case vc7.q => exact q
+  case vc8.accPoint pref cur suff hsplit b hprev =>
     exact SignedRadix32FoldPoint ρ u1 u2 q pref
-  case vc11.hu1 => exact hu1
-  case vc12.hu2 => exact hu2
-  case vc13.hacc => assumption
-  case vc14.htable => assumption
-  case vc15.hq => exact hq
-  case vc16.horder => exact horder
-  case vc17.success pref cur hstep =>
+  case vc9.hu1 => exact hu1
+  case vc10.hu2 => exact hu2
+  case vc11.hacc => assumption
+  case vc12.htable => assumption
+  case vc13.success pref cur hstep =>
     unfold SignedRadix32FoldPoint at hstep ⊢
     rw [List.foldl_append]
     simpa using hstep
-  case vc18.pre =>
+  case vc14.pre =>
     unfold SignedRadix32FoldPoint
     simpa using SignedRadix32PointSpec.zsmul ‹SignedRadix32PointSpec _ _ _ _›
-  case vc19.post.success => intro h; exact h
+  case vc15.post.success => intro h; exact h
 
 @[spec] theorem signedRadix32JointScalarMul_complete
     {u1 u2 : P256.Fn} {Q : P256.Projective}
@@ -1405,5 +1439,37 @@ theorem SignedRadix32FoldPoint_full (u1 u2 : P256.Fn)
     signedRadix32GeneratorCoeff_full,
     signedRadix32BoothCoeff_full hu2]
   rfl
+
+theorem signedRadix32FoldPoint_eq_verificationPoint
+    {digest : U 256} {sig : Signature}
+    {r s sInv z u1Relaxed u2Relaxed u1 u2 : P256.Fn}
+    (hdigest : digest.Valid ρ)
+    (hr : r.Valid ρ) (hsInv : sInv.Valid ρ)
+    (hu1 : u1.Valid ρ) (hu2 : u2.Valid ρ)
+    (hrNat : r.evalNat ρ = (sig.r.eval ρ).toNat)
+    (hsNat : s.evalNat ρ = (sig.s.eval ρ).toNat)
+    (hsMul : (s.evalNat ρ : ZMod P256.scalar.modulus) *
+      (sInv.evalNat ρ : ZMod P256.scalar.modulus) = 1)
+    (hz : Modular.Lazy.evalElemZMod P256.scalar z ρ =
+      Int.castRingHom (ZMod P256.scalar.modulus) (digest.intVal.eval ρ.int))
+    (hu1Relaxed : Modular.Lazy.evalElemZMod P256.scalar u1Relaxed ρ =
+      Modular.Lazy.evalElemZMod P256.scalar z ρ *
+        Modular.Lazy.evalElemZMod P256.scalar sInv ρ)
+    (hu2Relaxed : Modular.Lazy.evalElemZMod P256.scalar u2Relaxed ρ =
+      Modular.Lazy.evalElemZMod P256.scalar r ρ *
+        Modular.Lazy.evalElemZMod P256.scalar sInv ρ)
+    (hu1Canonical : Modular.Lazy.evalElemZMod P256.scalar u1 ρ =
+      Modular.Lazy.evalElemZMod P256.scalar u1Relaxed ρ)
+    (hu2Canonical : Modular.Lazy.evalElemZMod P256.scalar u2 ρ =
+      Modular.Lazy.evalElemZMod P256.scalar u2Relaxed ρ)
+    (publicKey : Reference.Point) :
+    SignedRadix32FoldPoint ρ u1 u2 publicKey [:255].toList =
+      Reference.verificationPoint (digest.eval ρ).toNat
+        (sig.r.eval ρ).toNat (sig.s.eval ρ).toNat publicKey := by
+  rw [SignedRadix32FoldPoint_full u1 u2 publicKey hu2.1]
+  rw [← JointFoldPoint_full (ρ := ρ) u1 u2 publicKey]
+  exact jointFoldPoint_eq_verificationPoint hdigest hr hsInv hu1 hu2
+    hrNat hsNat hsMul hz hu1Relaxed hu2Relaxed hu1Canonical hu2Canonical
+    publicKey
 
 end Freigen.F2Z.Examples.EcdsaP256

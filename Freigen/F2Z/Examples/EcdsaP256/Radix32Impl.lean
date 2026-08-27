@@ -70,13 +70,23 @@ def boothDigit (k : Fn) (i : Nat) (hi : i < 52) : LC ℤ :=
   else
     windowValue k 255 1 (by omega) + windowValue k 254 1 (by omega)
 
+/-- Select between two Boolean linear combinations with one R1CS constraint. -/
+def selectBit (choose whenOne whenZero : LC ℤ) : Circuit (LC ℤ) := do
+  let bits ← hint h![choose, whenOne, whenZero]
+    fun h![(b : Int), (x : Int), (y : Int)] =>
+      pure $ Vector.ofFn (n := 1) fun _ => if b = 1 then x = 1 else y = 1
+  let out ← U.fromWord { bitsLE := bits }
+  assertR1C choose (whenOne - whenZero) (out.intVal - whenZero)
+  pure out.intVal
+
 def selectRadix32Magnitude (digit : SignedDigit) (table : Radix32Table) :
     Circuit AffineSlope.Point := do
   let lowMagnitude := digit.magnitude - 16 • digit.isSixteen
   let low ← lookupPoint lowMagnitude table.low
   let X ← AffineSlope.selectCanonical digit.isSixteen table.p16.X low.X
   let Y ← AffineSlope.selectCanonical digit.isSixteen table.p16.Y low.Y
-  pure ⟨X, Y, low.infinity - digit.isSixteen⟩
+  let infinity ← selectBit digit.isSixteen table.p16.infinity low.infinity
+  pure ⟨X, Y, infinity⟩
 
 def selectSignedRadix32Point (digit : SignedDigit)
     (table : Radix32Table) : Circuit AffineSlope.Point := do

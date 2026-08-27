@@ -2086,14 +2086,14 @@ theorem verifyDigest_complete_aux {digest : U 256} {key : PublicKey}
       ((aux.sInv.eval ρ).toNat : Reference.Scalar) = 1)
     (hverifies : Reference.Verifies (digest.eval ρ).toNat
       (sig.r.eval ρ).toNat (sig.s.eval ρ).toNat publicKey) :
-    ⦃⌜True⌝⦄ Complete.interp ρ (verifyDigest digest key sig aux)
+    ⦃⌜True⌝⦄ Complete.interp ρ (verifyDigestLegacy digest key sig aux)
     ⦃⇓ _ => ⌜Reference.Verifies (digest.eval ρ).toNat
       (sig.r.eval ρ).toNat (sig.s.eval ρ).toNat publicKey⌝⦄ := by
-  mvcgen -trivial [verifyDigest, canonicalizeInput, canonicalizeKey,
+  mvcgen -trivial [verifyDigestLegacy, canonicalizeInput, canonicalizeKey,
     canonicalizeSignature, canonicalizeAux, prepareVerification,
     validateCanonicalInput, deriveScalars, deriveRelaxedScalars,
-    multiplyScalars, canonicalizeScalars, finishVerification,
-    computeVerificationSum, checkVerificationX]
+    multiplyScalars, canonicalizeScalars, finishVerificationLegacy,
+    computeVerificationSumLegacy, checkVerificationX]
   case vc15.hcurve =>
     rename_i qx hqx qy hqy r hr' s hs' rInv hrInv' sInv hsInv'
     apply onCurveZModSpec_of_hasCoordinates (publicKey := publicKey)
@@ -2267,7 +2267,7 @@ theorem verifyDigest_sound_aux {digest : U 256} {key : PublicKey}
     (hkeyX : key.x.Valid ρ) (hkeyY : key.y.Valid ρ)
     (hr : sig.r.Valid ρ) (hs : sig.s.Valid ρ)
     (hrInv : aux.rInv.Valid ρ) (hsInv : aux.sInv.Valid ρ) :
-    ⦃⌜True⌝⦄ Sound.interp ρ (verifyDigest digest key sig aux)
+    ⦃⌜True⌝⦄ Sound.interp ρ (verifyDigestLegacy digest key sig aux)
     ⦃⇓ _ => ⌜∃ publicKey : Reference.Point,
       Reference.HasCoordinates publicKey
         (Int.castRingHom P256.Reference.Field
@@ -2276,11 +2276,11 @@ theorem verifyDigest_sound_aux {digest : U 256} {key : PublicKey}
           (key.y.intVal.eval ρ.int)) ∧
       Reference.Verifies (digest.eval ρ).toNat
         (sig.r.eval ρ).toNat (sig.s.eval ρ).toNat publicKey⌝⦄ := by
-  mvcgen [verifyDigest, canonicalizeInput, canonicalizeKey,
+  mvcgen [verifyDigestLegacy, canonicalizeInput, canonicalizeKey,
     canonicalizeSignature, canonicalizeAux, prepareVerification,
     validateCanonicalInput, deriveScalars, deriveRelaxedScalars,
-    multiplyScalars, canonicalizeScalars, finishVerification,
-    computeVerificationSum, checkVerificationX]
+    multiplyScalars, canonicalizeScalars, finishVerificationLegacy,
+    computeVerificationSumLegacy, checkVerificationX]
   case vc7.q =>
     exact P256.Reference.pointOfCircuit ρ _ _ (by assumption)
   case vc8.hu1 =>
@@ -2422,7 +2422,7 @@ theorem verifyDigestFromBits_sound_aux
     (inputs : Vector Bool verifyDigestInputBits) :
     ⦃⌜∀ i : Fin verifyDigestInputBits, ρ.bool i.val = inputs[i]⌝⦄
       Sound.interp ρ
-        (verifyDigestFromBits (Vector.ofFn fun i => ({i.val} : LC Bool)))
+        (verifyDigestFromBitsLegacy (Vector.ofFn fun i => ({i.val} : LC Bool)))
     ⦃⇓ _ => ⌜∃ publicKey : Reference.Point,
       Reference.HasCoordinates publicKey
         (verifyDigestInputValue inputs 1).toNat
@@ -2431,7 +2431,7 @@ theorem verifyDigestFromBits_sound_aux
         (verifyDigestInputValue inputs 3).toNat
         (verifyDigestInputValue inputs 4).toNat publicKey⌝⦄ := by
   mvcgen -trivial [-Sound.interp_mapM, U.mapM_fromWord_sound,
-    verifyDigestFromBits]
+    verifyDigestFromBitsLegacy]
   case vc1 =>
     rename_i hbits values
     intro hvalues
@@ -2471,7 +2471,7 @@ theorem verifyDigestFromBits_sound_aux
       (hvalues 3).1 (hvalues 4).1 (hvalues 5).1 (hvalues 6).1
     have htSpec :
         ⦃⌜True⌝⦄ Sound.interp ρ
-          (verifyDigest values[0] ⟨values[1], values[2]⟩
+          (verifyDigestLegacy values[0] ⟨values[1], values[2]⟩
             ⟨values[3], values[4]⟩ ⟨values[5], values[6]⟩)
         ⦃⇓ _ => ⌜∃ publicKey : Reference.Point,
           Reference.HasCoordinates publicKey
@@ -2518,10 +2518,10 @@ theorem verifyDigestFromBits_complete_aux
       (verifyDigestInputValue inputs 3).toNat
       (verifyDigestInputValue inputs 4).toNat publicKey) :
     ⦃⌜True⌝⦄ Complete.interp ρ
-      (verifyDigestFromBits (Vector.ofFn fun i => ({i.val} : LC Bool)))
+      (verifyDigestFromBitsLegacy (Vector.ofFn fun i => ({i.val} : LC Bool)))
     ⦃⇓ _ => ⌜True⌝⦄ := by
   mvcgen -trivial [-Complete.interp_mapM, U.mapM_fromWord_complete,
-    verifyDigestFromBits]
+    verifyDigestFromBitsLegacy]
   case vc1 =>
     rename_i values
     intro hvalues
@@ -2611,7 +2611,7 @@ theorem verifyDigestFromBits_complete_aux
         · exact hsNat)
     have htTrue :
         ⦃⌜True⌝⦄ Complete.interp ρ
-          (verifyDigest values[0] ⟨values[1], values[2]⟩
+          (verifyDigestLegacy values[0] ⟨values[1], values[2]⟩
             ⟨values[3], values[4]⟩ ⟨values[5], values[6]⟩)
         ⦃⇓ _ => ⌜True⌝⦄ := by
       apply Triple.iff_conseq.mp ht (by simp)

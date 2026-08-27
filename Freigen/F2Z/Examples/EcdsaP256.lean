@@ -30,16 +30,16 @@ an input accepted by Mathlib's P-256 ECDSA verifier. -/
 theorem verifyDigest_sound
     (inputs : Vector Bool verifyDigestInputBits) (wit : Nat → Bool)
     (hinputs : ∀ i : Fin verifyDigestInputBits, wit i.val = inputs[i])
-    (hsat : verifyDigestCS.2.satisfies wit) :
+    (hsat : verifyDigestCSLegacy.2.satisfies wit) :
     VerifyDigestAccepts inputs := by
   apply Sound.adequate
-    (circ := verifyDigestFromBits)
+    (circ := verifyDigestFromBitsLegacy)
     (P := fun _ _ => VerifyDigestAccepts inputs)
-  · simpa [Sound.csValuation, VerifyDigestAccepts, verifyDigestCS] using
+  · simpa [Sound.csValuation, VerifyDigestAccepts, verifyDigestCSLegacy] using
       verifyDigestFromBits_sound_aux
-        (ρ := Sound.csValuation verifyDigestCS.2 wit) inputs
+        (ρ := Sound.csValuation verifyDigestCSLegacy.2 wit) inputs
   · exact hinputs
-  · simpa [verifyDigestCS] using hsat
+  · simpa [verifyDigestCSLegacy] using hsat
 
 /-- If the decoded input satisfies Mathlib's ECDSA equation and supplies the
 checked inverse witnesses, the real witness generator succeeds and its output
@@ -66,8 +66,8 @@ theorem verifyDigest_complete
       (verifyDigestInputValue inputs 3).toNat
       (verifyDigestInputValue inputs 4).toNat publicKey) :
     ∃ wit,
-      Semantics.Witgen.runWithInputs verifyDigestFromBits inputs = some wit ∧
-      verifyDigestCS.2.satisfies (wit[·]!) := by
+      Semantics.Witgen.runWithInputs verifyDigestFromBitsLegacy inputs = some wit ∧
+      verifyDigestCSLegacy.2.satisfies (wit[·]!) := by
   have hbits : ∀ i : Fin verifyDigestInputBits,
       (Complete.witnessValuation inputs.toArray).bool i.val = inputs[i] := by
     intro i
@@ -78,11 +78,11 @@ theorem verifyDigest_complete
   have had := Complete.adequate
     verifyDigestFromBits_wf_aux
     hcomplete
-  simpa [verifyDigestCS] using had
+  simpa [verifyDigestCSLegacy] using had
 
 /-- Quotient well-formedness of the actual raw-input verifier circuit. -/
 theorem verifyDigest_wf :
-    WF.GadgetSpec VerifyDigestBits.WFRel verifyDigestFromBits
+    WF.GadgetSpec VerifyDigestBits.WFRel verifyDigestFromBitsLegacy
       (fun _ _ _ _ => True) :=
   verifyDigestFromBits_wf_aux
 
@@ -95,6 +95,6 @@ message hash supplied as input. SHA-256 is not part of this circuit. -/
 info: { mRows := 1176019, mCols := 1176019, r1csRows := 6873, cost := 9408152 }
 -/
 #guard_msgs in
-#eval verifyDigestCS.2.stats
+#eval verifyDigestCSLegacy.2.stats
 
 end Freigen.F2Z.Examples.EcdsaP256

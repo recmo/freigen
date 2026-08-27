@@ -988,11 +988,11 @@ theorem prepareVerification_wf_aux :
         ⟨hc.1.1, hc.2.1.1, one_wfRel lv rv⟩, hc.2.2.1.1⟩
 
 theorem computeVerificationSum_wf_aux :
-    WF.GadgetSpec PreparedVerification.WFRel computeVerificationSum
+    WF.GadgetSpec PreparedVerification.WFRel computeVerificationSumLegacy
       AffineSlope.Point.WFRel := by
   unfold WF.GadgetSpec
   intro left right
-  unfold computeVerificationSum
+  unfold computeVerificationSumLegacy
   apply WF.GadgetSpec.direct_rule
     (left := (left.u1, left.u2, left.q))
     (right := (right.u1, right.u2, right.q)) jointScalarMul_wf_aux
@@ -1040,11 +1040,11 @@ theorem checkVerificationX_wf_aux :
         exact ⟨hm.2, hc.1.1⟩
 
 theorem finishVerification_wf_aux :
-    WF.GadgetSpec PreparedVerification.WFRel finishVerification
+    WF.GadgetSpec PreparedVerification.WFRel finishVerificationLegacy
       (fun _ _ _ _ => True) := by
   unfold WF.GadgetSpec
   intro left right
-  unfold finishVerification
+  unfold finishVerificationLegacy
   apply WF.GadgetSpec.bind_rule_direct
     (left := left) (right := right) computeVerificationSum_wf_aux
   · intro lv rv h
@@ -1058,11 +1058,11 @@ theorem finishVerification_wf_aux :
 
 theorem verifyDigest_wf_aux :
     WF.GadgetSpec VerifyInput.WFRel
-      (fun input => verifyDigest input.1 input.2.1 input.2.2.1 input.2.2.2)
+      (fun input => verifyDigestLegacy input.1 input.2.1 input.2.2.1 input.2.2.2)
       (fun _ _ _ _ => True) := by
   unfold WF.GadgetSpec
   intro left right
-  unfold verifyDigest
+  unfold verifyDigestLegacy
   apply WF.GadgetSpec.bind_rule_direct
     (left := (left.2.1, left.2.2.1, left.2.2.2))
     (right := (right.2.1, right.2.2.1, right.2.2.2))
@@ -1113,11 +1113,11 @@ private theorem verifyDigestInputWords_wf
       omega⟩
 
 theorem verifyDigestFromBits_wf_aux :
-    WF.GadgetSpec VerifyDigestBits.WFRel verifyDigestFromBits
+    WF.GadgetSpec VerifyDigestBits.WFRel verifyDigestFromBitsLegacy
       (fun _ _ _ _ => True) := by
   unfold WF.GadgetSpec
   intro left right
-  unfold verifyDigestFromBits
+  unfold verifyDigestFromBitsLegacy
   apply WF.GadgetSpec.bind_rule_direct
     (left := verifyDigestInputWords left)
     (right := verifyDigestInputWords right) mapM_fromWord_wf_full

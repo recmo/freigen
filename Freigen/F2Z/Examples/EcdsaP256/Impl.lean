@@ -3,7 +3,7 @@ import Freigen.F2Z.Examples.EcdsaP256.Reference
 /-!
 # ECDSA-P256 verification implementation
 
-`verifyDigest` implements SEC 1 ECDSA verification for a 256-bit SHA-256
+`verifyDigestLegacy` implements SEC 1 ECDSA verification for a 256-bit SHA-256
 digest supplied as a circuit input.
 
 Inverse values are proof-carrying witnesses checked by modular multiplication
@@ -341,7 +341,7 @@ def prepareVerification (digest : U 256) (input : CanonicalInput) :
 
   pure ⟨scalars.1, scalars.2, ⟨input.qx, input.qy, one⟩, input.r⟩
 
-def computeVerificationSum (input : PreparedVerification) :
+def computeVerificationSumLegacy (input : PreparedVerification) :
     Circuit AffineSlope.Point :=
   jointScalarMul input.u1 input.u2 input.q
 
@@ -355,8 +355,8 @@ def checkVerificationX (r : Fn) (sum : AffineSlope.Point) : Circuit Unit := do
   let xModN ← Modular.Relaxed.reduceSmall scalar xCanonical.val.intVal
   assertEq scalar xModN r
 
-def finishVerification (input : PreparedVerification) : Circuit Unit := do
-  let sum ← computeVerificationSum input
+def finishVerificationLegacy (input : PreparedVerification) : Circuit Unit := do
+  let sum ← computeVerificationSumLegacy input
   checkVerificationX input.r sum
 
 /-- Verify an ECDSA-P256 signature over an already computed SHA-256 digest.
@@ -364,11 +364,11 @@ def finishVerification (input : PreparedVerification) : Circuit Unit := do
 All external integers are first made canonical. Therefore the circuit rejects
 non-canonical encodings instead of silently reducing signature or key fields.
 -/
-def verifyDigest (digest : U 256) (key : PublicKey)
+def verifyDigestLegacy (digest : U 256) (key : PublicKey)
     (sig : Signature) (aux : Aux) : Circuit Unit := do
   let input ← canonicalizeInput key sig aux
   let prepared ← prepareVerification digest input
-  finishVerification prepared
+  finishVerificationLegacy prepared
 
 /-- Number of Boolean inputs to the standalone digest verifier: the digest,
 public-key coordinates, signature scalars, and two inverse witnesses. -/
@@ -395,14 +395,14 @@ def verifyDigestInputWords
     Vector (Word 256) 7 :=
   Vector.ofFn fun slot => verifyDigestInputWord inputs slot
 
-def verifyDigestFromBits
+def verifyDigestFromBitsLegacy
     (inputs : Vector (LC Bool) verifyDigestInputBits) : Circuit Unit := do
   let values ← (verifyDigestInputWords inputs).mapM U.fromWord
-  verifyDigest values[0] ⟨values[1], values[2]⟩
+  verifyDigestLegacy values[0] ⟨values[1], values[2]⟩
     ⟨values[3], values[4]⟩ ⟨values[5], values[6]⟩
 
 /-- Constraint-system representation of the standalone digest verifier. -/
-def verifyDigestCS : Unit × Semantics.CS :=
-  Semantics.CSBuilder.runWithInputs verifyDigestFromBits
+def verifyDigestCSLegacy : Unit × Semantics.CS :=
+  Semantics.CSBuilder.runWithInputs verifyDigestFromBitsLegacy
 
 end Freigen.F2Z.Examples.EcdsaP256
