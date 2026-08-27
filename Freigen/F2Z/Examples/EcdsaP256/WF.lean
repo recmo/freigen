@@ -515,6 +515,32 @@ theorem accumulateJoint_wf_aux :
           have h1 := hacc1 lv rv h2.1
           exact ⟨h4.2, h1.1.2.2.2⟩
 
+theorem accumulateInitialJoint_wf_aux :
+    WF.GadgetSpec JointTerms.WFRel accumulateInitialJoint
+      AffineSlope.Point.WFRel := by
+  unfold WF.GadgetSpec
+  intro left right
+  unfold accumulateInitialJoint
+  apply WF.GadgetSpec.bind_rule
+    (left := left.qhi) (right := right.qhi) doubleFour_wf_aux
+  · intro lv rv h
+    exact h.1
+  · intro B acc1L acc1R hacc1
+    apply WF.GadgetSpec.bind_rule
+      (left := (acc1L, left.qlo))
+      (right := (acc1R, right.qlo)) AffineSlope.addComplete_wf_aux
+    · intro lv rv hB
+      have h := hacc1 lv rv hB
+      exact ⟨h.2, h.1.2.1⟩
+    · intro C acc2L acc2R hacc2
+      apply WF.GadgetSpec.direct_rule
+        (left := (acc2L, left.g))
+        (right := (acc2R, right.g)) AffineSlope.addComplete_wf_aux
+      intro lv rv hC
+      have h2 := hacc2 lv rv hC
+      have h1 := hacc1 lv rv h2.1
+      exact ⟨h2.2, h1.1.2.2⟩
+
 theorem jointByteStep_wf_aux (i : Nat) (hi : i < 32) :
     WF.GadgetSpec
       (fun lv rv
@@ -543,6 +569,27 @@ theorem jointByteStep_wf_aux (i : Nat) (hi : i < 32) :
     have h := hterms lv rv hB
     exact ⟨h.1.2.2.2, h.2⟩
 
+theorem initialJointByteStep_wf_aux :
+    WF.GadgetSpec
+      (fun lv rv
+          (left right : Fn × Fn × Vector AffineSlope.Point 16) =>
+        Modular.Elem.ScalarWFRel lv rv left.1 right.1 ∧
+        Modular.Elem.ScalarWFRel lv rv left.2.1 right.2.1 ∧
+        WF.VectorRel AffineSlope.Point.WFRel lv rv left.2.2 right.2.2)
+      (fun input => initialJointByteStep input.1 input.2.1 input.2.2)
+      AffineSlope.Point.WFRel := by
+  unfold WF.GadgetSpec
+  intro left right
+  unfold initialJointByteStep
+  apply WF.GadgetSpec.bind_rule
+    (selectJointTerms_wf_aux 0 (by omega))
+  · intro lv rv h
+    exact h
+  · intro B termsL termsR hterms
+    apply WF.GadgetSpec.direct_rule accumulateInitialJoint_wf_aux
+    intro lv rv hB
+    exact (hterms lv rv hB).2
+
 def JointScalarInput.WFRel :
     WF.Post (Fn × Fn × Projective) :=
   fun lv rv left right =>
@@ -561,30 +608,39 @@ theorem jointScalarMul_wf_aux :
   · intro lv rv h
     exact h.2.2
   · intro B tableL tableR htable
-    refine WF.Rel.mono (WF.Rel.foldRange_rule
-      (I := fun lv rv left right =>
-        B lv rv ∧ AffineSlope.Point.WFRel lv rv left right) ?_ ?_) ?_
+    apply WF.GadgetSpec.bind_rule
+      (left := (left.1, left.2.1, tableL))
+      (right := (right.1, right.2.1, tableR))
+      initialJointByteStep_wf_aux
     · intro lv rv hB
-      exact ⟨hB, AffineSlope.infinity_wfRel lv rv⟩
-    · intro i hi P accL accR hacc
-      have hinput : ∀ lv rv, P lv rv →
-          Modular.Elem.ScalarWFRel lv rv left.1 right.1 ∧
-          Modular.Elem.ScalarWFRel lv rv left.2.1 right.2.1 ∧
-          WF.VectorRel AffineSlope.Point.WFRel lv rv tableL tableR ∧
-          AffineSlope.Point.WFRel lv rv accL accR := by
-        intro lv rv hP
-        have hstate := hacc lv rv hP
-        have ht := htable lv rv hstate.1
-        exact ⟨ht.1.1, ht.1.2.1, ht.2, hstate.2⟩
-      have hstep := (jointByteStep_wf_aux i hi.2.1).relHom P
-        (left.1, left.2.1, tableL, accL)
-        (right.1, right.2.1, tableR, accR) hinput
-      exact WF.Rel.mono hstep (by
-        intro lv rv outL outR hpost
-        exact ⟨hpost.1, (hacc lv rv hpost.1).1, hpost.2⟩
-      )
-    · intro lv rv outL outR hpost
-      exact hpost.2
+      have ht := htable lv rv hB
+      exact ⟨ht.1.1, ht.1.2.1, ht.2⟩
+    · intro C initialL initialR hinitial
+      refine WF.Rel.mono (WF.Rel.foldRange_rule
+        (I := fun lv rv left right =>
+          C lv rv ∧ AffineSlope.Point.WFRel lv rv left right) ?_ ?_) ?_
+      · intro lv rv hC
+        exact ⟨hC, (hinitial lv rv hC).2⟩
+      · intro i hi P accL accR hacc
+        have hinput : ∀ lv rv, P lv rv →
+            Modular.Elem.ScalarWFRel lv rv left.1 right.1 ∧
+            Modular.Elem.ScalarWFRel lv rv left.2.1 right.2.1 ∧
+            WF.VectorRel AffineSlope.Point.WFRel lv rv tableL tableR ∧
+            AffineSlope.Point.WFRel lv rv accL accR := by
+          intro lv rv hP
+          have hstate := hacc lv rv hP
+          have hini := hinitial lv rv hstate.1
+          have ht := htable lv rv hini.1
+          exact ⟨ht.1.1, ht.1.2.1, ht.2, hstate.2⟩
+        have hstep := (jointByteStep_wf_aux i hi.2.1).relHom P
+          (left.1, left.2.1, tableL, accL)
+          (right.1, right.2.1, tableR, accR) hinput
+        exact WF.Rel.mono hstep (by
+          intro lv rv outL outR hpost
+          exact ⟨hpost.1, (hacc lv rv hpost.1).1, hpost.2⟩
+        )
+      · intro lv rv outL outR hpost
+        exact hpost.2
 
 private theorem fnOne_wfRel (lv rv : WF.Valuation) :
     Modular.Elem.WFRel lv rv fnOne fnOne := by

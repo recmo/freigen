@@ -225,18 +225,31 @@ def accumulateJoint (acc : AffineSlope.Point) (terms : JointTerms) :
   let acc ← AffineSlope.addComplete acc terms.qlo
   AffineSlope.addComplete acc terms.g
 
+/-- The first joint window starts from infinity.  Its first four doublings and
+the following addition reduce definitionally to `qhi`, so start there. -/
+def accumulateInitialJoint (terms : JointTerms) : Circuit AffineSlope.Point := do
+  let acc ← doubleFour terms.qhi
+  let acc ← AffineSlope.addComplete acc terms.qlo
+  AffineSlope.addComplete acc terms.g
+
 def jointByteStep (u1 u2 : Fn)
     (qTable : Vector AffineSlope.Point 16) (i : Nat) (hi : i < 32)
     (acc : AffineSlope.Point) : Circuit AffineSlope.Point := do
   let terms ← selectJointTerms u1 u2 qTable i hi
   accumulateJoint acc terms
 
+def initialJointByteStep (u1 u2 : Fn)
+    (qTable : Vector AffineSlope.Point 16) : Circuit AffineSlope.Point := do
+  let terms ← selectJointTerms u1 u2 qTable 0 (by omega)
+  accumulateInitialJoint terms
+
 /-- Eight-bit fixed-G/four-bit variable-Q joint multiplication for
 `u1*G + u2*Q`. Each step consumes one G byte and two Q nibbles. -/
 def jointScalarMul (u1 u2 : Fn) (q : Projective) :
     Circuit AffineSlope.Point := do
   let qTable ← materializeMultiples q
-  WF.foldRange [:32] AffineSlope.infinity fun i hi acc =>
+  let initial ← initialJointByteStep u1 u2 qTable
+  WF.foldRange [1:32] initial fun i hi acc =>
     jointByteStep u1 u2 qTable i hi.2.1 acc
 
 structure CanonicalInput where

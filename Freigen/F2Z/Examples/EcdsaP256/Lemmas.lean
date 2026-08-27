@@ -1491,6 +1491,75 @@ private theorem sound_of_pure_pre {alpha : Type} {P : Prop}
             exact hout.2⟩,
             ExceptConds.entails.refl _⟩
 
+@[spec] theorem accumulateInitialJoint_sound {terms : JointTerms}
+    {qhi qlo g : P256.Reference.Point}
+    (hqhi : P256.Reference.NormalizedRep ρ terms.qhi qhi)
+    (hqlo : P256.Reference.NormalizedRep ρ terms.qlo qlo)
+    (hg : P256.Reference.NormalizedRep ρ terms.g g) :
+    ⦃⌜True⌝⦄ Sound.interp ρ (accumulateInitialJoint terms)
+    ⦃⇓ out => ⌜P256.Reference.NormalizedRep ρ out
+      (16 • qhi + qlo + g)⌝⦄ := by
+  unfold accumulateInitialJoint
+  rw [Sound.interp_bind]
+  apply Triple.bind (Q := fun acc16 =>
+    ⌜P256.Reference.NormalizedRep ρ acc16 (16 • qhi)⌝)
+  case hx => exact doubleFour_sound hqhi
+  case hf =>
+    intro acc16
+    apply sound_of_pure_pre
+    intro hacc16
+    rw [Sound.interp_bind]
+    apply Triple.bind (Q := fun accQ =>
+      ⌜P256.Reference.NormalizedRep ρ accQ (16 • qhi + qlo)⌝)
+    case hx =>
+      exact P256.AffineSlope.addComplete_sound_normalized hacc16 hqlo
+    case hf =>
+      intro accQ
+      apply sound_of_pure_pre
+      intro haccQ
+      exact P256.AffineSlope.addComplete_sound_normalized haccQ hg
+
+@[spec] theorem accumulateInitialJoint_complete {terms : JointTerms}
+    {qhi qlo g : P256.Reference.Point}
+    (hqhiValid : terms.qhi.Valid ρ)
+    (hqloValid : terms.qlo.Valid ρ)
+    (hgValid : terms.g.Valid ρ)
+    (hqhi : P256.Reference.NormalizedRep ρ terms.qhi qhi)
+    (hqlo : P256.Reference.NormalizedRep ρ terms.qlo qlo)
+    (hg : P256.Reference.NormalizedRep ρ terms.g g)
+    (hqhiOrder : P256.scalarModulus • qhi = 0)
+    (hqloOrder : P256.scalarModulus • qlo = 0)
+    (_hgOrder : P256.scalarModulus • g = 0) :
+    ⦃⌜True⌝⦄ Complete.interp ρ (accumulateInitialJoint terms)
+    ⦃⇓ out => ⌜out.Valid ρ ∧ P256.Reference.NormalizedRep ρ out
+      (16 • qhi + qlo + g)⌝⦄ := by
+  unfold accumulateInitialJoint
+  rw [Complete.interp_bind]
+  apply Triple.bind (Q := fun acc16 => ⌜acc16.Valid ρ ∧
+    P256.Reference.NormalizedRep ρ acc16 (16 • qhi)⌝)
+  case hx => exact doubleFour_complete hqhiValid hqhi hqhiOrder
+  case hf =>
+    intro acc16
+    apply complete_of_pure_pre
+    rintro ⟨hacc16Valid, hacc16⟩
+    rw [Complete.interp_bind]
+    apply Triple.bind (Q := fun accQ => ⌜accQ.Valid ρ ∧
+      P256.Reference.NormalizedRep ρ accQ (16 • qhi + qlo)⌝)
+    case hx =>
+      exact P256.AffineSlope.addComplete_complete_mathlib
+        hacc16Valid hqloValid hacc16 hqlo
+        (Reference.Aux.no_two_torsion_of_order
+          (Reference.Aux.order_nsmul hqhiOrder 16))
+    case hf =>
+      intro accQ
+      apply complete_of_pure_pre
+      rintro ⟨haccQValid, haccQ⟩
+      exact P256.AffineSlope.addComplete_complete_mathlib
+        haccQValid hgValid haccQ hg
+        (Reference.Aux.no_two_torsion_of_order
+          (Reference.Aux.order_add
+            (Reference.Aux.order_nsmul hqhiOrder 16) hqloOrder))
+
 @[spec] theorem jointByteStep_sound {u1 u2 : P256.Fn}
     {qTable : Vector P256.AffineSlope.Point 16}
     {i : Nat} {hi : i < 32} {acc : P256.AffineSlope.Point}
@@ -1573,9 +1642,100 @@ private theorem sound_of_pure_pre {alpha : Type} {P : Prop}
       simpa only [add_nsmul, add_assoc] using hout.2⟩,
       ExceptConds.entails.refl _⟩
 
+@[spec] theorem initialJointByteStep_sound {u1 u2 : P256.Fn}
+    {qTable : Vector P256.AffineSlope.Point 16}
+    {q : P256.Reference.Point}
+    (hu1 : u1.val.Valid ρ) (hu2 : u2.val.Valid ρ)
+    (htable : ∀ j : Fin 16,
+      P256.Reference.NormalizedRep ρ qTable[j] (j.val • q)) :
+    ⦃⌜True⌝⦄ Sound.interp ρ
+      (initialJointByteStep u1 u2 qTable)
+    ⦃⇓ out => ⌜P256.Reference.NormalizedRep ρ out
+      (JointStepPoint ρ u1 u2 0 0 q)⌝⦄ := by
+  unfold initialJointByteStep
+  rw [Sound.interp_bind]
+  apply Triple.bind (Q := fun terms =>
+    ⌜JointTermsSpec ρ u1 u2 0 q terms⌝)
+  case hx => exact selectJointTerms_sound hu1 hu2 htable
+  case hf =>
+    intro terms
+    apply sound_of_pure_pre
+    rintro ⟨hqhi, hqlo, hg⟩
+    apply Triple.iff_conseq.mp
+      (accumulateInitialJoint_sound hqhi hqlo hg) (by simp)
+    simp only [PostCond.entails, SPred.entails_nil]
+    exact ⟨fun _ hout => by
+      have hmul : 16 • (digitValue ρ u2 0 • q) =
+          (16 * digitValue ρ u2 0) • q := by
+        rw [show 16 * digitValue ρ u2 0 =
+            digitValue ρ u2 0 * 16 by omega,
+          mul_nsmul]
+      rw [hmul] at hout
+      unfold JointStepPoint
+      simpa only [zero_nsmul, nsmul_zero, zero_add, add_nsmul,
+        add_assoc] using hout,
+      ExceptConds.entails.refl _⟩
+
+@[spec] theorem initialJointByteStep_complete {u1 u2 : P256.Fn}
+    {qTable : Vector P256.AffineSlope.Point 16}
+    {q : P256.Reference.Point}
+    (hu1 : u1.val.Valid ρ) (hu2 : u2.val.Valid ρ)
+    (htableValid : ∀ j : Fin 16, qTable[j].Valid ρ)
+    (htable : ∀ j : Fin 16,
+      P256.Reference.NormalizedRep ρ qTable[j] (j.val • q))
+    (hqOrder : P256.scalarModulus • q = 0) :
+    ⦃⌜True⌝⦄ Complete.interp ρ
+      (initialJointByteStep u1 u2 qTable)
+    ⦃⇓ out => ⌜out.Valid ρ ∧ P256.Reference.NormalizedRep ρ out
+      (JointStepPoint ρ u1 u2 0 0 q)⌝⦄ := by
+  unfold initialJointByteStep
+  rw [Complete.interp_bind]
+  apply Triple.bind (Q := fun terms => ⌜terms.qhi.Valid ρ ∧
+    terms.qlo.Valid ρ ∧ terms.g.Valid ρ ∧
+      JointTermsSpec ρ u1 u2 0 q terms⌝)
+  case hx => exact selectJointTerms_complete hu1 hu2 htableValid htable
+  case hf =>
+    intro terms
+    apply complete_of_pure_pre
+    rintro ⟨hqhiValid, hqloValid, hgValid, hqhi, hqlo, hg⟩
+    apply Triple.iff_conseq.mp
+      (accumulateInitialJoint_complete hqhiValid hqloValid hgValid
+        hqhi hqlo hg
+        (Reference.Aux.order_nsmul hqOrder (digitValue ρ u2 0))
+        (Reference.Aux.order_nsmul hqOrder (digitValue ρ u2 1))
+        (Reference.Aux.order_nsmul Reference.Aux.generator_order
+          (byteValue ρ u1 0))) (by simp)
+    simp only [PostCond.entails, SPred.entails_nil]
+    exact ⟨fun _ hout => ⟨hout.1, by
+      have hmul : 16 • (digitValue ρ u2 0 • q) =
+          (16 * digitValue ρ u2 0) • q := by
+        rw [show 16 * digitValue ρ u2 0 =
+            digitValue ρ u2 0 * 16 by omega,
+          mul_nsmul]
+      rw [hmul] at hout
+      unfold JointStepPoint
+      simpa only [zero_nsmul, nsmul_zero, zero_add, add_nsmul,
+        add_assoc] using hout.2⟩,
+      ExceptConds.entails.refl _⟩
+
 def JointFoldPoint (rho : WF.Valuation) (u1 u2 : P256.Fn)
     (q : P256.Reference.Point) (indices : List Nat) : P256.Reference.Point :=
   indices.foldl (fun acc i => JointStepPoint rho u1 u2 i acc q) 0
+
+def JointTailFoldPoint (rho : WF.Valuation) (u1 u2 : P256.Fn)
+    (q : P256.Reference.Point) (indices : List Nat) : P256.Reference.Point :=
+  indices.foldl (fun acc i => JointStepPoint rho u1 u2 i acc q)
+    (JointStepPoint rho u1 u2 0 0 q)
+
+theorem jointTailFoldPoint_eq_full :
+    JointTailFoldPoint ρ u1 u2 q [1:32].toList =
+      JointFoldPoint ρ u1 u2 q [:32].toList := by
+  unfold JointTailFoldPoint JointFoldPoint
+  have hrange : 0 :: [1:32].toList = [:32].toList := by decide
+  have h := congrArg
+    (fun indices => indices.foldl
+      (fun acc i => JointStepPoint ρ u1 u2 i acc q) 0) hrange
+  simpa only [List.foldl_cons] using h
 
 theorem JointStepPoint.order {u1 u2 : P256.Fn} {i : Nat}
     {acc q : P256.Reference.Point}
@@ -1608,25 +1768,29 @@ theorem affineInfinity_valid : P256.AffineSlope.infinity.Valid ρ := by
       (JointFoldPoint ρ u1 u2 q [:32].toList)⌝⦄ := by
   mvcgen -trivial [jointScalarMul, WF.foldRange] invariants
   · ⇓⟨cur, out⟩ => ⌜P256.Reference.NormalizedRep ρ out
-      (JointFoldPoint ρ u1 u2 q cur.prefix)⌝
+      (JointTailFoldPoint ρ u1 u2 q cur.prefix)⌝
   case vc1.q => exact q
   case vc2.hP => exact hQ
-  case vc3.accPoint pref cur suff hsplit b hprev =>
-    exact JointFoldPoint ρ u1 u2 q pref
-  case vc4.q => exact q
-  case vc5.hu1 => exact hu1
-  case vc6.hu2 => exact hu2
-  case vc7.hacc => assumption
-  case vc8.htable => assumption
-  case vc9.success pref cur hstep =>
-    unfold JointFoldPoint at hstep ⊢
+  case vc3.q => exact q
+  case vc4.hu1 => exact hu1
+  case vc5.hu2 => exact hu2
+  case vc6.htable => assumption
+  case vc7.accPoint pref cur suff hsplit b hprev =>
+    exact JointTailFoldPoint ρ u1 u2 q pref
+  case vc8.q => exact q
+  case vc9.hu1 => exact hu1
+  case vc10.hu2 => exact hu2
+  case vc11.hacc => assumption
+  case vc12.htable => assumption
+  case vc13.success pref cur hstep =>
+    unfold JointTailFoldPoint at hstep ⊢
     rw [List.foldl_append]
     simpa using hstep
-  case vc10.pre =>
-    simp [JointFoldPoint, P256.Reference.NormalizedRep,
-      P256.Reference.Represents, P256.Reference.circuitCoordinates,
-      P256.Reference.coordinates, P256.AffineSlope.infinity]
-  case vc11.post.success => exact fun h => h
+  case vc14.pre => simpa [JointTailFoldPoint]
+  case vc15.post.success =>
+    intro h
+    rw [← jointTailFoldPoint_eq_full]
+    exact h
 
 @[spec] theorem jointScalarMul_complete {u1 u2 : P256.Fn}
     {Q : P256.Projective} {q : P256.Reference.Point}
@@ -1641,42 +1805,48 @@ theorem affineInfinity_valid : P256.AffineSlope.infinity.Valid ρ := by
   mvcgen -trivial [jointScalarMul, WF.foldRange] invariants
   · ⇓⟨cur, out⟩ => ⌜out.Valid ρ ∧
       P256.Reference.NormalizedRep ρ out
-        (JointFoldPoint ρ u1 u2 q cur.prefix) ∧
+        (JointTailFoldPoint ρ u1 u2 q cur.prefix) ∧
       P256.scalarModulus •
-        JointFoldPoint ρ u1 u2 q cur.prefix = 0⌝
+        JointTailFoldPoint ρ u1 u2 q cur.prefix = 0⌝
   case vc1.q => exact q
   case vc2.hPvalid => exact hQvalid
   case vc3.hP => exact hQ
   case vc4.horder => exact hqOrder
-  case vc5.accPoint pref cur suff hsplit b hprev =>
-    exact JointFoldPoint ρ u1 u2 q pref
-  case vc6.q => exact q
-  case vc7.hu1 => exact hu1
-  case vc8.hu2 => exact hu2
-  case vc9.haccValid => exact (by aesop)
-  case vc10.hacc => exact (by aesop)
-  case vc11.haccOrder => exact (by aesop)
-  case vc12.htableValid j => exact (by aesop)
-  case vc13.htable => exact (by aesop)
-  case vc14.hqOrder => exact hqOrder
-  case vc15.success pref cur hstep =>
+  case vc5.q => exact q
+  case vc6.hu1 => exact hu1
+  case vc7.hu2 => exact hu2
+  case vc8.htableValid j => exact (by aesop)
+  case vc9.htable => exact (by aesop)
+  case vc10.hqOrder => exact hqOrder
+  case vc11.accPoint pref cur suff hsplit b hprev =>
+    exact JointTailFoldPoint ρ u1 u2 q pref
+  case vc12.q => exact q
+  case vc13.hu1 => exact hu1
+  case vc14.hu2 => exact hu2
+  case vc15.haccValid => exact (by aesop)
+  case vc16.hacc => exact (by aesop)
+  case vc17.haccOrder => exact (by aesop)
+  case vc18.htableValid j => exact (by aesop)
+  case vc19.htable => exact (by aesop)
+  case vc20.hqOrder => exact hqOrder
+  case vc21.success pref cur hstep =>
     rename_i table htable suff hsplit acc hprev
     refine ⟨hstep.1, ?_, ?_⟩
-    · unfold JointFoldPoint at hstep ⊢
+    · unfold JointTailFoldPoint at hstep ⊢
       rw [List.foldl_append]
       simpa using hstep.2
-    · unfold JointFoldPoint
+    · unfold JointTailFoldPoint
       rw [List.foldl_append]
       exact JointStepPoint.order (ρ := ρ) (i := suff) pref.2.2 hqOrder
-  case vc16.pre =>
-    refine ⟨affineInfinity_valid, ?_, ?_⟩
-    · simp [JointFoldPoint, P256.Reference.NormalizedRep,
-        P256.Reference.Represents, P256.Reference.circuitCoordinates,
-        P256.Reference.coordinates, P256.AffineSlope.infinity]
-    · simp [JointFoldPoint]
-  case vc17.post.success =>
+  case vc22.pre =>
+    rename_i table htable initial hinitial
+    refine ⟨hinitial.1, hinitial.2, ?_⟩
+    exact JointStepPoint.order (ρ := ρ) (i := 0) (by simp) hqOrder
+  case vc23.post.success =>
     intro hvalid hnormalized _
-    exact ⟨hvalid, hnormalized⟩
+    refine ⟨hvalid, ?_⟩
+    rw [← jointTailFoldPoint_eq_full]
+    exact hnormalized
 
 def scalarPrefix (rho : WF.Valuation) (k : P256.Fn) (count : Nat) : Nat :=
   (k.val.eval rho).toNat / 2 ^ (256 - 8 * count)
