@@ -413,6 +413,192 @@ private theorem radix32MagnitudeSpec_of_select
     exact ⟨⟨hX.2.2.2, hX.2.1, hX.2.2.1,
       hY.2.2.2, hY.2.1, hY.2.2.1, hspec.1.1⟩, hspec⟩
 
+def ApplyPointSignSpec (ρ : WF.Valuation) (negative : LC ℤ)
+    (out : P256.AffineSlope.Point) (q : P256.Reference.Point) : Prop :=
+  P256.Reference.NormalizedRep ρ out
+    (if negative.eval ρ.int = 1 then -q else q)
+
+private theorem normalizedRep_neg_of_coordinate_eq
+    {source out : P256.AffineSlope.Point} {q : P256.Reference.Point}
+    (hsource : P256.Reference.NormalizedRep ρ source q)
+    (hinfinity : out.infinity.eval ρ.int = source.infinity.eval ρ.int)
+    (hX : Modular.Lazy.evalZMod P256.base out.X ρ =
+      Modular.Lazy.evalZMod P256.base source.X ρ)
+    (hY : Modular.Lazy.evalZMod P256.base out.Y ρ =
+      -Modular.Lazy.evalZMod P256.base source.Y ρ) :
+    P256.Reference.NormalizedRep ρ out (-q) := by
+  rcases q with _ | ⟨qx, qy, hcurve⟩
+  · change P256.Reference.NormalizedRep ρ out 0
+    have hsourceY : Modular.Lazy.evalZMod P256.base source.Y ρ = 0 :=
+      (hsource.2 rfl).2
+    apply normalizedRep_of_coordinate_eq hsource hinfinity hX
+    rw [hY, hsourceY]
+    simp
+  · obtain ⟨hsourceInfinity, hsourceX, hsourceY⟩ :=
+      P256.Reference.Aux.represents_some hsource.1
+    constructor
+    · constructor
+      · exact Or.inl (hinfinity.trans hsourceInfinity)
+      · unfold P256.Reference.circuitCoordinates
+        rw [if_neg (by rw [hinfinity, hsourceInfinity]; omega)]
+        simp only [P256.Reference.coordinates,
+          WeierstrassCurve.Affine.Point.neg_some]
+        apply congrArg₂ P256.Reference.Coordinates.finite
+        · exact hX.trans hsourceX
+        · rw [hY, hsourceY]
+          exact P256.Reference.negY_eq qx qy |>.symm
+    · intro hzero
+      simp at hzero
+
+private theorem normalizedRep_y_pos_of_nonzero_order
+    {P : P256.AffineSlope.Point} {q : P256.Reference.Point}
+    (hPvalid : P.Valid ρ) (hP : P256.Reference.NormalizedRep ρ P q)
+    (hq : q ≠ 0) (horder : P256.scalarModulus • q = 0) :
+    0 < P.Y.intVal.eval ρ.int := by
+  have htwo : q + q ≠ 0 :=
+    (Reference.Aux.no_two_torsion_of_order horder).resolve_left hq
+  rcases q with _ | ⟨qx, qy, hcurve⟩
+  · exact (hq rfl).elim
+  · obtain ⟨_, _, hPyeq⟩ := P256.Reference.Aux.represents_some hP.1
+    have hyneg : qy ≠ P256.Reference.curve.toAffine.negY qx qy := by
+      intro hy
+      exact htwo (WeierstrassCurve.Affine.Point.add_self_of_Y_eq hy)
+    have hrawne : P.Y.intVal.eval ρ.int ≠ 0 := by
+      intro hzero
+      apply hyneg
+      rw [P256.Reference.negY_eq, ← hPyeq]
+      change (Int.castRingHom (ZMod P256.base.modulus))
+          (P.Y.intVal.eval ρ.int) =
+        -(Int.castRingHom (ZMod P256.base.modulus))
+          (P.Y.intVal.eval ρ.int)
+      rw [hzero]
+      simp
+    exact lt_of_le_of_ne hPvalid.2.2.2.2.1.1 hrawne.symm
+
+@[spec] theorem applyPointSign_sound
+    (hnegative : negative.eval ρ.int = 0 ∨ negative.eval ρ.int = 1)
+    (hP : P256.Reference.NormalizedRep ρ P q) :
+    ⦃⌜True⌝⦄ Sound.interp ρ (applyPointSign negative P)
+    ⦃⇓ out => ⌜ApplyPointSignSpec ρ negative out q⌝⦄ := by
+  mvcgen [applyPointSign, ApplyPointSignSpec]
+  intro bits
+  mvcgen
+  case vc1.vc1.success =>
+    rename_i outY _ hassert
+    rcases hnegative with hnegative | hnegative
+    · unfold ApplyPointSignSpec
+      rw [if_neg (by omega)]
+      apply normalizedRep_of_coordinate_eq
+        (out := ⟨P.X, ⟨outY.intVal, 2⟩, P.infinity⟩) hP rfl rfl
+      have houtYInt : outY.intVal.eval ρ.int = P.Y.intVal.eval ρ.int := by
+        simp only [LC.eval_sub, LC.eval_nsmul, nsmul_eq_mul,
+          LC.eval_ofConst, hnegative, zero_mul] at hassert
+        omega
+      change (Int.castRingHom (ZMod P256.base.modulus))
+          (outY.intVal.eval ρ.int) =
+        (Int.castRingHom (ZMod P256.base.modulus))
+          (P.Y.intVal.eval ρ.int)
+      rw [houtYInt]
+    · unfold ApplyPointSignSpec
+      rw [if_pos hnegative]
+      apply normalizedRep_neg_of_coordinate_eq
+        (out := ⟨P.X, ⟨outY.intVal, 2⟩, P.infinity⟩) hP rfl rfl
+      have houtYInt : outY.intVal.eval ρ.int =
+          (P256.base.modulus : Int) - P.Y.intVal.eval ρ.int := by
+        simp only [LC.eval_sub, LC.eval_nsmul, nsmul_eq_mul,
+          LC.eval_ofConst, hnegative, one_mul] at hassert
+        omega
+      change (Int.castRingHom (ZMod P256.base.modulus))
+          (outY.intVal.eval ρ.int) =
+        -(Int.castRingHom (ZMod P256.base.modulus))
+          (P.Y.intVal.eval ρ.int)
+      rw [houtYInt]
+      norm_num
+
+@[spec] theorem applyPointSign_complete
+    (hnegative : negative.eval ρ.int = 0 ∨ negative.eval ρ.int = 1)
+    (hPvalid : P.Valid ρ)
+    (hP : P256.Reference.NormalizedRep ρ P q)
+    (hnegativeNonzero : negative.eval ρ.int = 1 → q ≠ 0)
+    (horder : P256.scalarModulus • q = 0) :
+    ⦃⌜True⌝⦄ Complete.interp ρ (applyPointSign negative P)
+    ⦃⇓ out => ⌜out.Valid ρ ∧ ApplyPointSignSpec ρ negative out q⌝⦄ := by
+  mvcgen [applyPointSign, ApplyPointSignSpec]
+  let value := if negative.eval ρ.int = 1 then
+    (P256.base.modulus : Int) - P.Y.intVal.eval ρ.int
+    else P.Y.intVal.eval ρ.int
+  have hvalue0 : 0 ≤ value := by
+    rcases hnegative with hzero | hone
+    · simp [value, hzero, hPvalid.2.2.2.2.1.1]
+    · have hylt := hPvalid.2.2.2.2.2.1
+      simp [value, hone]
+      omega
+  have hvalueLt : value < P256.base.modulus := by
+    rcases hnegative with hzero | hone
+    · simpa [value, hzero] using hPvalid.2.2.2.2.2.1
+    · have hypos := normalizedRep_y_pos_of_nonzero_order hPvalid hP
+          (hnegativeNonzero hone) horder
+      simp [value, hone]
+      omega
+  let bits : Vector Bool 256 :=
+    Vector.ofFn fun i => value.toNat.testBit i.val
+  refine ⟨bits, ?_, ?_⟩
+  · simp [WF.interpHint, WF.evalArgs, bits, value, hvalue0]
+  · mvcgen
+    rename_i outY houtY
+    have hfit : value.toNat < 2 ^ 256 := by
+      apply (Int.toNat_lt hvalue0).2
+      exact hvalueLt.trans (by native_decide)
+    have hword :
+        (Word.eval ρ.bool { bitsLE := Vector.map LC.ofConst bits }).toNat =
+          value.toNat := by
+      rw [show Vector.map LC.ofConst bits =
+          Vector.ofFn (n := 256) fun i =>
+            LC.ofConst (value.toNat.testBit i.val) by
+        ext i
+        simp [bits]]
+      exact Modular.Aux.constWord_eval_toNat value.toNat hfit ρ
+    have houtVal : outY.intVal.eval ρ.int = value := by
+      rw [U.Rel.intVal houtY, hword, Int.toNat_of_nonneg hvalue0]
+    constructor
+    · rcases hnegative with hzero | hone
+      · simp [LC.eval_sub, LC.eval_nsmul, nsmul_eq_mul,
+          LC.eval_ofConst, hzero, value, houtVal]
+      · simp [LC.eval_sub, LC.eval_nsmul, nsmul_eq_mul,
+          LC.eval_ofConst, hone, value, houtVal]
+        ring
+    · mvcgen
+      constructor
+      · refine ⟨hPvalid.1, hPvalid.2.1, hPvalid.2.2.1, rfl,
+          ⟨U.intVal_nonneg outY houtY.1, ?_⟩, ?_,
+          hPvalid.2.2.2.2.2.2⟩
+        · rw [houtVal]
+          change value < (2 : Int) * P256.base.modulus
+          have hp : 0 < P256.base.modulus := by native_decide
+          omega
+        · simpa [houtVal] using hvalueLt
+      · rcases hnegative with hzero | hone
+        · unfold ApplyPointSignSpec
+          rw [if_neg (by omega)]
+          apply normalizedRep_of_coordinate_eq
+            (out := ⟨P.X, ⟨outY.intVal, 2⟩, P.infinity⟩) hP rfl rfl
+          change (Int.castRingHom (ZMod P256.base.modulus))
+              (outY.intVal.eval ρ.int) =
+            (Int.castRingHom (ZMod P256.base.modulus))
+              (P.Y.intVal.eval ρ.int)
+          rw [houtVal]
+          simp [value, hzero]
+        · unfold ApplyPointSignSpec
+          rw [if_pos hone]
+          apply normalizedRep_neg_of_coordinate_eq
+            (out := ⟨P.X, ⟨outY.intVal, 2⟩, P.infinity⟩) hP rfl rfl
+          change (Int.castRingHom (ZMod P256.base.modulus))
+              (outY.intVal.eval ρ.int) =
+            -(Int.castRingHom (ZMod P256.base.modulus))
+              (P.Y.intVal.eval ρ.int)
+          rw [houtVal]
+          simp [value, hone]
+
 private theorem signedDigitSpec_of_indicators {value : LC ℤ} {oneHot : U 33}
     (h : IndicatorsSpec ρ (value + 16) oneHot) :
     SignedDigitSpec ρ value ⟨oneHot⟩ := by
