@@ -1,11 +1,13 @@
 import Freigen.F2Z.Examples.EcdsaP256.FixedBaseCombLookupLemmas
+import Freigen.F2Z.Examples.P256.IncompleteLemmas
 
 /-!
 # Correctness of the mixed-width fixed-base comb
 
 This module lifts the individually verified fixed-table lookups through the
-twenty complete additions.  It is separate from the lookup arithmetic so an
-edit to a fold invariant does not re-elaborate the large selector proofs.
+nineteen checked incomplete positional additions and the complete top-window
+addition.  It is separate from the lookup arithmetic so an edit to a fold
+invariant does not re-elaborate the large selector proofs.
 -/
 
 namespace Freigen.F2Z.Examples.EcdsaP256
@@ -382,6 +384,309 @@ theorem FixedCombCoefficient.eq_scalar {k : Fn} (hk : k.val.Valid ρ) :
   rw [windowValue_eval hk 0 256 (by omega)]
   simp
 
+private theorem range_split_prefix {n cur : Nat} {pref suff : List Nat}
+    (h : List.range n = pref ++ cur :: suff) : pref = List.range cur := by
+  have hpref : pref = (List.range n).take pref.length := by
+    rw [h, List.take_left]
+  have hlen : pref.length < n := by
+    have hlength := congrArg List.length h
+    simp only [List.length_range, List.length_append, List.length_cons] at hlength
+    omega
+  have hcur : cur = pref.length := by
+    have hx := congrArg (fun xs => xs[pref.length]?) h
+    rw [List.getElem?_range hlen] at hx
+    simpa using hx.symm
+  calc
+    pref = (List.range n).take pref.length := hpref
+    _ = List.range (min pref.length n) := List.take_range
+    _ = List.range pref.length := by rw [Nat.min_eq_left hlen.le]
+    _ = List.range cur := by rw [hcur]
+
+private theorem Fixed12FoldCoefficient.range_eq_windowValue (k : Fn)
+    (n : Nat) (hn : n ≤ 7) :
+    Fixed12FoldCoefficient ρ k (List.range n) =
+      2 * (windowValue k 1 (12 * (n + 1)) (by omega)).eval ρ.int -
+        (2 ^ (12 * (n + 1)) - 1) := by
+  induction n with
+  | zero =>
+      simp only [List.range_zero, Fixed12FoldCoefficient, List.foldl_nil]
+      rw [fixed12SelectedCoefficient, dif_pos (by omega)]
+      rw [combWindowValue_eval_shift k 0 12 (by omega)]
+      simp [fixedDigitCoefficient]
+      ring
+  | succ n ih =>
+      have hn' : n ≤ 7 := by omega
+      rw [List.range_succ, Fixed12FoldCoefficient, List.foldl_append]
+      simp only [List.foldl]
+      change Fixed12FoldCoefficient ρ k (List.range n) +
+          fixed12SelectedCoefficient ρ k (n + 1) = _
+      rw [ih hn']
+      rw [fixed12SelectedCoefficient, dif_pos (by omega)]
+      rw [combWindowValue_eval_shift k (12 * (n + 1)) 12 (by omega)]
+      have hsplitEval :
+          (windowValue k 1 (12 * (n + 1 + 1)) (by omega)).eval ρ.int =
+            (windowValue k 1 (12 * (n + 1)) (by omega)).eval ρ.int +
+              2 ^ (12 * (n + 1)) *
+                (windowValue k (1 + 12 * (n + 1)) 12 (by omega)).eval ρ.int := by
+        simpa only [show 12 * (n + 1 + 1) = 12 * (n + 1) + 12 by omega] using
+          windowValue_eval_split (ρ := ρ) k 1 (12 * (n + 1)) 12 (by omega)
+      rw [hsplitEval]
+      simp only [fixedDigitCoefficient]
+      ring
+
+private theorem Fixed13FoldCoefficient.range_eq_windowValue (k : Fn)
+    (n : Nat) (hn : n ≤ 12) :
+    Fixed13FoldCoefficient ρ k
+        (Fixed12FoldCoefficient ρ k [:7].toList) (List.range n) =
+      2 * (windowValue k 1 (96 + 13 * n) (by omega)).eval ρ.int -
+        (2 ^ (96 + 13 * n) - 1) := by
+  induction n with
+  | zero =>
+      simp only [List.range_zero, Fixed13FoldCoefficient, List.foldl_nil]
+      rw [show [:7].toList = List.range 7 by decide]
+      simpa using Fixed12FoldCoefficient.range_eq_windowValue
+        (ρ := ρ) k 7 (by omega)
+  | succ n ih =>
+      have hn' : n ≤ 12 := by omega
+      rw [List.range_succ, Fixed13FoldCoefficient, List.foldl_append]
+      simp only [List.foldl]
+      change Fixed13FoldCoefficient ρ k
+          (Fixed12FoldCoefficient ρ k [:7].toList) (List.range n) +
+          fixed13SelectedCoefficient ρ k n = _
+      rw [ih hn']
+      rw [fixed13SelectedCoefficient, dif_pos (by omega)]
+      rw [combWindowValue_eval_shift k (96 + 13 * n) 13 (by omega)]
+      have hsplitEval :
+          (windowValue k 1 (96 + 13 * (n + 1)) (by omega)).eval ρ.int =
+            (windowValue k 1 (96 + 13 * n) (by omega)).eval ρ.int +
+              2 ^ (96 + 13 * n) *
+                (windowValue k (1 + (96 + 13 * n)) 13 (by omega)).eval ρ.int := by
+        simpa only [show 96 + 13 * (n + 1) = (96 + 13 * n) + 13 by omega] using
+          windowValue_eval_split (ρ := ρ) k 1 (96 + 13 * n) 13 (by omega)
+      rw [hsplitEval]
+      simp only [fixedDigitCoefficient]
+      ring
+
+private theorem generator_zsmul_ne_zero_of_natAbs_lt {c : Int}
+    (hc : c ≠ 0) (hsmall : c.natAbs < scalarModulus) :
+    c • Reference.generator ≠ 0 := by
+  cases c with
+  | ofNat n =>
+      have hn : n ≠ 0 := by simpa using hc
+      change n < scalarModulus at hsmall
+      exact Reference.Aux.generator_nsmul_ne_zero hn hsmall
+  | negSucc n =>
+      simp only [Int.natAbs_negSucc] at hsmall
+      rw [negSucc_zsmul]
+      exact neg_ne_zero.mpr
+        (Reference.Aux.generator_nsmul_ne_zero (by omega) hsmall)
+
+private theorem odd_int_ne_zero {x : Int} (hx : Odd x) : x ≠ 0 := by
+  rcases hx with ⟨k, hk⟩
+  omega
+
+private theorem generator_odd_even_chord_safe {a b : Int}
+    (haOdd : Odd a) (hbEven : Even b) (hb : b ≠ 0)
+    (haSmall : a.natAbs < 2 ^ 252) (hbSmall : b.natAbs < 2 ^ 252) :
+    a • Reference.generator ≠ 0 ∧
+      b • Reference.generator ≠ 0 ∧
+      a • Reference.generator ≠ b • Reference.generator ∧
+      a • Reference.generator ≠ -(b • Reference.generator) := by
+  have hpowOrder : 2 ^ 253 < scalarModulus := by
+    norm_num [scalarModulus]
+  have hpow252Order : 2 ^ 252 < scalarModulus := by omega
+  have ha : a ≠ 0 := odd_int_ne_zero haOdd
+  have hdiffOdd : Odd (a - b) := haOdd.sub_even hbEven
+  have hsumOdd : Odd (a + b) := haOdd.add_even hbEven
+  have hdiffSmall : (a - b).natAbs < scalarModulus :=
+    (Int.natAbs_sub_le a b).trans_lt (by omega)
+  have hsumSmall : (a + b).natAbs < scalarModulus :=
+    (Int.natAbs_add_le a b).trans_lt (by omega)
+  refine ⟨generator_zsmul_ne_zero_of_natAbs_lt ha (haSmall.trans hpow252Order),
+    generator_zsmul_ne_zero_of_natAbs_lt hb (hbSmall.trans hpow252Order), ?_, ?_⟩
+  · intro heq
+    apply generator_zsmul_ne_zero_of_natAbs_lt
+      (odd_int_ne_zero hdiffOdd) hdiffSmall
+    rw [sub_zsmul, heq]
+    exact sub_self _
+  · intro heq
+    apply generator_zsmul_ne_zero_of_natAbs_lt
+      (odd_int_ne_zero hsumOdd) hsumSmall
+    rw [add_zsmul, heq]
+    exact neg_add_cancel _
+
+private theorem int_natAbs_le_of_bounds {x : Int} {n : Nat}
+    (hlower : -(n : Int) ≤ x) (hupper : x ≤ (n : Int)) : x.natAbs ≤ n := by
+  by_cases hnonneg : 0 ≤ x
+  · have hcastAbs : ((x.natAbs : Nat) : Int) = x :=
+      Int.natAbs_of_nonneg hnonneg
+    exact_mod_cast (hcastAbs.trans_le hupper)
+  · have hnonpos : x ≤ 0 := by omega
+    have hnegNonneg : 0 ≤ -x := by omega
+    have hcastAbs : ((x.natAbs : Nat) : Int) = -x := by
+      rw [← Int.natAbs_neg x]
+      exact Int.natAbs_of_nonneg hnegNonneg
+    have : -x ≤ (n : Int) := by omega
+    exact_mod_cast (hcastAbs.trans_le this)
+
+private theorem centeredCoefficient_odd_bound {bits value : Nat}
+    (hbits : 1 ≤ bits) (hvalue : value < 2 ^ bits) :
+    Odd (2 * (value : Int) - (2 ^ bits - 1)) ∧
+      (2 * (value : Int) - (2 ^ bits - 1)).natAbs ≤ 2 ^ bits - 1 := by
+  have hpowCast : ((2 : Int) ^ bits) = ((2 ^ bits : Nat) : Int) := by norm_num
+  have hpowEven : Even ((2 : Int) ^ bits) := by
+    rw [show bits = (bits - 1) + 1 by omega, pow_succ]
+    exact ⟨(2 : Int) ^ (bits - 1), by ring⟩
+  have haEq : 2 * (value : Int) - (2 ^ bits - 1) =
+      2 * (value : Int) + 1 - ((2 ^ bits : Nat) : Int) := by
+    rw [← hpowCast]
+    ring
+  have hodd : Odd (2 * (value : Int) - (2 ^ bits - 1)) := by
+    rw [haEq, ← hpowCast]
+    exact (odd_two_mul_add_one (value : Int)).sub_even hpowEven
+  have hvalue' : (value : Int) < ((2 ^ bits : Nat) : Int) := by exact_mod_cast hvalue
+  have hlower : -((2 ^ bits - 1 : Nat) : Int) ≤
+      2 * (value : Int) - (2 ^ bits - 1) := by
+    rw [haEq]
+    push_cast
+    omega
+  have hupper : 2 * (value : Int) - (2 ^ bits - 1) ≤
+      ((2 ^ bits - 1 : Nat) : Int) := by
+    rw [haEq]
+    push_cast
+    omega
+  have habs : (2 * (value : Int) - (2 ^ bits - 1)).natAbs ≤
+      2 ^ bits - 1 := by
+    exact int_natAbs_le_of_bounds hlower hupper
+  exact ⟨hodd, habs⟩
+
+private theorem centeredCoefficient_odd_small {bits value : Nat}
+    (hbits : 1 ≤ bits) (hbitsMax : bits ≤ 252) (hvalue : value < 2 ^ bits) :
+    Odd (2 * (value : Int) - (2 ^ bits - 1)) ∧
+      (2 * (value : Int) - (2 ^ bits - 1)).natAbs < 2 ^ 252 := by
+  have h := centeredCoefficient_odd_bound hbits hvalue
+  have hpowLe : 2 ^ bits ≤ 2 ^ 252 :=
+    Nat.pow_le_pow_right (by omega) hbitsMax
+  exact ⟨h.1, by omega⟩
+
+private theorem fixedDigitCoefficient_later_properties {offset width raw : Nat}
+    (hoffset : 1 ≤ offset) (hwidth : 1 ≤ width)
+    (hfit : offset + width ≤ 252) (hraw : raw < 2 ^ width) :
+    let c := fixedDigitCoefficient offset width raw
+    Even c ∧ c ≠ 0 ∧ c.natAbs < 2 ^ 252 := by
+  have hdigit := centeredCoefficient_odd_bound hwidth hraw
+  have hdigitNe : 2 * (raw : Int) - (2 ^ width - 1) ≠ 0 :=
+    odd_int_ne_zero hdigit.1
+  have hcoeff : fixedDigitCoefficient offset width raw =
+      (2 * (raw : Int) - (2 ^ width - 1)) * 2 ^ offset := by
+    unfold fixedDigitCoefficient
+    ring
+  have hpowNe : (2 : Int) ^ offset ≠ 0 := pow_ne_zero _ (by norm_num)
+  have hpowEven : Even ((2 : Int) ^ offset) := by
+    rw [show offset = (offset - 1) + 1 by omega, pow_succ]
+    exact ⟨(2 : Int) ^ (offset - 1), by ring⟩
+  have hbound : (fixedDigitCoefficient offset width raw).natAbs < 2 ^ 252 := by
+    rw [hcoeff, Int.natAbs_mul, Int.natAbs_pow]
+    calc
+      _ ≤ (2 ^ width - 1) * 2 ^ offset :=
+        Nat.mul_le_mul_right _ hdigit.2
+      _ < 2 ^ width * 2 ^ offset := by
+        have : 0 < 2 ^ offset := pow_pos (by omega) _
+        exact Nat.mul_lt_mul_of_pos_right (by omega) this
+      _ = 2 ^ (width + offset) := by rw [← pow_add]
+      _ ≤ 2 ^ 252 := by
+        apply Nat.pow_le_pow_right (by omega)
+        omega
+  exact ⟨by rw [hcoeff]; exact hpowEven.mul_left _,
+    by rw [hcoeff]; exact mul_ne_zero hdigitNe hpowNe, hbound⟩
+
+private theorem Fixed12FoldCoefficient.internal_properties {k : Fn}
+    (hk : k.val.Valid ρ) {cur : Nat} (hcur : cur < 7) :
+    Odd (Fixed12FoldCoefficient ρ k (List.range cur)) ∧
+      (Fixed12FoldCoefficient ρ k (List.range cur)).natAbs < 2 ^ 252 := by
+  rw [Fixed12FoldCoefficient.range_eq_windowValue k cur (by omega)]
+  rw [windowValue_eval hk 1 (12 * (cur + 1)) (by omega)]
+  apply centeredCoefficient_odd_small (by omega) (by omega)
+  exact BitVec.isLt _
+
+private theorem Fixed13FoldCoefficient.internal_properties {k : Fn}
+    (hk : k.val.Valid ρ) {cur : Nat} (hcur : cur < 12) :
+    Odd (Fixed13FoldCoefficient ρ k
+      (Fixed12FoldCoefficient ρ k [:7].toList) (List.range cur)) ∧
+      (Fixed13FoldCoefficient ρ k
+        (Fixed12FoldCoefficient ρ k [:7].toList)
+        (List.range cur)).natAbs < 2 ^ 252 := by
+  rw [Fixed13FoldCoefficient.range_eq_windowValue k cur (by omega)]
+  rw [windowValue_eval hk 1 (96 + 13 * cur) (by omega)]
+  apply centeredCoefficient_odd_small (by omega) (by omega)
+  exact BitVec.isLt _
+
+private theorem fixed12SelectedCoefficient.later_properties {k : Fn}
+    (hk : k.val.Valid ρ) {window : Nat} (hwindowLower : 1 ≤ window)
+    (hwindowUpper : window < 8) :
+    let c := fixed12SelectedCoefficient ρ k window
+    Even c ∧ c ≠ 0 ∧ c.natAbs < 2 ^ 252 := by
+  rw [fixed12SelectedCoefficient, dif_pos hwindowUpper]
+  rw [combWindowValue_eval_shift k (12 * window) 12 (by omega)]
+  rw [windowValue_eval hk (12 * window + 1) 12 (by omega)]
+  apply fixedDigitCoefficient_later_properties (by omega) (by omega) (by omega)
+  exact BitVec.isLt _
+
+private theorem fixed13SelectedCoefficient.later_properties {k : Fn}
+    (hk : k.val.Valid ρ) {window : Nat} (hwindow : window < 12) :
+    let c := fixed13SelectedCoefficient ρ k window
+    Even c ∧ c ≠ 0 ∧ c.natAbs < 2 ^ 252 := by
+  rw [fixed13SelectedCoefficient, dif_pos hwindow]
+  rw [combWindowValue_eval_shift k (96 + 13 * window) 13 (by omega)]
+  rw [windowValue_eval hk (96 + 13 * window + 1) 13 (by omega)]
+  apply fixedDigitCoefficient_later_properties (by omega) (by omega) (by omega)
+  exact BitVec.isLt _
+
+private theorem fixed12_internal_chord_safe {k : Fn} (hk : k.val.Valid ρ)
+    {pref suff : List Nat} {cur : Nat}
+    (hsplit : [:7].toList = pref ++ cur :: suff) :
+    let acc := Fixed12FoldPoint ρ k pref
+    let point := fixed12SelectedPoint ρ k (cur + 1)
+    acc ≠ 0 ∧ point ≠ 0 ∧ acc ≠ point ∧ acc ≠ -point := by
+  have hrange : [:7].toList = List.range 7 := by decide
+  have hsplit' : List.range 7 = pref ++ cur :: suff := by simpa [hrange] using hsplit
+  have hpref : pref = List.range cur := range_split_prefix hsplit'
+  have hcur : cur < 7 := by
+    have := List.mem_range.mp (by
+      rw [hsplit']
+      exact List.mem_append_right pref (List.mem_cons_self))
+    exact this
+  let a := Fixed12FoldCoefficient ρ k (List.range cur)
+  let b := fixed12SelectedCoefficient ρ k (cur + 1)
+  have ha := Fixed12FoldCoefficient.internal_properties hk hcur
+  have hb := fixed12SelectedCoefficient.later_properties
+    (ρ := ρ) (window := cur + 1) hk (by omega) (by omega)
+  have hsafe := generator_odd_even_chord_safe ha.1 hb.1 hb.2.1 ha.2 hb.2.2
+  rw [hpref, Fixed12FoldPoint.eq_zsmul hk, fixed12SelectedPoint_eq_zsmul hk]
+  exact hsafe
+
+private theorem fixed13_internal_chord_safe {k : Fn} (hk : k.val.Valid ρ)
+    {pref suff : List Nat} {cur : Nat}
+    (hsplit : [:12].toList = pref ++ cur :: suff) :
+    let acc := Fixed13FoldPoint ρ k (Fixed12FoldPoint ρ k [:7].toList) pref
+    let point := fixed13SelectedPoint ρ k cur
+    acc ≠ 0 ∧ point ≠ 0 ∧ acc ≠ point ∧ acc ≠ -point := by
+  have hrange : [:12].toList = List.range 12 := by decide
+  have hsplit' : List.range 12 = pref ++ cur :: suff := by simpa [hrange] using hsplit
+  have hpref : pref = List.range cur := range_split_prefix hsplit'
+  have hcur : cur < 12 := by
+    have := List.mem_range.mp (by
+      rw [hsplit']
+      exact List.mem_append_right pref (List.mem_cons_self))
+    exact this
+  have ha := Fixed13FoldCoefficient.internal_properties hk hcur
+  have hb := fixed13SelectedCoefficient.later_properties hk hcur
+  have hsafe := generator_odd_even_chord_safe ha.1 hb.1 hb.2.1 ha.2 hb.2.2
+  rw [Fixed13FoldPoint.eq_zsmul hk _ _ _
+      (Fixed12FoldPoint.eq_zsmul hk [:7].toList),
+    fixed13SelectedPoint_eq_zsmul hk, hpref]
+  exact hsafe
+
 theorem FixedCombPoint.eq_scalar {k : Fn} (hk : k.val.Valid ρ) :
     FixedCombPoint ρ k = (k.val.eval ρ).toNat • Reference.generator := by
   rw [FixedCombPoint.eq_zsmul hk, FixedCombCoefficient.eq_scalar hk]
@@ -487,18 +792,18 @@ theorem topLookupCoordinates_normalized {k : Fn} (hk : k.val.Valid ρ)
   mvcgen -trivial [fixedBaseComb12, WF.foldRange] invariants
   · ⇓⟨cur, out⟩ => ⌜Reference.NormalizedRep ρ out
       (Fixed12FoldPoint ρ k cur.prefix)⌝
-  case vc3.h.success.success pref cur suff hsplit acc hacc point hpoint out hadd =>
+  case vc3.h.success pref cur suff hsplit acc hacc point hpoint out hadd =>
     unfold Fixed12FoldPoint at hadd ⊢
     rw [List.foldl_append]
     simpa [fixed12SelectedPoint] using hadd
   case vc1.hk => exact hk
   case vc2.hk => exact hk
   case vc6 =>
-    intro _
-    assumption
+    intros
+    exact And.left (by assumption)
   case vc7 =>
-    intro hcoord
-    exact fixedLookup12Coordinates_normalized hk (by grind) hcoord
+    intros
+    exact (fixedLookup12Coordinates_normalized hk (by grind) (by assumption)).1
   case vc8.pre hcoord =>
     simpa [Fixed12FoldPoint] using
       fixedLookup12Coordinates_normalized hk (by omega) hcoord
@@ -525,6 +830,30 @@ theorem topLookupCoordinates_normalized {k : Fn} (hk : k.val.Valid ρ)
   case vc6 =>
     intro hcoord
     exact fixedLookup13Coordinates_normalized hk (by grind) hcoord
+  case vc7.h.pre => simpa [Fixed13FoldPoint] using hinitial
+  case vc8.h.post.success => intro h; exact h
+
+@[spec] theorem fixedBaseComb13Incomplete_sound {k : Fn}
+    {initial : AffineSlope.Point} {initialPoint : Reference.Point}
+    (hk : k.val.Valid ρ)
+    (hinitial : Reference.NormalizedRep ρ initial initialPoint) :
+    ⦃⌜True⌝⦄ Sound.interp ρ (fixedBaseComb13Incomplete k initial)
+    ⦃⇓ out => ⌜Reference.NormalizedRep ρ out
+      (Fixed13FoldPoint ρ k initialPoint [:12].toList)⌝⦄ := by
+  mvcgen -trivial [fixedBaseComb13Incomplete, WF.foldRange] invariants
+  · ⇓⟨cur, out⟩ => ⌜Reference.NormalizedRep ρ out
+      (Fixed13FoldPoint ρ k initialPoint cur.prefix)⌝
+  case vc2.h.success pref cur suff hsplit acc hacc point hpoint out hadd =>
+    unfold Fixed13FoldPoint at hadd ⊢
+    rw [List.foldl_append]
+    simpa [fixed13SelectedPoint] using hadd
+  case vc1.hk => exact hk
+  case vc5 =>
+    intro _
+    exact And.left (by assumption)
+  case vc6 =>
+    intro hcoord
+    exact (fixedLookup13Coordinates_normalized hk (by grind) hcoord).1
   case vc7.h.pre => simpa [Fixed13FoldPoint] using hinitial
   case vc8.h.post.success => intro h; exact h
 
@@ -567,14 +896,22 @@ theorem topLookupCoordinates_normalized {k : Fn} (hk : k.val.Valid ρ)
     intro hpoint
     exact fixedLookup12Coordinates_normalized hk (by grind) hpoint.2
   case vc10 =>
-    intro _
-    apply Reference.Aux.no_two_torsion_of_order
-    exact (by aesop)
-  case vc11.pre hpoint =>
+    intros
+    exact (fixed12_internal_chord_safe hk (by assumption)).1
+  case vc11 =>
+    intros
+    exact (fixed12_internal_chord_safe hk (by assumption)).2.1
+  case vc12 =>
+    intros
+    exact (fixed12_internal_chord_safe hk (by assumption)).2.2.1
+  case vc13 =>
+    intros
+    exact (fixed12_internal_chord_safe hk (by assumption)).2.2.2
+  case vc14.pre hpoint =>
     refine ⟨hpoint.1, ?_, Fixed12FoldPoint.order _ _ _⟩
     simpa [Fixed12FoldPoint] using
       fixedLookup12Coordinates_normalized hk (by omega) hpoint.2
-  case vc12.post.success => intros; aesop
+  case vc15.post.success => intros; aesop
 
 @[spec] theorem fixedBaseComb13_complete {k : Fn}
     {initial : AffineSlope.Point} {initialPoint : Reference.Point}
@@ -617,23 +954,74 @@ theorem topLookupCoordinates_normalized {k : Fn} (hk : k.val.Valid ρ)
       And.intro hinitialValid (And.intro hinitial hinitialOrder)
   case vc11.h.post.success => intros; aesop
 
+@[spec] theorem fixedBaseComb13Incomplete_complete {k : Fn}
+    {initial : AffineSlope.Point}
+    (hk : k.val.Valid ρ) (hinitialValid : initial.Valid ρ)
+    (hinitial : Reference.NormalizedRep ρ initial
+      (Fixed12FoldPoint ρ k [:7].toList)) :
+    ⦃⌜True⌝⦄ Complete.interp ρ (fixedBaseComb13Incomplete k initial)
+    ⦃⇓ out => ⌜out.Valid ρ ∧ Reference.NormalizedRep ρ out
+      (Fixed13FoldPoint ρ k (Fixed12FoldPoint ρ k [:7].toList)
+        [:12].toList)⌝⦄ := by
+  mvcgen -trivial [fixedBaseComb13Incomplete, WF.foldRange] invariants
+  · ⇓⟨cur, out⟩ => ⌜out.Valid ρ ∧
+      Reference.NormalizedRep ρ out
+        (Fixed13FoldPoint ρ k (Fixed12FoldPoint ρ k [:7].toList)
+          cur.prefix) ∧
+      scalarModulus •
+        Fixed13FoldPoint ρ k (Fixed12FoldPoint ρ k [:7].toList)
+          cur.prefix = 0⌝
+  case vc2.h.success.success pref cur suff hsplit acc hacc point hpoint out hadd =>
+    refine ⟨hadd.1, ?_, ?_⟩
+    · unfold Fixed13FoldPoint at hadd ⊢
+      rw [List.foldl_append]
+      simpa [fixed13SelectedPoint] using hadd.2
+    · unfold Fixed13FoldPoint
+      rw [List.foldl_append]
+      apply Reference.Aux.order_add hacc.2.2
+      unfold fixed13SelectedPoint
+      rw [dif_pos (by grind)]
+      exact fixedSignedPoint_order _ _ _
+  case vc1.hk => exact hk
+  case vc5 => intros; aesop
+  case vc6 => intros; assumption
+  case vc7 => intros; aesop
+  case vc8 =>
+    intro hpoint
+    exact fixedLookup13Coordinates_normalized hk (by grind) hpoint.2
+  case vc9 pref cur suff hsplit acc hacc point =>
+    intro _
+    exact (fixed13_internal_chord_safe hk hsplit).1
+  case vc10 pref cur suff hsplit acc hacc point =>
+    intro _
+    exact (fixed13_internal_chord_safe hk hsplit).2.1
+  case vc11 pref cur suff hsplit acc hacc point =>
+    intro _
+    exact (fixed13_internal_chord_safe hk hsplit).2.2.1
+  case vc12 pref cur suff hsplit acc hacc point =>
+    intro _
+    exact (fixed13_internal_chord_safe hk hsplit).2.2.2
+  case vc13.h.pre =>
+    simpa [Fixed13FoldPoint] using
+      And.intro hinitialValid (And.intro hinitial
+        (Fixed12FoldPoint.order ρ k [:7].toList))
+  case vc14.h.post.success => intros; aesop
+
 @[spec] theorem fixedBaseCombComplete_complete {k : Fn}
     (hk : k.val.Valid ρ) :
     ⦃⌜True⌝⦄ Complete.interp ρ (fixedBaseCombComplete k)
     ⦃⇓ out => ⌜out.Valid ρ ∧ Reference.NormalizedRep ρ out
       (FixedCombPoint ρ k)⌝⦄ := by
   mvcgen [fixedBaseCombComplete, FixedCombPoint]
-  case vc2.initialPoint => exact Fixed12FoldPoint ρ k [:7].toList
-  case vc4.hinitialValid => exact (by aesop)
-  case vc5.hinitial => exact (by aesop)
-  case vc6.hinitialOrder => exact Fixed12FoldPoint.order _ _ _
+  case vc3.hinitialValid => exact (by aesop)
+  case vc4.hinitial => exact (by aesop)
+  case vc6 => intros; exact (by aesop)
+  case vc7 => intros; assumption
   case vc8 => intros; exact (by aesop)
-  case vc9 => intros; assumption
-  case vc10 => intros; exact (by aesop)
-  case vc11 =>
+  case vc9 =>
     intros
     exact topLookupCoordinates_normalized hk (by assumption)
-  case vc12 =>
+  case vc10 =>
     intros
     apply Reference.Aux.no_two_torsion_of_order
     exact Fixed13FoldPoint.order _ _ _ _ (Fixed12FoldPoint.order _ _ _)

@@ -176,7 +176,7 @@ def fixedBaseComb12 (k : Fn) : Circuit AffineSlope.Point := do
     let point ← lookupFixed12 k (i + 1) (by
       have hi' : i < 7 := by simpa using hi.2.1
       omega)
-    AffineSlope.addCompleteCollapsed acc point
+    AffineSlope.addIncompleteChecked acc point
 
 def fixedBaseComb13 (k : Fn) (initial : AffineSlope.Point) :
     Circuit AffineSlope.Point :=
@@ -184,12 +184,21 @@ def fixedBaseComb13 (k : Fn) (initial : AffineSlope.Point) :
     let point ← lookupFixed13 k i (by simpa using hi.2.1)
     AffineSlope.addCompleteCollapsed acc point
 
-/-- Fixed-base comb using complete additions.  This is the first safe
-checkpoint; replacing its internal additions by proved-incomplete additions
-is a separate optimization. -/
+/-- Production-specific 13-bit comb continuation.  Unlike `fixedBaseComb13`,
+this is only seeded by the lower 96-bit positional comb, whose coefficient
+bound makes every chord denominator nonzero. -/
+def fixedBaseComb13Incomplete (k : Fn) (initial : AffineSlope.Point) :
+    Circuit AffineSlope.Point :=
+  WF.foldRange [:12] initial fun i hi acc => do
+    let point ← lookupFixed13 k i (by simpa using hi.2.1)
+    AffineSlope.addIncompleteChecked acc point
+
+/-- Fixed-base comb with checked incomplete additions across the positional
+12- and 13-bit schedules.  The final top-window addition remains complete
+because the two operands can be opposites when the fixed scalar is zero. -/
 def fixedBaseCombComplete (k : Fn) : Circuit AffineSlope.Point := do
   let acc12 ← fixedBaseComb12 k
-  let acc ← fixedBaseComb13 k acc12
+  let acc ← fixedBaseComb13Incomplete k acc12
   let top ← lookupFixedTop k
   AffineSlope.addCompleteCollapsed acc top
 

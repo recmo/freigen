@@ -514,7 +514,7 @@ theorem fixedBaseComb12_wf_aux :
         left right hscalar
       apply hlookup.bind
       intro C pointL pointR hpoint
-      have hadd := AffineSlope.addCompleteCollapsed_wf_aux.relHom C
+      have hadd := AffineSlope.addIncompleteChecked_wf_aux.relHom C
         (accL, pointL) (accR, pointR) (by
           intro lv rv hC
           have hp := hpoint lv rv hC
@@ -569,6 +569,43 @@ theorem fixedBaseComb13_wf_aux :
   · intro _ _ _ _ hpost
     exact hpost.2
 
+theorem fixedBaseComb13Incomplete_wf_aux :
+    WF.GadgetSpec FixedBaseComb13Input.WFRel
+      (fun input => fixedBaseComb13Incomplete input.1 input.2)
+      AffineSlope.Point.WFRel := by
+  unfold WF.GadgetSpec
+  intro left right
+  unfold fixedBaseComb13Incomplete
+  refine WF.Rel.mono (WF.Rel.foldRange_rule
+    (I := fun lv rv leftAcc rightAcc =>
+      FixedBaseComb13Input.WFRel lv rv left right ∧
+        AffineSlope.Point.WFRel lv rv leftAcc rightAcc)
+    ?_ ?_) ?_
+  · intro lv rv h
+    exact ⟨h, h.2⟩
+  · intro i hi P accL accR hacc
+    have hscalar : ∀ lv rv, P lv rv →
+        Modular.Elem.ScalarWFRel lv rv left.1 right.1 := by
+      intro lv rv hP
+      exact (hacc lv rv hP).1.1
+    have hlookup := (lookupFixed13_wf_aux i (by
+      simpa using hi.2.1)).relHom P
+      left.1 right.1 hscalar
+    apply hlookup.bind
+    intro C pointL pointR hpoint
+    have hadd := AffineSlope.addIncompleteChecked_wf_aux.relHom C
+      (accL, pointL) (accR, pointR) (by
+        intro lv rv hC
+        have hp := hpoint lv rv hC
+        have ha := hacc lv rv hp.1
+        exact ⟨ha.2, hp.2⟩)
+    exact WF.Rel.mono hadd (by
+      intro lv rv outL outR hpost
+      have hp := hpoint lv rv hpost.1
+      exact ⟨hp.1, (hacc lv rv hp.1).1, hpost.2⟩)
+  · intro _ _ _ _ hpost
+    exact hpost.2
+
 theorem fixedBaseCombComplete_wf_aux :
     WF.GadgetSpec Modular.Elem.ScalarWFRel fixedBaseCombComplete
       AffineSlope.Point.WFRel := by
@@ -582,7 +619,7 @@ theorem fixedBaseCombComplete_wf_aux :
   · intro B acc12L acc12R hacc12
     apply WF.GadgetSpec.bind_rule
       (left := (left, acc12L)) (right := (right, acc12R))
-      fixedBaseComb13_wf_aux
+      fixedBaseComb13Incomplete_wf_aux
     · intro lv rv hB
       have h12 := hacc12 lv rv hB
       exact ⟨h12.1, h12.2⟩
