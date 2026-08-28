@@ -219,17 +219,182 @@ def selectFormula (choose : LC ℤ) (whenOne whenZero : Rep) : Circuit Rep :=
 the infinity bit cancels the curve's `a = -3` tangent numerator, while adding
 the bit to `2*y` makes the denominator one.  The ordinary output equations
 then return `(0,0)` directly, with no coordinate selectors. -/
+def doubleSquareHint (P : Point) : Circuit (Vector (LC Bool) 512) :=
+  hint h![P.X.intVal] fun h![(x : Int)] =>
+    if hx : 0 ≤ x then
+      let value := x.toNat * x.toNat
+      let r := value % base.modulus
+      let q := value / base.modulus
+      pure $ Vector.ofFn (n := 512) fun i =>
+        if hi : i.val < 256 then r.testBit i.val
+        else q.testBit (i.val - 256)
+    else fail s!"negative P-256 doubling x-coordinate {x}"
+
+def doubleSquareDecodeR (bits : Vector (LC Bool) 512) : Circuit (U 256) :=
+  U.fromWord {
+    bitsLE := Vector.ofFn (n := 256) fun i => bits[i.val]'(by omega) }
+
+def doubleSquareDecodeQ (bits : Vector (LC Bool) 512) : Circuit (U 256) :=
+  U.fromWord {
+    bitsLE := Vector.ofFn (n := 256) fun i =>
+      bits[256 + i.val]'(by omega) }
+
+def doubleSquareCheck (P : Point) (r q : U 256) : Circuit Unit :=
+  assertR1C P.X.intVal P.X.intVal
+    (r.intVal + base.modulus • q.intVal)
+
+def doubleSquare (P : Point) : Circuit Rep := do
+  let bits ← doubleSquareHint P
+  let r ← doubleSquareDecodeR bits
+  let q ← doubleSquareDecodeQ bits
+  doubleSquareCheck P r q
+  pure ⟨r.intVal, 2⟩
+
+def doubleSlopeNumerator (P : Point) (x2 : Rep) : Rep :=
+  add (sub (scale 3 x2) (ofElem three)) ⟨3 • P.infinity, 1⟩
+
+def doubleSlopeDenominator (P : Point) : Rep :=
+  add (scale 2 P.Y) ⟨P.infinity, 1⟩
+
+def doubleSlopeHint (denominator numerator : Rep) :
+    Circuit (Vector (LC Bool) 513) :=
+  let bias := numerator.bound * base.modulus
+  hint h![denominator.intVal, numerator.intVal]
+    fun h![(a : Int), (b : Int)] =>
+      if ha : 0 ≤ a then
+        if hb : 0 ≤ b then
+          let d := a.toNat % base.modulus
+          if hd : d = 0 then
+            fail "zero denominator in P-256 doubling"
+          else if hg : Nat.gcd d base.modulus = 1 then
+            let inverse :=
+              ((Nat.gcdA d base.modulus) % (base.modulus : Int)).toNat
+            let value := (inverse * (b.toNat % base.modulus)) % base.modulus
+            let shifted := (value : Int) * a + bias - b
+            if hs : 0 ≤ shifted then
+              let q := shifted.toNat / base.modulus
+              pure $ Vector.ofFn (n := 513) fun i =>
+                if hi : i.val < 256 then value.testBit i.val
+                else q.testBit (i.val - 256)
+            else fail s!"negative P-256 doubling slope dividend {shifted}"
+          else fail "noninvertible denominator in P-256 doubling"
+        else fail s!"negative P-256 doubling numerator {b}"
+      else fail s!"negative P-256 doubling denominator {a}"
+
+def doubleSlopeDecodeValue (bits : Vector (LC Bool) 513) : Circuit (U 256) :=
+  U.fromWord {
+    bitsLE := Vector.ofFn (n := 256) fun i => bits[i.val]'(by omega) }
+
+def doubleSlopeDecodeQ (bits : Vector (LC Bool) 513) : Circuit (U 257) :=
+  U.fromWord {
+    bitsLE := Vector.ofFn (n := 257) fun i =>
+      bits[256 + i.val]'(by omega) }
+
+def doubleSlopeCheck (denominator numerator : Rep)
+    (value : U 256) (q : U 257) : Circuit Unit :=
+  let bias := numerator.bound * base.modulus
+  assertR1C value.intVal denominator.intVal
+    (numerator.intVal + base.modulus • q.intVal - LC.ofConst (bias : Int))
+
+def doubleSlopeFromSquare (P : Point) (x2 : Rep) : Circuit Rep := do
+  let numerator := doubleSlopeNumerator P x2
+  let denominator := doubleSlopeDenominator P
+  let bits ← doubleSlopeHint denominator numerator
+  let value ← doubleSlopeDecodeValue bits
+  let q ← doubleSlopeDecodeQ bits
+  doubleSlopeCheck denominator numerator value q
+  pure ⟨value.intVal, 2⟩
+
 def doubleSlope (P : Point) : Circuit Rep := do
-  let x2 ← Modular.Lazy.mul base P.X P.X
-  let numerator := add (sub (scale 3 x2) (ofElem three))
-    ⟨3 • P.infinity, 1⟩
-  let denominator := add (scale 2 P.Y) ⟨P.infinity, 1⟩
-  Modular.Lazy.divide base denominator numerator
+  let x2 ← doubleSquare P
+  doubleSlopeFromSquare P x2
+
+def finishDoubleXTarget (P : Point) : Rep := scale 2 P.X
+
+def finishDoubleXHint (slope target : Rep) :
+    Circuit (Vector (LC Bool) 512) :=
+  let bias := target.bound * base.modulus
+  hint h![slope.intVal, target.intVal]
+    fun h![(a : Int), (c : Int)] =>
+      let shifted := a * a + bias - c
+      if hs : 0 ≤ shifted then
+        let value := shifted.toNat
+        let r := value % base.modulus
+        let q := value / base.modulus
+        pure $ Vector.ofFn (n := 512) fun i =>
+          if hi : i.val < 256 then r.testBit i.val
+          else q.testBit (i.val - 256)
+      else fail s!"negative P-256 doubling X dividend {shifted}"
+
+def finishDoubleXDecodeR (bits : Vector (LC Bool) 512) : Circuit (U 256) :=
+  U.fromWord {
+    bitsLE := Vector.ofFn (n := 256) fun i => bits[i.val]'(by omega) }
+
+def finishDoubleXDecodeQ (bits : Vector (LC Bool) 512) : Circuit (U 256) :=
+  U.fromWord {
+    bitsLE := Vector.ofFn (n := 256) fun i =>
+      bits[256 + i.val]'(by omega) }
+
+def finishDoubleXCheck (slope target : Rep) (r q : U 256) : Circuit Unit :=
+  let bias := target.bound * base.modulus
+  assertR1C slope.intVal slope.intVal
+    (r.intVal + target.intVal + base.modulus • q.intVal -
+      LC.ofConst (bias : Int))
+
+def finishDoubleX (P : Point) (slope : Rep) : Circuit Fp := do
+  let target := finishDoubleXTarget P
+  let bits ← finishDoubleXHint slope target
+  let r ← finishDoubleXDecodeR bits
+  let q ← finishDoubleXDecodeQ bits
+  finishDoubleXCheck slope target r q
+  pure ⟨r⟩
+
+def finishDoubleYFactor (P : Point) (x3 : Fp) : Rep :=
+  sub P.X (ofElem x3)
+
+def finishDoubleYHint (slope factor target : Rep) :
+    Circuit (Vector (LC Bool) 514) :=
+  let bias := target.bound * base.modulus
+  hint h![slope.intVal, factor.intVal, target.intVal]
+    fun h![(a : Int), (b : Int), (c : Int)] =>
+      let shifted := a * b + bias - c
+      if hs : 0 ≤ shifted then
+        let value := shifted.toNat
+        let r := value % base.modulus
+        let q := value / base.modulus
+        pure $ Vector.ofFn (n := 514) fun i =>
+          if hi : i.val < 256 then r.testBit i.val
+          else q.testBit (i.val - 256)
+      else fail s!"negative P-256 doubling Y dividend {shifted}"
+
+def finishDoubleYDecodeR (bits : Vector (LC Bool) 514) : Circuit (U 256) :=
+  U.fromWord {
+    bitsLE := Vector.ofFn (n := 256) fun i => bits[i.val]'(by omega) }
+
+def finishDoubleYDecodeQ (bits : Vector (LC Bool) 514) : Circuit (U 258) :=
+  U.fromWord {
+    bitsLE := Vector.ofFn (n := 258) fun i =>
+      bits[256 + i.val]'(by omega) }
+
+def finishDoubleYCheck (slope factor target : Rep)
+    (r : U 256) (q : U 258) : Circuit Unit :=
+  let bias := target.bound * base.modulus
+  assertR1C slope.intVal factor.intVal
+    (r.intVal + target.intVal + base.modulus • q.intVal -
+      LC.ofConst (bias : Int))
+
+def finishDoubleY (P : Point) (slope : Rep) (x3 : Fp) : Circuit Fp := do
+  let factor := finishDoubleYFactor P x3
+  let bits ← finishDoubleYHint slope factor P.Y
+  let r ← finishDoubleYDecodeR bits
+  let q ← finishDoubleYDecodeQ bits
+  finishDoubleYCheck slope factor P.Y r q
+  pure ⟨r⟩
 
 def finishDouble (P : Point) (slope : Rep) : Circuit Point := do
-  let x3 ← Modular.Lazy.mulSubToElem base slope slope (scale 2 P.X)
+  let x3 ← finishDoubleX P slope
   let x3r := ofElem x3
-  let y3 ← Modular.Lazy.mulSubToElem base slope (sub P.X x3r) P.Y
+  let y3 ← finishDoubleY P slope x3
   pure ⟨x3r, ofElem y3, P.infinity⟩
 
 def doubleComplete (P : Point) : Circuit Point := do

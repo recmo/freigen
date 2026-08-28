@@ -212,14 +212,17 @@ reference predicate. -/
     intros
     exact hvalid
   case vc7 =>
-    intro hslope _ _
+    intro hslope _ _ _
     exact hslope
   case vc8 =>
-    intro _ hslopeBound _
+    intro _ hslopeBound _ _
     exact hslopeBound
+  case vc9 =>
+    intro _ _ hslopeCanonical _
+    exact hslopeCanonical
   case vc5.success.success slope out =>
     intro houtValid houtSpec
-    exact ⟨houtValid, Aux.double_specs_mathlib hP slope.2.2 houtSpec⟩
+    exact ⟨houtValid, Aux.double_specs_mathlib hP slope.2.2.2 houtSpec⟩
 
 /-- Quotient well-formedness of the real doubling circuit under every pair
 of total valuations. -/

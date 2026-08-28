@@ -92,7 +92,7 @@ theorem verifyDigest_wf :
 message hash supplied as input. SHA-256 is not part of this circuit. -/
 
 /--
-info: { mRows := 885608, mCols := 885608, r1csRows := 7954, cost := 2664778 }
+info: { mRows := 876929, mCols := 876929, r1csRows := 7954, cost := 2638741 }
 -/
 #guard_msgs in
 #eval verifyDigestCS.2.stats
