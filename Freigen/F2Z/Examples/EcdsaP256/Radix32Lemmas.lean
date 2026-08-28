@@ -1,5 +1,6 @@
 import Freigen.F2Z.Examples.EcdsaP256.Lemmas
 import Freigen.F2Z.Examples.EcdsaP256.Radix32Impl
+import Freigen.F2Z.Examples.P256.IncompleteLemmas
 
 /-!
 # Signed radix-32 ECDSA-P256 lemmas
@@ -28,15 +29,120 @@ def Radix32TableSpec (rho : WF.Valuation) (table : Radix32Table)
 def Radix32TableValid (rho : WF.Valuation) (table : Radix32Table) : Prop :=
   (∀ i : Fin 16, table.low[i].Valid rho) ∧ table.p16.Valid rho
 
+private theorem table_nsmul_ne_zero {q : P256.Reference.Point}
+    (hq : q ≠ 0) (horder : P256.scalarModulus • q = 0)
+    {k : Nat} (hk0 : k ≠ 0) (hk : k < P256.scalarModulus) :
+    k • q ≠ 0 := by
+  intro hzero
+  have hdvd : P256.scalarModulus ∣ k := by
+    rw [← Reference.Aux.addOrderOf_eq_scalarModulus hq horder,
+      addOrderOf_dvd_iff_nsmul_eq_zero]
+    exact hzero
+  exact (Nat.not_dvd_of_pos_of_lt (Nat.pos_of_ne_zero hk0) hk) hdvd
+
+private theorem table_multiple_ne_self {q : P256.Reference.Point}
+    (hq : q ≠ 0) (horder : P256.scalarModulus • q = 0)
+    {k : Nat} (hk : 1 < k) (hklt : k - 1 < P256.scalarModulus) :
+    k • q ≠ q := by
+  intro heq
+  have hsplit : k = (k - 1) + 1 := by omega
+  rw [hsplit, add_nsmul, one_nsmul] at heq
+  have hcancel : (k - 1) • q + q = 0 + q := by simpa using heq
+  have hz : (k - 1) • q = 0 := add_right_cancel hcancel
+  exact table_nsmul_ne_zero hq horder (by omega) hklt hz
+
+private theorem table_multiple_ne_neg {q : P256.Reference.Point}
+    (hq : q ≠ 0) (horder : P256.scalarModulus • q = 0)
+    {k : Nat} (hklt : k + 1 < P256.scalarModulus) :
+    k • q ≠ -q := by
+  intro heq
+  have hz : (k + 1) • q = 0 := by
+    rw [add_nsmul, one_nsmul, heq, neg_add_cancel]
+  exact table_nsmul_ne_zero hq horder (by omega) hklt hz
+
+private theorem table_chord_safe {q : P256.Reference.Point}
+    (hq : q ≠ 0) (horder : P256.scalarModulus • q = 0)
+    {k : Nat} (hk : 1 < k) (hklt : k + 1 < P256.scalarModulus) :
+    k • q ≠ 0 ∧ q ≠ 0 ∧ k • q ≠ q ∧ k • q ≠ -q := by
+  exact ⟨table_nsmul_ne_zero hq horder (by omega) (by omega), hq,
+    table_multiple_ne_self hq horder hk (by omega),
+    table_multiple_ne_neg hq horder hklt⟩
+
+@[spec] theorem addRadix32Multiple_sound
+    {P Q : P256.AffineSlope.Point} {q : P256.Reference.Point} {k : Nat}
+    (hP : P256.Reference.NormalizedRep ρ P (k • q))
+    (hQ : P256.Reference.NormalizedRep ρ Q q) :
+    ⦃⌜True⌝⦄ Sound.interp ρ (addRadix32Multiple k P Q)
+    ⦃⇓ out => ⌜P256.Reference.NormalizedRep ρ out ((k + 1) • q)⌝⦄ := by
+  unfold addRadix32Multiple
+  apply Triple.iff_conseq.mp
+    (P256.AffineSlope.addIncompleteChecked_sound_mathlib hP.1 hQ.1) (by simp)
+  simp only [PostCond.entails, SPred.entails_nil]
+  exact ⟨fun _ h => by simpa only [add_nsmul, one_nsmul] using h,
+    ExceptConds.entails.refl _⟩
+
+@[spec] theorem addRadix32Multiple_complete
+    {P Q : P256.AffineSlope.Point} {q : P256.Reference.Point} {k : Nat}
+    (hPvalid : P.Valid ρ) (hQvalid : Q.Valid ρ)
+    (hP : P256.Reference.NormalizedRep ρ P (k • q))
+    (hQ : P256.Reference.NormalizedRep ρ Q q)
+    (hq : q ≠ 0) (horder : P256.scalarModulus • q = 0)
+    (hk : 1 < k) (hklt : k + 1 < P256.scalarModulus) :
+    ⦃⌜True⌝⦄ Complete.interp ρ (addRadix32Multiple k P Q)
+    ⦃⇓ out => ⌜out.Valid ρ ∧ P256.Reference.NormalizedRep ρ out
+      ((k + 1) • q)⌝⦄ := by
+  rcases table_chord_safe hq horder hk hklt with ⟨hP0, hq0, hne, hneNeg⟩
+  unfold addRadix32Multiple
+  apply Triple.iff_conseq.mp
+    (P256.AffineSlope.addIncompleteChecked_complete_mathlib
+      hPvalid hQvalid hP hQ hP0 hq0 hne hneNeg) (by simp)
+  simp only [PostCond.entails, SPred.entails_nil]
+  exact ⟨fun _ h => ⟨h.1, by
+      simpa only [add_nsmul, one_nsmul] using h.2⟩,
+    ExceptConds.entails.refl _⟩
+
 @[spec] theorem materializeRadix32Multiples_sound {P : P256.Projective}
     {q : P256.Reference.Point}
     (hP : P256.Reference.Represents ρ
       (P256.AffineSlope.ofElems P.X P.Y) q) :
     ⦃⌜True⌝⦄ Sound.interp ρ (materializeRadix32Multiples P)
     ⦃⇓ table => ⌜Radix32TableSpec ρ table q⌝⦄ := by
-  mvcgen [materializeRadix32Multiples, Radix32TableSpec]
-  case vc4.hP table htable => exact htable 8
+  have hP' : P256.Reference.NormalizedRep ρ
+      (P256.AffineSlope.ofElems P.X P.Y) q := by
+    refine ⟨hP, ?_⟩
+    intro hq
+    have hinf := P256.Reference.Aux.represents_zero (hq ▸ hP)
+    simp [P256.AffineSlope.ofElems] at hinf
+  mvcgen [addRadix32Multiple_sound, materializeRadix32Multiples,
+    Radix32TableSpec]
+  case vc38.success =>
+    rename_i p2 hp2 p3 hp3 p4 hp4 p5 hp5 p6 hp6 p7 hp7 p8 hp8
+      p9 hp9 p10 hp10 p11 hp11 p12 hp12 p13 hp13 p14 hp14 p15 hp15
+      p16 hp16
+    constructor
+    · intro i
+      fin_cases i
+      · simp [P256.AffineSlope.infinity,
+          P256.Reference.NormalizedRep, P256.Reference.Represents,
+          P256.Reference.circuitCoordinates, P256.Reference.coordinates]
+      · simpa using hP'
+      · simpa using hp2
+      · simpa using hp3
+      · simpa using hp4
+      · simpa using hp5
+      · simpa using hp6
+      · simpa using hp7
+      · simpa using hp8
+      · simpa using hp9
+      · simpa using hp10
+      · simpa using hp11
+      · simpa using hp12
+      · simpa using hp13
+      · simpa using hp14
+      · simpa using hp15
+    · simpa using hp16
 
+set_option maxHeartbeats 1000000 in
 @[spec] theorem materializeRadix32Multiples_complete {P : P256.Projective}
     {q : P256.Reference.Point}
     (hPvalid : P.Valid ρ)
@@ -46,14 +152,83 @@ def Radix32TableValid (rho : WF.Valuation) (table : Radix32Table) : Prop :=
     ⦃⌜True⌝⦄ Complete.interp ρ (materializeRadix32Multiples P)
     ⦃⇓ table => ⌜Radix32TableValid ρ table ∧
       Radix32TableSpec ρ table q⌝⦄ := by
-  mvcgen [materializeRadix32Multiples, Radix32TableValid,
-    Radix32TableSpec]
-  case vc6.hPvalid table htable => exact (htable 8).1
-  case vc7.hP table htable => exact (htable 8).2
-  case vc9.success.success =>
-    rename_i table htable p16 hp16
-    exact ⟨⟨fun i => (htable i).1, hp16.1⟩,
-      ⟨fun i => (htable i).2, by simpa using hp16.2⟩⟩
+  have hP' : P256.Reference.NormalizedRep ρ
+      (P256.AffineSlope.ofElems P.X P.Y) q := by
+    refine ⟨hP, ?_⟩
+    intro hq
+    have hinf := P256.Reference.Aux.represents_zero (hq ▸ hP)
+    simp [P256.AffineSlope.ofElems] at hinf
+  have hq : q ≠ 0 := by
+    intro hzero
+    have hinf := P256.Reference.Aux.represents_zero (hzero ▸ hP)
+    simp [P256.AffineSlope.ofElems] at hinf
+  have hPvalid' := ofElems_valid hPvalid
+  have hInfinityValid : P256.AffineSlope.infinity.Valid ρ := by
+    have hz : P256.zero.Valid ρ :=
+      Modular.ofNat_valid P256.base 0 (by native_decide) (by native_decide)
+    exact ⟨rfl, Modular.Lazy.ofElem_valid P256.base hz, hz.2,
+      rfl, Modular.Lazy.ofElem_valid P256.base hz, hz.2,
+      by simp [P256.AffineSlope.infinity]⟩
+  mvcgen [addRadix32Multiple_complete, doubleMultiple_complete,
+    materializeRadix32Multiples, Radix32TableValid, Radix32TableSpec]
+  all_goals first
+    | exact q
+    | exact horder
+    | exact hq
+    | exact hPvalid'
+    | exact hP'
+    | exact hInfinityValid
+    | omega
+    | (apply And.left <;> assumption)
+    | (apply And.right <;> assumption)
+    | skip
+  case vc96.success =>
+    rename_i p2 hp2 p3 hp3 p4 hp4 p5 hp5 p6 hp6 p7 hp7 p8 hp8
+      p9 hp9 p10 hp10 p11 hp11 p12 hp12 p13 hp13 p14 hp14 p15 hp15
+      p16 hp16
+    constructor
+    · constructor
+      · intro i
+        fin_cases i
+        · exact hInfinityValid
+        · exact hPvalid'
+        · exact hp2.1
+        · exact hp3.1
+        · exact hp4.1
+        · exact hp5.1
+        · exact hp6.1
+        · exact hp7.1
+        · exact hp8.1
+        · exact hp9.1
+        · exact hp10.1
+        · exact hp11.1
+        · exact hp12.1
+        · exact hp13.1
+        · exact hp14.1
+        · exact hp15.1
+      · exact hp16.1
+    · constructor
+      · intro i
+        fin_cases i
+        · simp [P256.AffineSlope.infinity,
+            P256.Reference.NormalizedRep, P256.Reference.Represents,
+            P256.Reference.circuitCoordinates, P256.Reference.coordinates]
+        · simpa using hP'
+        · simpa using hp2.2
+        · simpa using hp3.2
+        · simpa using hp4.2
+        · simpa using hp5.2
+        · simpa using hp6.2
+        · simpa using hp7.2
+        · simpa using hp8.2
+        · simpa using hp9.2
+        · simpa using hp10.2
+        · simpa using hp11.2
+        · simpa using hp12.2
+        · simpa using hp13.2
+        · simpa using hp14.2
+        · simpa using hp15.2
+      · simpa using hp16.2
 
 def SignedDigitSpec (rho : WF.Valuation) (value : LC ℤ)
     (digit : SignedDigit) : Prop :=

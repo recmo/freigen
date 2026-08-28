@@ -1,5 +1,6 @@
 import Freigen.F2Z.Examples.EcdsaP256.Radix32Production
 import Freigen.F2Z.Examples.EcdsaP256.WF
+import Freigen.F2Z.Examples.P256.IncompleteWF
 
 /-! Quotient well-formedness proofs for the signed radix-32 verifier. -/
 
@@ -64,26 +65,60 @@ private theorem lceq_nsmul (k : Nat) {lv rv : WF.Valuation}
 theorem materializeRadix32Multiples_wf_aux :
     WF.GadgetSpec Projective.WFRel materializeRadix32Multiples
       Radix32Table.WFRel := by
-  unfold WF.GadgetSpec
-  intro left right
-  unfold materializeRadix32Multiples
-  apply WF.GadgetSpec.bind_rule
-    (left := left) (right := right) materializeMultiples_wf_aux
-  · intro lv rv h
-    exact h
-  · intro B tableL tableR htable
-    apply WF.GadgetSpec.bind_rule
-      (left := tableL[8]) (right := tableR[8])
-      AffineSlope.doubleComplete_wf_aux
-    · intro lv rv hB
-      have ht := htable lv rv hB
-      exact ht.2 ⟨8, by omega⟩
-    · intro C p16L p16R hp16
-      apply WF.Rel.pure
-      intro lv rv hC
-      have hp := hp16 lv rv hC
-      have ht := htable lv rv hp.1
-      exact ⟨ht.2, hp.2⟩
+  wfgen' using [AffineSlope.addIncompleteChecked_wf_aux,
+    AffineSlope.doubleComplete_wf_aux]
+    unfold [materializeRadix32Multiples, addRadix32Multiple, doubleMultiple]
+  case vc1 =>
+    rename_i B1 p2L p2R h1 B2 p3L p3R h2 B3 p4L p4R h3
+      B4 p5L p5R h4 B5 p6L p6R h5 B6 p7L p7R h6
+      B7 p8L p8R h7 B8 p9L p9R h8 B9 p10L p10R h9
+      B10 p11L p11R h10 B11 p12L p12R h11
+      B12 p13L p13R h12 B13 p14L p14R h13
+      B14 p15L p15R h14 h15 hB
+    have r16 := h15 leftVal rightVal hB
+    have r15 := h14 leftVal rightVal r16.1
+    have r14 := h13 leftVal rightVal r15.1
+    have r13 := h12 leftVal rightVal r14.1
+    have r12 := h11 leftVal rightVal r13.1
+    have r11 := h10 leftVal rightVal r12.1
+    have r10 := h9 leftVal rightVal r11.1
+    have r9 := h8 leftVal rightVal r10.1
+    have r8 := h7 leftVal rightVal r9.1
+    have r7 := h6 leftVal rightVal r8.1
+    have r6 := h5 leftVal rightVal r7.1
+    have r5 := h4 leftVal rightVal r6.1
+    have r4 := h3 leftVal rightVal r5.1
+    have r3 := h2 leftVal rightVal r4.1
+    have r2 := h1 leftVal rightVal r3.1
+    have r1 := AffineSlope.ofElems_wfRel r2.1.1 r2.1.2.1
+    constructor
+    · intro i
+      fin_cases i <;>
+        simp only [Fin.getElem_fin, Vector.getElem_mk,
+          ← Array.getElem_toList, List.getElem_cons_zero,
+          List.getElem_cons_succ] <;>
+        first
+        | exact AffineSlope.infinity_wfRel leftVal rightVal
+        | exact r1
+        | exact r2.2
+        | exact r3.2
+        | exact r4.2
+        | exact r5.2
+        | exact r6.2
+        | exact r7.2
+        | exact r8.2
+        | exact r9.2
+        | exact r10.2
+        | exact r11.2
+        | exact r12.2
+        | exact r13.2
+        | exact r14.2
+        | exact r15.2
+    · exact r16.2
+  all_goals
+    have hprojective : Projective.WFRel leftVal rightVal left right := by
+      grind (ematch := 100)
+    exact AffineSlope.ofElems_wfRel hprojective.1 hprojective.2.1
 
 theorem signedDigitIndicators_wf_aux :
     WF.GadgetSpec

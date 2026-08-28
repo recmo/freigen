@@ -1,4 +1,5 @@
 import Freigen.F2Z.Examples.EcdsaP256.Impl
+import Freigen.F2Z.Examples.P256.IncompleteImpl
 
 /-! Experimental signed radix-32 joint scalar multiplication. -/
 
@@ -17,11 +18,32 @@ structure Radix32Table where
   low : Vector AffineSlope.Point 16
   p16 : AffineSlope.Point
 
+/-- Proof index for a checked chord extension of the radix-32 table.  The
+index is erased from the generated circuit. -/
+def addRadix32Multiple (_k : Nat) (P Q : AffineSlope.Point) :
+    Circuit AffineSlope.Point :=
+  AffineSlope.addIncompleteChecked P Q
+
 def materializeRadix32Multiples (P : Projective) :
     Circuit Radix32Table := do
-  let table ← materializeMultiples P
-  let p16 ← doubleMultiple 8 table[8]
-  pure ⟨table, p16⟩
+  let p1 := AffineSlope.ofElems P.X P.Y
+  let p2 ← doubleMultiple 1 p1
+  let p3 ← addRadix32Multiple 2 p2 p1
+  let p4 ← doubleMultiple 2 p2
+  let p5 ← addRadix32Multiple 4 p4 p1
+  let p6 ← doubleMultiple 3 p3
+  let p7 ← addRadix32Multiple 6 p6 p1
+  let p8 ← doubleMultiple 4 p4
+  let p9 ← addRadix32Multiple 8 p8 p1
+  let p10 ← doubleMultiple 5 p5
+  let p11 ← addRadix32Multiple 10 p10 p1
+  let p12 ← doubleMultiple 6 p6
+  let p13 ← addRadix32Multiple 12 p12 p1
+  let p14 ← doubleMultiple 7 p7
+  let p15 ← addRadix32Multiple 14 p14 p1
+  let p16 ← doubleMultiple 8 p8
+  pure ⟨#v[AffineSlope.infinity, p1, p2, p3, p4, p5, p6, p7, p8,
+    p9, p10, p11, p12, p13, p14, p15], p16⟩
 
 def applyPointSign (negative : LC ℤ) (P : AffineSlope.Point) :
     Circuit AffineSlope.Point := do
