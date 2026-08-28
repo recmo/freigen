@@ -26,8 +26,12 @@ def computeVerificationDirectTerminal (input : PreparedVerification) :
     Circuit Unit :=
   fixedCombVerificationDirectTerminal input
 
+def computeVerificationDeltaBlock (input : PreparedVerification) :
+    Circuit Unit :=
+  fixedCombVerificationDeltaBlock input
+
 def finishVerification (input : PreparedVerification) : Circuit Unit :=
-  computeVerificationDirectTerminal input
+  computeVerificationDeltaBlock input
 
 /-- Verify an ECDSA-P256 signature over an already computed SHA-256 digest
 using a mixed-width fixed-base comb and signed radix-32 Booth recoding. -/

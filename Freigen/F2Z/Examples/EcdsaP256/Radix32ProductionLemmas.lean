@@ -95,8 +95,8 @@ theorem terminalPointAcceptance_of_verifies
     ⦃⌜True⌝⦄ Sound.interp ρ (finishVerification input)
     ⦃⇓ _ => ⌜TerminalPointAcceptanceSpec ρ input.r
       (FixedCombVerificationPoint ρ input.u1 input.u2 q)⌝⦄ := by
-  simpa [finishVerification, computeVerificationDirectTerminal] using
-    (fixedCombVerificationDirectTerminal_sound (input := input) (q := q)
+  simpa only [finishVerification, computeVerificationDeltaBlock] using
+    (fixedCombVerificationDeltaBlock_sound (input := input) (q := q)
       hu1 hu2 hr hQ)
 
 @[spec] theorem finishVerification_complete
@@ -111,8 +111,8 @@ theorem terminalPointAcceptance_of_verifies
     ⦃⌜True⌝⦄ Complete.interp ρ (finishVerification input)
     ⦃⇓ _ => ⌜TerminalPointAcceptanceSpec ρ input.r
       (FixedCombVerificationPoint ρ input.u1 input.u2 q)⌝⦄ := by
-  simpa [finishVerification, computeVerificationDirectTerminal] using
-    (fixedCombVerificationDirectTerminal_complete (input := input) (q := q)
+  simpa only [finishVerification, computeVerificationDeltaBlock] using
+    (fixedCombVerificationDeltaBlock_complete (input := input) (q := q)
       hu1 hu2 hr hQvalid hQ hq horder haccept)
 
 theorem verifyDigest_complete_radix32_aux {digest : U 256} {key : PublicKey}

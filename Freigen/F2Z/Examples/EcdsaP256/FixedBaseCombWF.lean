@@ -1,5 +1,6 @@
 import Freigen.F2Z.Examples.EcdsaP256.Radix32WF
 import Freigen.F2Z.Examples.EcdsaP256.DirectTerminalWF
+import Freigen.F2Z.Examples.EcdsaP256.DirectTerminalBlockWF
 import Freigen.F2Z.Examples.P256.CanonicalXWF
 import Freigen.F2Z.Examples.P256.XOnlyWF
 
@@ -743,6 +744,32 @@ theorem fixedCombVerificationDirectTerminal_wf_aux :
       have hv := hvariable lv rv hf.1
       exact ⟨hv.1.2.2.2, hv.2, hf.2⟩
 
+theorem fixedCombVerificationDeltaBlock_wf_aux :
+    WF.GadgetSpec DeltaBlockWF.PreparedVerification.BlockWFRel
+      fixedCombVerificationDeltaBlock (fun _ _ _ _ => True) := by
+  unfold WF.GadgetSpec
+  intro left right
+  unfold fixedCombVerificationDeltaBlock
+  apply WF.GadgetSpec.bind_rule
+    (left := (left.u2, left.q)) (right := (right.u2, right.q))
+    signedRadix32VariableMul_wf_aux
+  · intro lv rv h
+    exact ⟨h.2.1, h.2.2.1⟩
+  · intro B variableL variableR hvariable
+    apply WF.GadgetSpec.bind_rule
+      (left := left.u1) (right := right.u1) fixedBaseCombComplete_wf_aux
+    · intro lv rv hB
+      exact (hvariable lv rv hB).1.1
+    · intro C fixedL fixedR hfixed
+      apply WF.GadgetSpec.direct_rule
+        (left := (left.r, variableL, fixedL))
+        (right := (right.r, variableR, fixedR))
+        DeltaBlockWF.addCompleteCollapsedDeltaBlock_wf_aux
+      intro lv rv hC
+      have hf := hfixed lv rv hC
+      have hv := hvariable lv rv hf.1
+      exact ⟨hv.1.2.2.2, hv.2, hf.2⟩
+
 theorem computeVerificationSum_radix32_wf_aux :
     WF.GadgetSpec PreparedVerification.WFRel computeVerificationSum
       AffineSlope.Point.WFRel := by
@@ -767,11 +794,18 @@ theorem computeVerificationDirectTerminal_radix32_wf_aux :
   unfold computeVerificationDirectTerminal
   exact fixedCombVerificationDirectTerminal_wf_aux
 
+theorem computeVerificationDeltaBlock_radix32_wf_aux :
+    WF.GadgetSpec DeltaBlockWF.PreparedVerification.BlockWFRel
+      computeVerificationDeltaBlock (fun _ _ _ _ => True) := by
+  unfold computeVerificationDeltaBlock
+  exact fixedCombVerificationDeltaBlock_wf_aux
+
 theorem finishVerification_radix32_wf_aux :
-    WF.GadgetSpec PreparedVerification.WFRel finishVerification
+    WF.GadgetSpec DeltaBlockWF.PreparedVerification.BlockWFRel
+      finishVerification
       (fun _ _ _ _ => True) := by
   unfold finishVerification
-  exact computeVerificationDirectTerminal_radix32_wf_aux
+  exact computeVerificationDeltaBlock_radix32_wf_aux
 
 theorem verifyDigest_radix32_wf_aux :
     WF.GadgetSpec VerifyInput.WFRel
@@ -789,7 +823,7 @@ theorem verifyDigest_radix32_wf_aux :
   · intro inputL inputR
     apply WF.GadgetSpec.bind_rule_direct
       (left := (left.1, inputL)) (right := (right.1, inputR))
-      prepareVerification_wf_aux
+      DeltaBlockWF.prepareVerification_block_wf_aux
     · intro lv rv h
       exact ⟨h.1.1, h.2⟩
     · intro preparedL preparedR
