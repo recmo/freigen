@@ -1,6 +1,7 @@
-import Freigen.F2Z.Examples.EcdsaP256.Radix32Impl
+import Freigen.F2Z.Examples.EcdsaP256.FixedBaseCombImpl
 
-/-! Production ECDSA verifier using signed radix-32 variable-base multiplication. -/
+/-! Production ECDSA verifier using a fixed-base comb and signed radix-32
+variable-base multiplication. -/
 
 namespace Freigen.F2Z.Examples.EcdsaP256
 
@@ -11,14 +12,14 @@ open P256
 
 def computeVerificationSum (input : PreparedVerification) :
     Circuit AffineSlope.Point :=
-  signedRadix32JointScalarMul input.u1 input.u2 input.q
+  fixedCombVerificationSum input
 
 def finishVerification (input : PreparedVerification) : Circuit Unit := do
   let sum ← computeVerificationSum input
   checkVerificationX input.r sum
 
 /-- Verify an ECDSA-P256 signature over an already computed SHA-256 digest
-using signed radix-32 Booth recoding for the variable-base scalar. -/
+using a mixed-width fixed-base comb and signed radix-32 Booth recoding. -/
 def verifyDigest (digest : U 256) (key : PublicKey)
     (sig : Signature) (aux : Aux) : Circuit Unit := do
   let input ← canonicalizeInput key sig aux
@@ -31,7 +32,7 @@ def verifyDigestFromBits
   verifyDigest values[0] ⟨values[1], values[2]⟩
     ⟨values[3], values[4]⟩ ⟨values[5], values[6]⟩
 
-/-- Constraint system for the signed radix-32 prehashed ECDSA verifier. -/
+/-- Constraint system for the optimized prehashed ECDSA verifier. -/
 def verifyDigestCS : Unit × Semantics.CS :=
   Semantics.CSBuilder.runWithInputs verifyDigestFromBits
 

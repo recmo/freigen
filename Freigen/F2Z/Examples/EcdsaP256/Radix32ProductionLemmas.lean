@@ -1,4 +1,4 @@
-import Freigen.F2Z.Examples.EcdsaP256.Radix32Lemmas
+import Freigen.F2Z.Examples.EcdsaP256.FixedBaseCombVariableLemmas
 import Freigen.F2Z.Examples.EcdsaP256.Radix32Production
 
 namespace Freigen.F2Z.Examples.EcdsaP256
@@ -112,7 +112,7 @@ theorem verifyDigest_complete_radix32_aux {digest : U 256} {key : PublicKey}
       change ((sig.s.eval ρ).toNat : ZMod P256.scalarModulus) *
         ((aux.sInv.eval ρ).toNat : ZMod P256.scalarModulus) = 1 at hsInvMul
       exact hsInvMul
-    have hsumPoint := signedRadix32FoldPoint_eq_verificationPoint hdigest hr'.1
+    have hsumPoint := fixedCombVerificationPoint_eq_verificationPoint hdigest hr'.1
       hsInv'.1 hu1.1 hu2.1 hrNat hsNat hsMul' hz.2 hu1Relaxed.2
       hu2Relaxed.2 hu1.2 hu2.2 publicKey
     rw [hsumPoint] at hsum
@@ -278,7 +278,7 @@ theorem verifyDigest_sound_radix32_aux {digest : U 256} {key : PublicKey}
       hsFieldNe (by simp [hzero])
     have hrNat := elem_evalNat_eq_u_eval hr'.1 hr'.2 hr
     have hsNat := elem_evalNat_eq_u_eval hs'.1 hs'.2 hs
-    have hsumPoint := signedRadix32FoldPoint_eq_verificationPoint hdigest hr'.1
+    have hsumPoint := fixedCombVerificationPoint_eq_verificationPoint hdigest hr'.1
       hsInv'.1 hu1.1 hu2.1 hrNat hsNat hsMul' hz.2 hu1Relaxed.2
       hu2Relaxed.2 hu1.2 hu2.2 publicKey
     rw [hsumPoint] at hsum

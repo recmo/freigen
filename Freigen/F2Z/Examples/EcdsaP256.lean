@@ -1,5 +1,5 @@
 import Freigen.F2Z.Examples.EcdsaP256.Radix32ProductionLemmas
-import Freigen.F2Z.Examples.EcdsaP256.Radix32WF
+import Freigen.F2Z.Examples.EcdsaP256.FixedBaseCombWF
 
 /-!
 # ECDSA-P256 verification and Mathlib equivalence
@@ -92,7 +92,7 @@ theorem verifyDigest_wf :
 message hash supplied as input. SHA-256 is not part of this circuit. -/
 
 /--
-info: { mRows := 1011547, mCols := 1011547, r1csRows := 6661, cost := 8092376 }
+info: { mRows := 971364, mCols := 971364, r1csRows := 8640, cost := 7770912 }
 -/
 #guard_msgs in
 #eval verifyDigestCS.2.stats
