@@ -219,9 +219,534 @@ theorem SignedDigitSpec.lowMagnitude_bounds
       omega
     omega
 
+private theorem SignedDigitSpec.magnitude_eq_zero_of_center
+    (h : SignedDigitSpec ρ value digit)
+    (hcenter : digit.oneHot.intBits[16].eval ρ.int = 1) :
+    digit.magnitude.eval ρ.int = 0 := by
+  rcases h.2 with ⟨chosen, hchosen, hvalue, hunique⟩
+  have hchosenCenter : chosen = (16 : Fin 33) :=
+    (hunique 16 hcenter).symm
+  rw [h.magnitude_eval, hvalue, hchosenCenter]
+  decide
+
+private theorem SignedDigitSpec.magnitude_eq_succ_of_gate
+    (h : SignedDigitSpec ρ value digit) (i : Nat) (hi : i < 16)
+    (hgate : (signedNonzeroMagnitudeGate digit i hi).eval ρ.int = 1) :
+    digit.magnitude.eval ρ.int = i + 1 := by
+  rcases h.2 with ⟨chosen, hchosen, hvalue, hunique⟩
+  let negativeSlot : Fin 33 := ⟨15 - i, by omega⟩
+  let positiveSlot : Fin 33 := ⟨17 + i, by omega⟩
+  have hnegative := h.bit_zero_or_one negativeSlot
+  have hpositive := h.bit_zero_or_one positiveSlot
+  have hsum : digit.oneHot.intBits[negativeSlot].eval ρ.int +
+      digit.oneHot.intBits[positiveSlot].eval ρ.int = 1 := by
+    simpa [signedNonzeroMagnitudeGate, negativeSlot, positiveSlot,
+      LC.eval_add] using hgate
+  rcases hnegative with hnegative | hnegative <;>
+      rcases hpositive with hpositive | hpositive
+  · omega
+
+  · have hchosenPositive : chosen = positiveSlot :=
+      (hunique positiveSlot hpositive).symm
+    rw [h.magnitude_eval, hvalue, hchosenPositive]
+    simp only [positiveSlot]
+    have : ((17 + i : Nat) : Int) - 16 = (i + 1 : Nat) := by omega
+    rw [this]
+    exact Int.natAbs_of_nonneg (by omega)
+  · have hchosenNegative : chosen = negativeSlot :=
+      (hunique negativeSlot hnegative).symm
+    rw [h.magnitude_eval, hvalue, hchosenNegative]
+    simp only [negativeSlot]
+    have : (((15 - i : Nat) : Int) - 16) = -((i + 1 : Nat) : Int) := by
+      omega
+    rw [this, Int.natAbs_neg, Int.natAbs_of_nonneg (by omega)]
+    norm_num
+  · omega
+
+private theorem SignedDigitSpec.nonzeroMagnitudeGate_bit
+    (h : SignedDigitSpec ρ value digit) (i : Nat) (hi : i < 16) :
+    (signedNonzeroMagnitudeGate digit i hi).eval ρ.int = 0 ∨
+      (signedNonzeroMagnitudeGate digit i hi).eval ρ.int = 1 := by
+  let negativeSlot : Fin 33 := ⟨15 - i, by omega⟩
+  let positiveSlot : Fin 33 := ⟨17 + i, by omega⟩
+  rcases h.bit_zero_or_one negativeSlot with hnegative | hnegative <;>
+      rcases h.bit_zero_or_one positiveSlot with hpositive | hpositive
+  · left
+    have hn : digit.oneHot.intBits[15 - i].eval ρ.int = 0 := by
+      simpa [negativeSlot] using hnegative
+    have hp : digit.oneHot.intBits[17 + i].eval ρ.int = 0 := by
+      simpa [positiveSlot] using hpositive
+    simp [signedNonzeroMagnitudeGate, LC.eval_add, hn, hp]
+  · right
+    have hn : digit.oneHot.intBits[15 - i].eval ρ.int = 0 := by
+      simpa [negativeSlot] using hnegative
+    have hp : digit.oneHot.intBits[17 + i].eval ρ.int = 1 := by
+      simpa [positiveSlot] using hpositive
+    simp [signedNonzeroMagnitudeGate, LC.eval_add, hn, hp]
+  · right
+    have hn : digit.oneHot.intBits[15 - i].eval ρ.int = 1 := by
+      simpa [negativeSlot] using hnegative
+    have hp : digit.oneHot.intBits[17 + i].eval ρ.int = 0 := by
+      simpa [positiveSlot] using hpositive
+    simp [signedNonzeroMagnitudeGate, LC.eval_add, hn, hp]
+  · have hne : negativeSlot ≠ positiveSlot := by
+      intro heq
+      have := congrArg Fin.val heq
+      dsimp [negativeSlot, positiveSlot] at this
+      omega
+    exact (hne ((h.2.choose_spec.2.2 negativeSlot hnegative).trans
+      (h.2.choose_spec.2.2 positiveSlot hpositive).symm)).elim
+
+private theorem SignedDigitSpec.center_eq_one_of_magnitude_zero
+    (h : SignedDigitSpec ρ value digit)
+    (hm : digit.magnitude.eval ρ.int = 0) :
+    digit.oneHot.intBits[16].eval ρ.int = 1 := by
+  rcases h.2 with ⟨chosen, hchosen, hvalue, hunique⟩
+  have habsInt : ((value.eval ρ.int).natAbs : Int) = 0 :=
+    h.magnitude_eval.symm.trans hm
+  have habs : (value.eval ρ.int).natAbs = 0 := by
+    exact_mod_cast habsInt
+  have hv : value.eval ρ.int = 0 := Int.natAbs_eq_zero.mp habs
+  have hc : chosen = (16 : Fin 33) := by
+    apply Fin.eq_of_val_eq
+    omega
+  simpa [hc] using hchosen
+
+private theorem SignedDigitSpec.gate_eq_one_of_magnitude_succ
+    (h : SignedDigitSpec ρ value digit) (i : Nat) (hi : i < 16)
+    (hm : digit.magnitude.eval ρ.int = i + 1) :
+    (signedNonzeroMagnitudeGate digit i hi).eval ρ.int = 1 := by
+  rcases h.2 with ⟨chosen, hchosen, hvalue, hunique⟩
+  have habsInt : ((value.eval ρ.int).natAbs : Int) = i + 1 :=
+    h.magnitude_eval.symm.trans hm
+  by_cases hv : 0 ≤ value.eval ρ.int
+  · rw [Int.natAbs_of_nonneg hv] at habsInt
+    have hc : chosen.val = 17 + i := by omega
+    have hpos : digit.oneHot.intBits[17 + i].eval ρ.int = 1 := by
+      simpa [show chosen = ⟨17 + i, by omega⟩ from Fin.eq_of_val_eq hc]
+        using hchosen
+    have hneg : digit.oneHot.intBits[15 - i].eval ρ.int = 0 := by
+      change digit.oneHot.intBits[(⟨15 - i, by omega⟩ : Fin 33)].eval ρ.int = 0
+      apply h.bit_zero_of_ne hchosen hunique
+      intro heq
+      have heqVal := congrArg Fin.val heq
+      simp only at heqVal
+      omega
+    simp [signedNonzeroMagnitudeGate, LC.eval_add, hneg, hpos]
+  · have hv' : value.eval ρ.int ≤ 0 := le_of_lt (lt_of_not_ge hv)
+    rw [natAbs_cast_eq_neg_of_nonpos hv'] at habsInt
+    have hc : chosen.val = 15 - i := by omega
+    have hneg : digit.oneHot.intBits[15 - i].eval ρ.int = 1 := by
+      simpa [show chosen = ⟨15 - i, by omega⟩ from Fin.eq_of_val_eq hc]
+        using hchosen
+    have hpos : digit.oneHot.intBits[17 + i].eval ρ.int = 0 := by
+      change digit.oneHot.intBits[(⟨17 + i, by omega⟩ : Fin 33)].eval ρ.int = 0
+      apply h.bit_zero_of_ne hchosen hunique
+      intro heq
+      have heqVal := congrArg Fin.val heq
+      simp only at heqVal
+      omega
+    simp [signedNonzeroMagnitudeGate, LC.eval_add, hneg, hpos]
+
+def SignedMagnitudeChoiceSpec (ρ : WF.Valuation) (digit : SignedDigit) : Prop :=
+  (digit.oneHot.intBits[16].eval ρ.int = 1 ∧
+    digit.magnitude.eval ρ.int = 0) ∨
+  ∃ i : Fin 16,
+    (signedNonzeroMagnitudeGate digit i.val i.isLt).eval ρ.int = 1 ∧
+      digit.magnitude.eval ρ.int = i.val + 1
+
+private theorem SignedDigitSpec.magnitude_choice
+    (h : SignedDigitSpec ρ value digit) :
+    SignedMagnitudeChoiceSpec ρ digit := by
+  rcases h.2 with ⟨chosen, hchosen, hvalue, hunique⟩
+  by_cases hcenter : chosen.val = 16
+  · left
+    have hc : chosen = (16 : Fin 33) := Fin.eq_of_val_eq hcenter
+    have hone : digit.oneHot.intBits[16].eval ρ.int = 1 := by
+      simpa [hc] using hchosen
+    exact ⟨hone, h.magnitude_eq_zero_of_center hone⟩
+  · right
+    by_cases hnegative : chosen.val < 16
+    · let i : Fin 16 := ⟨15 - chosen.val, by omega⟩
+      have hm : digit.magnitude.eval ρ.int = i.val + 1 := by
+        rw [h.magnitude_eval, hvalue]
+        have hv : (chosen.val : Int) - 16 = -((i.val + 1 : Nat) : Int) := by
+          dsimp [i]
+          omega
+        rw [hv, Int.natAbs_neg, Int.natAbs_of_nonneg (by omega)]
+        norm_num
+      exact ⟨i, h.gate_eq_one_of_magnitude_succ i.val i.isLt hm, hm⟩
+    · have hpositive : 16 < chosen.val := by omega
+      let i : Fin 16 := ⟨chosen.val - 17, by omega⟩
+      have hm : digit.magnitude.eval ρ.int = i.val + 1 := by
+        rw [h.magnitude_eval, hvalue]
+        have hv : (chosen.val : Int) - 16 = (i.val + 1 : Nat) := by
+          dsimp [i]
+          omega
+        rw [hv, Int.natAbs_of_nonneg (by omega)]
+        norm_num
+      exact ⟨i, h.gate_eq_one_of_magnitude_succ i.val i.isLt hm, hm⟩
 def Radix32MagnitudeSpec (ρ : WF.Valuation) (value : LC ℤ)
     (out : P256.AffineSlope.Point) (q : P256.Reference.Point) : Prop :=
   P256.Reference.NormalizedRep ρ out ((value.eval ρ.int).natAbs • q)
+
+def SignedMagnitudeLookupRepSpec (ρ : WF.Valuation) (digit : SignedDigit)
+    (values : Vector P256.AffineSlope.Rep 17)
+    (out : P256.AffineSlope.Rep) : Prop :=
+  (digit.oneHot.intBits[16].eval ρ.int = 1 →
+    Modular.Lazy.evalZMod P256.base out ρ =
+      Modular.Lazy.evalZMod P256.base values[0] ρ) ∧
+  ∀ i : Fin 16,
+    (signedNonzeroMagnitudeGate digit i.val i.isLt).eval ρ.int = 1 →
+      Modular.Lazy.evalZMod P256.base out ρ =
+        Modular.Lazy.evalZMod P256.base
+          (values[i.val + 1]'(by omega)) ρ
+
+def SignedMagnitudeLookupFlagSpec (ρ : WF.Valuation) (digit : SignedDigit)
+    (values : Vector (LC ℤ) 17) (out : LC ℤ) : Prop :=
+  (digit.oneHot.intBits[16].eval ρ.int = 1 →
+    out.eval ρ.int = values[0].eval ρ.int) ∧
+  ∀ i : Fin 16,
+    (signedNonzeroMagnitudeGate digit i.val i.isLt).eval ρ.int = 1 →
+      out.eval ρ.int = (values[i.val + 1]'(by omega)).eval ρ.int
+
+@[spec] theorem lookupSignedMagnitudeRep_sound
+    {digit : SignedDigit} {values : Vector P256.AffineSlope.Rep 17} :
+    ⦃⌜True⌝⦄ Sound.interp ρ (lookupSignedMagnitudeRep digit values)
+    ⦃⇓ out => ⌜SignedMagnitudeLookupRepSpec ρ digit values out⌝⦄ := by
+  mvcgen [lookupSignedMagnitudeRep]
+  intro bits
+  mvcgen
+  rename_i word hword hzero
+  mvcgen [WF.foldRange] invariants
+  · ⇓⟨cur, _⟩ => ⌜∀ i : Fin 16, i.val < cur.prefix.length →
+      (signedNonzeroMagnitudeGate digit i.val i.isLt).eval ρ.int = 1 →
+      Modular.Lazy.evalZMod P256.base ⟨word.intVal, 2⟩ ρ =
+        Modular.Lazy.evalZMod P256.base
+          (values[i.val + 1]'(by omega)) ρ⌝
+  case vc1 pref cur suff hsplit _ hprev hassert =>
+    intro i hi hone
+    simp only [List.length_append, List.length_singleton] at hi
+    by_cases hlt : i.val < pref.length
+    · exact hprev i hlt hone
+    · have hieq : i.val = cur := by
+        have hcur : cur = pref.length := by grind
+        omega
+      subst cur
+      rcases hassert with ⟨_, hassert⟩
+      simp only [LC.eval_sub, LC.eval_zero] at hassert
+      rw [show (signedNonzeroMagnitudeGate digit i.val i.isLt).eval
+          ρ.int = 1 by simpa using hone, one_mul] at hassert
+      have houtEq : word.intVal.eval ρ.int =
+          (values[i.val + 1]'(by omega)).intVal.eval ρ.int := by
+        simpa only [Fin.getElem_fin] using sub_eq_zero.mp hassert
+      unfold Modular.Lazy.evalZMod
+      rw [houtEq]
+  case vc2 => simp
+  case vc3 hloop =>
+    constructor
+    · intro hcenter
+      simp only [LC.eval_sub, LC.eval_zero, hcenter, one_mul] at hzero
+      unfold Modular.Lazy.evalZMod
+      rw [sub_eq_zero.mp hzero]
+    · simpa using hloop
+
+@[spec] theorem lookupSignedMagnitudeFlag_sound
+    {digit : SignedDigit} {values : Vector (LC ℤ) 17} :
+    ⦃⌜True⌝⦄ Sound.interp ρ (lookupSignedMagnitudeFlag digit values)
+    ⦃⇓ out => ⌜SignedMagnitudeLookupFlagSpec ρ digit values out⌝⦄ := by
+  mvcgen [lookupSignedMagnitudeFlag]
+  intro bits
+  mvcgen
+  rename_i out hout hzero
+  mvcgen [WF.foldRange] invariants
+  · ⇓⟨cur, _⟩ => ⌜∀ i : Fin 16, i.val < cur.prefix.length →
+      (signedNonzeroMagnitudeGate digit i.val i.isLt).eval ρ.int = 1 →
+      out.eval ρ.int = (values[i.val + 1]'(by omega)).eval ρ.int⌝
+  case vc1 pref cur suff hsplit _ hprev hassert =>
+    intro i hi hone
+    simp only [List.length_append, List.length_singleton] at hi
+    by_cases hlt : i.val < pref.length
+    · exact hprev i hlt hone
+    · have hieq : i.val = cur := by
+        have hcur : cur = pref.length := by grind
+        omega
+      subst cur
+      rcases hassert with ⟨_, hassert⟩
+      simp only [LC.eval_sub, LC.eval_zero] at hassert
+      rw [show (signedNonzeroMagnitudeGate digit i.val i.isLt).eval
+          ρ.int = 1 by simpa using hone, one_mul] at hassert
+      simpa only [Fin.getElem_fin] using sub_eq_zero.mp hassert
+  case vc2 => simp
+  case vc3 hloop =>
+    constructor
+    · intro hcenter
+      simp only [LC.eval_sub, LC.eval_zero, hcenter, one_mul] at hzero
+      exact sub_eq_zero.mp hzero
+    · simpa using hloop
+
+@[spec] theorem lookupSignedMagnitudeRep_complete
+    {digit : SignedDigit} {values : Vector P256.AffineSlope.Rep 17}
+    (hdigit : SignedDigitSpec ρ value digit)
+    (hvalues : ∀ i : Fin 17, values[i].Valid ρ ∧
+      values[i].intVal.eval ρ.int < P256.base.modulus) :
+    ⦃⌜True⌝⦄ Complete.interp ρ (lookupSignedMagnitudeRep digit values)
+    ⦃⇓ out => ⌜SignedMagnitudeLookupRepSpec ρ digit values out ∧
+      out.Valid ρ ∧ out.intVal.eval ρ.int < P256.base.modulus ∧
+      out.bound = 2⌝⦄ := by
+  mvcgen [lookupSignedMagnitudeRep]
+  let chosen : Fin 17 := ⟨(digit.magnitude.eval ρ.int).toNat,
+    (Int.toNat_lt hdigit.magnitude_nonneg).2
+      (lt_of_le_of_lt hdigit.magnitude_le_sixteen (by omega))⟩
+  let valuesRaw : Array Int := #[values[0].intVal.eval ρ.int,
+    values[1].intVal.eval ρ.int, values[2].intVal.eval ρ.int,
+    values[3].intVal.eval ρ.int, values[4].intVal.eval ρ.int,
+    values[5].intVal.eval ρ.int, values[6].intVal.eval ρ.int,
+    values[7].intVal.eval ρ.int, values[8].intVal.eval ρ.int,
+    values[9].intVal.eval ρ.int, values[10].intVal.eval ρ.int,
+    values[11].intVal.eval ρ.int, values[12].intVal.eval ρ.int,
+    values[13].intVal.eval ρ.int, values[14].intVal.eval ρ.int,
+    values[15].intVal.eval ρ.int, values[16].intVal.eval ρ.int]
+  let selected := valuesRaw[(digit.magnitude.eval ρ.int).toNat]!
+  let bits : Vector Bool 256 :=
+    Vector.ofFn fun i => selected.toNat.testBit i.val
+  have hraw (i : Fin 17) :
+      valuesRaw[i.val] = values[i].intVal.eval ρ.int := by
+    fin_cases i <;> rfl
+  have hselected : selected = values[chosen].intVal.eval ρ.int := by
+    unfold selected
+    rw [getElem!_pos valuesRaw _ (by
+      simpa [valuesRaw] using
+        lt_of_le_of_lt hdigit.magnitude_le_sixteen (by omega))]
+    exact hraw chosen
+  have hselected0 : 0 ≤ selected := hselected ▸ (hvalues chosen).1.1
+  refine ⟨bits, ?_, ?_⟩
+  · simp only [WF.interpHint, WF.evalArgs, signedMagnitudeLookupRepHint,
+      signedMagnitudeLookupArgs, Vector.getElem_map]
+    split
+    · simp [bits, selected, valuesRaw]
+    · rename_i hnegative
+      exfalso
+      apply hnegative
+      simpa [selected, valuesRaw] using hselected0
+  · have hselectedLt : selected < P256.base.modulus :=
+      hselected ▸ (hvalues chosen).2
+    have hfit : selected.toNat < 2 ^ 256 := by
+      apply (Int.toNat_lt hselected0).2
+      exact hselectedLt.trans (by
+        norm_num [P256.base, P256.baseModulus])
+    have houtFacts (out : U 256)
+        (hout : U.Rel ρ out
+          (Word.eval ρ.bool { bitsLE := Vector.map LC.ofConst bits })) :
+        out.intVal.eval ρ.int = selected ∧
+          (⟨out.intVal, 2⟩ : P256.AffineSlope.Rep).Valid ρ ∧
+          out.intVal.eval ρ.int < P256.base.modulus := by
+      have hword :
+          (Word.eval ρ.bool { bitsLE := Vector.map LC.ofConst bits }).toNat =
+            selected.toNat := by
+        rw [show Vector.map LC.ofConst bits =
+            Vector.ofFn (n := 256) fun i =>
+              LC.ofConst (selected.toNat.testBit i.val) by
+          ext i
+          simp [bits]]
+        exact Modular.Aux.constWord_eval_toNat selected.toNat hfit ρ
+      have houtVal : out.intVal.eval ρ.int = selected := by
+        rw [U.Rel.intVal hout, hword, Int.toNat_of_nonneg hselected0]
+      exact ⟨houtVal, ⟨U.intVal_nonneg out hout.1, by
+        rw [houtVal]
+        have hp : (0 : Int) < P256.base.modulus := by
+          exact_mod_cast P256.base.positive
+        simpa using hselectedLt.trans (by nlinarith)⟩, by
+        simpa [houtVal] using hselectedLt⟩
+    mvcgen -trivial
+    case vc1.vc1.refine_2.success =>
+      rename_i out hout
+      have houtVal := (houtFacts out hout).1
+      have hcenterSelect
+          (hcenter : digit.oneHot.intBits[16].eval ρ.int = 1) :
+          out.intVal.eval ρ.int = values[0].intVal.eval ρ.int := by
+        have hm := hdigit.magnitude_eq_zero_of_center hcenter
+        have hchosen0 : chosen = 0 := by
+          apply Fin.eq_of_val_eq
+          simp [chosen, hm]
+        rw [houtVal, hselected, hchosen0]
+        rfl
+      have hgateSelect (i : Fin 16)
+          (hgate : (signedNonzeroMagnitudeGate digit i.val i.isLt).eval
+            ρ.int = 1) :
+          out.intVal.eval ρ.int =
+            (values[i.val + 1]'(by omega)).intVal.eval ρ.int := by
+        have hm := hdigit.magnitude_eq_succ_of_gate i.val i.isLt hgate
+        have hchosen : chosen = ⟨i.val + 1, by omega⟩ := by
+          apply Fin.eq_of_val_eq
+          simp [chosen, hm]
+        rw [houtVal, hselected, hchosen]
+        rfl
+      constructor
+      · rcases hdigit.bit_zero_or_one 16 with hzero | hone
+        · have hzero' :
+              digit.oneHot.intBits[(16 : Fin 33)].eval ρ.int = 0 := hzero
+          change digit.oneHot.intBits[(16 : Fin 33)].eval ρ.int *
+              (out.intVal - values[0].intVal).eval ρ.int = 0
+          rw [hzero']
+          simp
+        · have hdiff : (out.intVal - values[0].intVal).eval ρ.int = 0 := by
+            simp [LC.eval_sub, hcenterSelect hone]
+          rw [hdiff, mul_zero, LC.eval_zero]
+      · mvcgen [WF.foldRange] invariants
+        · ⇓⟨cur, _⟩ => ⌜∀ i : Fin 16, i.val < cur.prefix.length →
+            (signedNonzeroMagnitudeGate digit i.val i.isLt).eval ρ.int = 1 →
+            out.intVal.eval ρ.int =
+              (values[i.val + 1]'(by omega)).intVal.eval ρ.int⌝
+        case vc1 pref cur suff hsplit _ hprev =>
+          have hcur16 : cur < 16 := by grind
+          let fi : Fin 16 := ⟨cur, hcur16⟩
+          constructor
+          · rcases hdigit.nonzeroMagnitudeGate_bit cur hcur16 with hzero | hone
+            · rw [show (signedNonzeroMagnitudeGate digit cur hcur16).eval
+                  ρ.int = 0 by simpa using hzero]
+              simp
+            · have hdiff :
+                  (out.intVal - values[cur + 1].intVal).eval ρ.int = 0 := by
+                have hsel : out.intVal.eval ρ.int =
+                    values[cur + 1].intVal.eval ρ.int := by
+                  simpa [fi] using
+                    hgateSelect fi (by simpa [fi] using hone)
+                simp [LC.eval_sub, hsel]
+              rw [hdiff, mul_zero, LC.eval_zero]
+          · mvcgen
+            intro i hi hone
+            simp only [List.length_append, List.length_singleton] at hi
+            by_cases hlt : i.val < pref.length
+            · exact hprev i hlt hone
+            · have hieq : i.val = cur := by
+                have hcur : cur = pref.length := by grind
+                omega
+              subst cur
+              exact hgateSelect i hone
+        case vc2 => simp
+        case vc3 hloop =>
+          refine ⟨?_, (houtFacts out hout).2.1, (houtFacts out hout).2.2⟩
+          constructor
+          · intro hcenter
+            unfold Modular.Lazy.evalZMod
+            rw [hcenterSelect hcenter]
+          · intro i hgate
+            unfold Modular.Lazy.evalZMod
+            rw [hloop i (by simp) hgate]
+
+@[spec] theorem lookupSignedMagnitudeFlag_complete
+    {digit : SignedDigit} {values : Vector (LC ℤ) 17}
+    (hdigit : SignedDigitSpec ρ value digit)
+    (hvalues : ∀ i : Fin 17,
+      values[i].eval ρ.int = 0 ∨ values[i].eval ρ.int = 1) :
+    ⦃⌜True⌝⦄ Complete.interp ρ (lookupSignedMagnitudeFlag digit values)
+    ⦃⇓ out => ⌜SignedMagnitudeLookupFlagSpec ρ digit values out ∧
+      (out.eval ρ.int = 0 ∨ out.eval ρ.int = 1)⌝⦄ := by
+  mvcgen [lookupSignedMagnitudeFlag]
+  let chosen : Fin 17 := ⟨(digit.magnitude.eval ρ.int).toNat,
+    (Int.toNat_lt hdigit.magnitude_nonneg).2
+      (lt_of_le_of_lt hdigit.magnitude_le_sixteen (by omega))⟩
+  let valuesRaw : Array Int := #[values[0].eval ρ.int,
+    values[1].eval ρ.int, values[2].eval ρ.int,
+    values[3].eval ρ.int, values[4].eval ρ.int,
+    values[5].eval ρ.int, values[6].eval ρ.int,
+    values[7].eval ρ.int, values[8].eval ρ.int,
+    values[9].eval ρ.int, values[10].eval ρ.int,
+    values[11].eval ρ.int, values[12].eval ρ.int,
+    values[13].eval ρ.int, values[14].eval ρ.int,
+    values[15].eval ρ.int, values[16].eval ρ.int]
+  let selected := valuesRaw[(digit.magnitude.eval ρ.int).toNat]!
+  let selectedBit : Bool := selected = 1
+  let bits : Vector Bool 1 := Vector.ofFn fun _ => selectedBit
+  have hraw (i : Fin 17) : valuesRaw[i.val] = values[i].eval ρ.int := by
+    fin_cases i <;> rfl
+  have hselected : selected = values[chosen].eval ρ.int := by
+    unfold selected
+    rw [getElem!_pos valuesRaw _ (by
+      simpa [valuesRaw] using
+        lt_of_le_of_lt hdigit.magnitude_le_sixteen (by omega))]
+    exact hraw chosen
+  have hselectedBit : selected = 0 ∨ selected = 1 := hselected ▸ hvalues chosen
+  refine ⟨bits, ?_, ?_⟩
+  · simp [WF.interpHint, WF.evalArgs, signedMagnitudeLookupFlagHint,
+      signedMagnitudeLookupArgs, Vector.getElem_map, bits, selectedBit,
+      selected, valuesRaw]
+  · mvcgen
+    rename_i out hout
+    have houtVal : out.eval ρ.int = selected := by
+      rw [hout]
+      rcases hselectedBit with hzero | hone
+      · simp [bits, selectedBit, hzero]
+      · simp [bits, selectedBit, hone]
+    have hcenterSelect
+        (hcenter : digit.oneHot.intBits[16].eval ρ.int = 1) :
+        out.eval ρ.int = values[0].eval ρ.int := by
+      have hm := hdigit.magnitude_eq_zero_of_center hcenter
+      have hchosen0 : chosen = 0 := by
+        apply Fin.eq_of_val_eq
+        simp [chosen, hm]
+      rw [houtVal, hselected, hchosen0]
+      rfl
+    have hgateSelect (i : Fin 16)
+        (hgate : (signedNonzeroMagnitudeGate digit i.val i.isLt).eval
+          ρ.int = 1) :
+        out.eval ρ.int =
+          (values[i.val + 1]'(by omega)).eval ρ.int := by
+      have hm := hdigit.magnitude_eq_succ_of_gate i.val i.isLt hgate
+      have hchosen : chosen = ⟨i.val + 1, by omega⟩ := by
+        apply Fin.eq_of_val_eq
+        simp [chosen, hm]
+      rw [houtVal, hselected, hchosen]
+      rfl
+    constructor
+    · rcases hdigit.bit_zero_or_one 16 with hzero | hone
+      · have hzero' :
+            digit.oneHot.intBits[(16 : Fin 33)].eval ρ.int = 0 := hzero
+        change digit.oneHot.intBits[(16 : Fin 33)].eval ρ.int *
+            (out - values[0]).eval ρ.int = 0
+        rw [hzero']
+        simp
+      · have hdiff : (out - values[0]).eval ρ.int = 0 := by
+          simp [LC.eval_sub, hcenterSelect hone]
+        rw [hdiff, mul_zero, LC.eval_zero]
+    · mvcgen [WF.foldRange] invariants
+      · ⇓⟨cur, _⟩ => ⌜∀ i : Fin 16, i.val < cur.prefix.length →
+          (signedNonzeroMagnitudeGate digit i.val i.isLt).eval ρ.int = 1 →
+          out.eval ρ.int =
+            (values[i.val + 1]'(by omega)).eval ρ.int⌝
+      case vc1 pref cur suff hsplit _ hprev =>
+        have hcur16 : cur < 16 := by grind
+        let fi : Fin 16 := ⟨cur, hcur16⟩
+        constructor
+        · rcases hdigit.nonzeroMagnitudeGate_bit cur hcur16 with hzero | hone
+          · rw [show (signedNonzeroMagnitudeGate digit cur hcur16).eval
+                ρ.int = 0 by simpa using hzero]
+            simp
+          · have hdiff : (out - values[cur + 1]).eval ρ.int = 0 := by
+              have hsel : out.eval ρ.int =
+                  values[cur + 1].eval ρ.int := by
+                simpa [fi] using hgateSelect fi (by simpa [fi] using hone)
+              simp [LC.eval_sub, hsel]
+            rw [hdiff, mul_zero, LC.eval_zero]
+        · mvcgen
+          intro i hi hone
+          simp only [List.length_append, List.length_singleton] at hi
+          by_cases hlt : i.val < pref.length
+          · exact hprev i hlt hone
+          · have hieq : i.val = cur := by
+              have hcur : cur = pref.length := by grind
+              omega
+            subst cur
+            exact hgateSelect i hone
+      case vc2 => simp
+      case vc3 hloop =>
+        refine ⟨?_, ?_⟩
+        · constructor
+          · exact hcenterSelect
+          · intro i hgate
+            exact hloop i (by simp) hgate
+        · simpa [houtVal] using hselectedBit
 
 private theorem normalizedRep_of_coordinate_eq
     {source out : P256.AffineSlope.Point} {q : P256.Reference.Point}
@@ -375,44 +900,39 @@ private theorem radix32MagnitudeSpec_of_select
     ⦃⌜True⌝⦄ Sound.interp ρ (selectRadix32Magnitude digit table)
     ⦃⇓ out => ⌜Radix32MagnitudeSpec ρ value out q⌝⦄ := by
   mvcgen [selectRadix32Magnitude, Radix32MagnitudeSpec]
-  case vc2.htable => exact htable.1
-  case vc3.success =>
-    rename_i low hlow X hX Y hY infinity hinfinity
-    rcases hlow with ⟨i, hilow, hlow⟩
-    have hs := hdigit.isSixteen_eval
-    by_cases hsixteen : value.eval ρ.int = -16 ∨ value.eval ρ.int = 16
-    · rw [if_pos hsixteen] at hs
-      have hm : digit.magnitude.eval ρ.int = 16 :=
-        hdigit.isSixteen_eq_one_iff.mp hs
-      have hi0 : i.val = 0 := by
-        simp only [LC.eval_sub, LC.eval_nsmul, nsmul_eq_mul, hs, hm] at hilow
-        omega
-      have hieq : i = 0 := Fin.eq_of_val_eq hi0
-      subst i
+  case vc1.success =>
+    rename_i X hX Y hY infinity hinfinity
+    rcases hdigit.magnitude_choice with hcenter | ⟨i, hgate, hm⟩
+    · rcases hcenter with ⟨hcenter, hm⟩
+      have habsInt : ((value.eval ρ.int).natAbs : Int) = 0 :=
+        hdigit.magnitude_eval.symm.trans hm
+      have habs : (value.eval ρ.int).natAbs = 0 := by
+        exact_mod_cast habsInt
       unfold Radix32MagnitudeSpec
-      have habs : (value.eval ρ.int).natAbs = 16 := by
-        rcases hsixteen with hneg | hpos
-        · rw [hneg]
-          decide
-        · rw [hpos]
-          decide
       rw [habs]
-      apply normalizedRep_of_coordinate_eq htable.2
-      · exact hinfinity.1 hs
-      · exact hX.1 hs
-      · exact hY.1 hs
-    · rw [if_neg hsixteen] at hs
-      have hiAbs : i.val = (value.eval ρ.int).natAbs := by
-        simp only [LC.eval_sub, LC.eval_nsmul, nsmul_eq_mul, hs,
-          hdigit.magnitude_eval] at hilow
-        omega
-      have hlow' : P256.Reference.NormalizedRep ρ low
-          ((value.eval ρ.int).natAbs • q) := by
-        simpa [hiAbs] using hlow
-      apply normalizedRep_of_coordinate_eq hlow'
-      · exact hinfinity.2.1 hs
-      · exact hX.2 hs
-      · exact hY.2 hs
+      apply normalizedRep_of_coordinate_eq (htable.1 0)
+      · simpa [radix32MagnitudeValues] using hinfinity.1 hcenter
+      · simpa [radix32MagnitudeValues] using hX.1 hcenter
+      · simpa [radix32MagnitudeValues] using hY.1 hcenter
+    · have habsInt : ((value.eval ρ.int).natAbs : Int) = i.val + 1 :=
+        hdigit.magnitude_eval.symm.trans hm
+      have habs : (value.eval ρ.int).natAbs = i.val + 1 := by
+        exact_mod_cast habsInt
+      unfold Radix32MagnitudeSpec
+      rw [habs]
+      by_cases hi : i.val < 15
+      · let j : Fin 16 := ⟨i.val + 1, by omega⟩
+        have hij : i.val + 1 < 16 := by omega
+        apply normalizedRep_of_coordinate_eq (htable.1 j)
+        · simpa [radix32MagnitudeValues, j, hij] using hinfinity.2 i hgate
+        · simpa [radix32MagnitudeValues, j, hij] using hX.2 i hgate
+        · simpa [radix32MagnitudeValues, j, hij] using hY.2 i hgate
+      · have hieq : i = (15 : Fin 16) := Fin.eq_of_val_eq (by omega)
+        subst i
+        apply normalizedRep_of_coordinate_eq htable.2
+        · simpa [radix32MagnitudeValues] using hinfinity.2 (15 : Fin 16) hgate
+        · simpa [radix32MagnitudeValues] using hX.2 (15 : Fin 16) hgate
+        · simpa [radix32MagnitudeValues] using hY.2 (15 : Fin 16) hgate
 
 @[spec] theorem selectRadix32Magnitude_complete
     {value : LC ℤ} {q : P256.Reference.Point}
@@ -424,37 +944,80 @@ private theorem radix32MagnitudeSpec_of_select
     ⦃⇓ out => ⌜out.Valid ρ ∧ Radix32MagnitudeSpec ρ value out q⌝⦄ := by
   mvcgen [selectRadix32Magnitude, Radix32MagnitudeSpec,
     Radix32TableValid]
-  case vc2.hd0 => exact hdigit.lowMagnitude_bounds.1
-  case vc3.hdlt => exact hdigit.lowMagnitude_bounds.2
-  case vc4.htableValid => exact htableValid.1
-  case vc5.htable => exact htable.1
-  case vc6.hchoose => exact hdigit.isSixteen_bit
-  case vc7.hone => exact htableValid.2.2.1
-  case vc8.honeCanonical => exact htableValid.2.2.2.1
-  case vc9.hzero low hlow => exact hlow.1.2.1
-  case vc10.hzeroCanonical low hlow => exact hlow.1.2.2.1
-  case vc11.hchoose => exact hdigit.isSixteen_bit
-  case vc12.hone => exact htableValid.2.2.2.2.2.1
-  case vc13.honeCanonical => exact htableValid.2.2.2.2.2.2.1
-  case vc14.hzero =>
-    rename_i low hlow X hX
-    exact hlow.1.2.2.2.2.1
-  case vc15.hzeroCanonical =>
-    rename_i low hlow X hX
-    exact hlow.1.2.2.2.2.2.1
-  case vc16.hchoose => exact hdigit.isSixteen_bit
-  case vc17.hone => exact htableValid.2.2.2.2.2.2.2
-  case vc18.hzero =>
-    rename_i low hlow X hX Y hY
-    exact hlow.1.2.2.2.2.2.2
-  case vc19.success =>
-    rename_i low hlow X hX Y hY infinity hinfinity
-    have hspec : Radix32MagnitudeSpec ρ value
-        ⟨X, Y, infinity⟩ q :=
-      radix32MagnitudeSpec_of_select hdigit htable
-        hlow.2 hX.1 hY.1 hinfinity
+  case vc3.hvalues =>
+    intro i
+    by_cases hi : i.val < 16
+    · have hv := htableValid.1 ⟨i.val, hi⟩
+      simpa [radix32MagnitudeValues, hi] using
+        (show (table.low[i.val]'hi).X.Valid ρ ∧
+            (table.low[i.val]'hi).X.intVal.eval ρ.int <
+              P256.base.modulus from ⟨hv.2.1, hv.2.2.1⟩)
+    · have hieq : i = (16 : Fin 17) := Fin.eq_of_val_eq (by omega)
+      subst i
+      simpa [radix32MagnitudeValues] using
+        (show table.p16.X.Valid ρ ∧
+            table.p16.X.intVal.eval ρ.int < P256.base.modulus from
+          ⟨htableValid.2.2.1, htableValid.2.2.2.1⟩)
+  case vc6.hvalues =>
+    intro i
+    by_cases hi : i.val < 16
+    · have hv := htableValid.1 ⟨i.val, hi⟩
+      simpa [radix32MagnitudeValues, hi] using
+        (show (table.low[i.val]'hi).Y.Valid ρ ∧
+            (table.low[i.val]'hi).Y.intVal.eval ρ.int <
+              P256.base.modulus from ⟨hv.2.2.2.2.1, hv.2.2.2.2.2.1⟩)
+    · have hieq : i = (16 : Fin 17) := Fin.eq_of_val_eq (by omega)
+      subst i
+      simpa [radix32MagnitudeValues] using
+        (show table.p16.Y.Valid ρ ∧
+            table.p16.Y.intVal.eval ρ.int < P256.base.modulus from
+          ⟨htableValid.2.2.2.2.2.1, htableValid.2.2.2.2.2.2.1⟩)
+  case vc9.hvalues =>
+    intro i
+    by_cases hi : i.val < 16
+    · have hv := htableValid.1 ⟨i.val, hi⟩
+      simpa [radix32MagnitudeValues, hi] using hv.2.2.2.2.2.2
+    · have hieq : i = (16 : Fin 17) := Fin.eq_of_val_eq (by omega)
+      subst i
+      simpa [radix32MagnitudeValues] using htableValid.2.2.2.2.2.2.2
+  case vc10.success =>
+    rename_i X hX Y hY infinity hinfinity
+    have hspec : Radix32MagnitudeSpec ρ value ⟨X, Y, infinity⟩ q := by
+      rcases hdigit.magnitude_choice with hcenter | ⟨i, hgate, hm⟩
+      · rcases hcenter with ⟨hcenter, hm⟩
+        have habsInt : ((value.eval ρ.int).natAbs : Int) = 0 :=
+          hdigit.magnitude_eval.symm.trans hm
+        have habs : (value.eval ρ.int).natAbs = 0 := by
+          exact_mod_cast habsInt
+        unfold Radix32MagnitudeSpec
+        rw [habs]
+        apply normalizedRep_of_coordinate_eq (htable.1 0)
+        · simpa [radix32MagnitudeValues] using hinfinity.1.1 hcenter
+        · simpa [radix32MagnitudeValues] using hX.1.1 hcenter
+        · simpa [radix32MagnitudeValues] using hY.1.1 hcenter
+      · have habsInt : ((value.eval ρ.int).natAbs : Int) = i.val + 1 :=
+          hdigit.magnitude_eval.symm.trans hm
+        have habs : (value.eval ρ.int).natAbs = i.val + 1 := by
+          exact_mod_cast habsInt
+        unfold Radix32MagnitudeSpec
+        rw [habs]
+        by_cases hi : i.val < 15
+        · let j : Fin 16 := ⟨i.val + 1, by omega⟩
+          have hij : i.val + 1 < 16 := by omega
+          apply normalizedRep_of_coordinate_eq (htable.1 j)
+          · simpa [radix32MagnitudeValues, j, hij] using
+              hinfinity.1.2 i hgate
+          · simpa [radix32MagnitudeValues, j, hij] using hX.1.2 i hgate
+          · simpa [radix32MagnitudeValues, j, hij] using hY.1.2 i hgate
+        · have hieq : i = (15 : Fin 16) := Fin.eq_of_val_eq (by omega)
+          subst i
+          apply normalizedRep_of_coordinate_eq htable.2
+          · simpa [radix32MagnitudeValues] using
+              hinfinity.1.2 (15 : Fin 16) hgate
+          · simpa [radix32MagnitudeValues] using hX.1.2 (15 : Fin 16) hgate
+          · simpa [radix32MagnitudeValues] using hY.1.2 (15 : Fin 16) hgate
     exact ⟨⟨hX.2.2.2, hX.2.1, hX.2.2.1,
-      hY.2.2.2, hY.2.1, hY.2.2.1, hinfinity.2.2⟩, hspec⟩
+      hY.2.2.2, hY.2.1, hY.2.2.1, hinfinity.2⟩, hspec⟩
 
 def ApplyPointSignSpec (ρ : WF.Valuation) (negative : LC ℤ)
     (out : P256.AffineSlope.Point) (q : P256.Reference.Point) : Prop :=

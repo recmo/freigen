@@ -79,13 +79,98 @@ def selectBit (choose whenOne whenZero : LC ℤ) : Circuit (LC ℤ) := do
   assertR1C choose (whenOne - whenZero) (out.intVal - whenZero)
   pure out.intVal
 
+private abbrev SignedMagnitudeLookupArgTypes : List Eff.WitnessSide :=
+  [.z, .z, .z, .z, .z, .z, .z, .z, .z,
+    .z, .z, .z, .z, .z, .z, .z, .z, .z]
+
+def signedMagnitudeLookupArgs (digit : LC ℤ)
+    (values : Vector (LC ℤ) 17) :
+    HList Eff.WitnessSide.denoteW SignedMagnitudeLookupArgTypes :=
+  h![digit, values[0], values[1], values[2], values[3], values[4],
+    values[5], values[6], values[7], values[8], values[9], values[10],
+    values[11], values[12], values[13], values[14], values[15], values[16]]
+
+def signedMagnitudeLookupRepHint :
+    HList Eff.WitnessSide.denoteF SignedMagnitudeLookupArgTypes →
+      Hint (Vector Bool 256)
+  | h![(d : Int), (x0 : Int), (x1 : Int), (x2 : Int), (x3 : Int),
+      (x4 : Int), (x5 : Int), (x6 : Int), (x7 : Int), (x8 : Int),
+      (x9 : Int), (x10 : Int), (x11 : Int), (x12 : Int), (x13 : Int),
+      (x14 : Int), (x15 : Int), (x16 : Int)] =>
+    let values := #[x0, x1, x2, x3, x4, x5, x6, x7, x8,
+      x9, x10, x11, x12, x13, x14, x15, x16]
+    let chosen := values[d.toNat]!
+    if _h : 0 ≤ chosen then
+      pure $ Vector.ofFn (n := 256) fun i => chosen.toNat.testBit i
+    else
+      fail s!"negative direct signed-magnitude coordinate {chosen}"
+
+def signedMagnitudeLookupFlagHint :
+    HList Eff.WitnessSide.denoteF SignedMagnitudeLookupArgTypes →
+      Hint (Vector Bool 1)
+  | h![(d : Int), (x0 : Int), (x1 : Int), (x2 : Int), (x3 : Int),
+      (x4 : Int), (x5 : Int), (x6 : Int), (x7 : Int), (x8 : Int),
+      (x9 : Int), (x10 : Int), (x11 : Int), (x12 : Int), (x13 : Int),
+      (x14 : Int), (x15 : Int), (x16 : Int)] =>
+    let values := #[x0, x1, x2, x3, x4, x5, x6, x7, x8,
+      x9, x10, x11, x12, x13, x14, x15, x16]
+    pure $ Vector.ofFn fun _ => values[d.toNat]! = 1
+
+def radix32MagnitudeValues {α : Type} (low : Vector α 16)
+    (p16 : α) : Vector α 17 :=
+  Vector.ofFn fun i =>
+    if h : i.val < 16 then low[i.val]'h else p16
+
+/-- The gate for magnitude `i+1` is the sum of its negative and positive
+signed one-hot slots.  The one-hot invariant makes this sum Boolean. -/
+def signedNonzeroMagnitudeGate (digit : SignedDigit)
+    (i : Nat) (hi : i < 16) : LC ℤ :=
+  digit.oneHot.intBits[15 - i]'(by omega) +
+    digit.oneHot.intBits[17 + i]'(by omega)
+
+/-- Open one coordinate for magnitudes zero through sixteen.  Slot 16 marks
+the zero digit and constrains the coordinate to the table's normalized
+infinity entry; this is required when the top digit seeds the accumulator and
+is consumed by doubling before any complete addition. -/
+def lookupSignedMagnitudeRep (digit : SignedDigit)
+    (values : Vector AffineSlope.Rep 17) : Circuit AffineSlope.Rep := do
+  let bits ← hint
+    (signedMagnitudeLookupArgs digit.magnitude (values.map (·.intVal)))
+    signedMagnitudeLookupRepHint
+  let word ← U.fromWord { bitsLE := bits }
+  assertR1C digit.oneHot.intBits[16]
+    (word.intVal - values[0].intVal) 0
+  WF.foldRange [:16] () fun i hi _ => do
+    have hi' : i < 16 := hi.2.1
+    assertR1C (signedNonzeroMagnitudeGate digit i hi')
+      (word.intVal - (values[i + 1]'(by omega)).intVal) 0
+  pure ⟨word.intVal, 2⟩
+
+/-- Select the infinity flag from the same 17-entry magnitude table.  The
+flag cannot be derived solely from the zero digit: the generic selector also
+supports zero and torsion input points, whose nonzero multiples may be
+infinity. -/
+def lookupSignedMagnitudeFlag (digit : SignedDigit)
+    (values : Vector (LC ℤ) 17) : Circuit (LC ℤ) := do
+  let bits ← hint (signedMagnitudeLookupArgs digit.magnitude values)
+    signedMagnitudeLookupFlagHint
+  let out ← f2z bits[0]
+  assertR1C digit.oneHot.intBits[16] (out - values[0]) 0
+  WF.foldRange [:16] () fun i hi _ => do
+    have hi' : i < 16 := hi.2.1
+    assertR1C (signedNonzeroMagnitudeGate digit i hi')
+      (out - values[i + 1]'(by omega)) 0
+  pure out
+
 def selectRadix32Magnitude (digit : SignedDigit) (table : Radix32Table) :
     Circuit AffineSlope.Point := do
-  let lowMagnitude := digit.magnitude - 16 • digit.isSixteen
-  let low ← lookupPoint lowMagnitude table.low
-  let X ← AffineSlope.selectCanonical digit.isSixteen table.p16.X low.X
-  let Y ← AffineSlope.selectCanonical digit.isSixteen table.p16.Y low.Y
-  let infinity ← selectBit digit.isSixteen table.p16.infinity low.infinity
+  let xs := radix32MagnitudeValues (table.low.map (·.X)) table.p16.X
+  let ys := radix32MagnitudeValues (table.low.map (·.Y)) table.p16.Y
+  let infinities := radix32MagnitudeValues
+    (table.low.map (·.infinity)) table.p16.infinity
+  let X ← lookupSignedMagnitudeRep digit xs
+  let Y ← lookupSignedMagnitudeRep digit ys
+  let infinity ← lookupSignedMagnitudeFlag digit infinities
   pure ⟨X, Y, infinity⟩
 
 def selectSignedRadix32Point (digit : SignedDigit)

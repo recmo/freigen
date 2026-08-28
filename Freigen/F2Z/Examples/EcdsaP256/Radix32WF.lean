@@ -127,6 +127,240 @@ theorem applyPointSign_wf_aux :
       (Modular.Aux.WF.common_realizes_of_hint h) i.val i.isLt
   all_goals simp_all [WF.LCEq, WF.ArgsEq, WF.evalArgs]
 
+private theorem signedNonzeroMagnitudeGate_wfRel {lv rv : WF.Valuation}
+    {left right : SignedDigit} (h : SignedDigit.WFRel lv rv left right)
+    (i : Nat) (hi : i < 16) :
+    WF.LCEq lv.int rv.int
+      (signedNonzeroMagnitudeGate left i hi)
+      (signedNonzeroMagnitudeGate right i hi) := by
+  unfold signedNonzeroMagnitudeGate
+  exact WF.eval_add (h.2 ⟨15 - i, by omega⟩)
+    (h.2 ⟨17 + i, by omega⟩)
+
+private theorem radix32MagnitudeValues_wfRel {lv rv : WF.Valuation}
+    {lowL lowR : Vector AffineSlope.Rep 16}
+    {p16L p16R : AffineSlope.Rep}
+    (hlow : WF.VectorRel Modular.Lazy.Rep.WFRel lv rv lowL lowR)
+    (hp16 : Modular.Lazy.Rep.WFRel lv rv p16L p16R) :
+    WF.VectorRel Modular.Lazy.Rep.WFRel lv rv
+      (radix32MagnitudeValues lowL p16L)
+      (radix32MagnitudeValues lowR p16R) := by
+  intro i
+  simp only [radix32MagnitudeValues, Vector.getElem_ofFn, Fin.getElem_fin]
+  split
+  · exact hlow ⟨i.val, by omega⟩
+  · exact hp16
+
+private theorem radix32MagnitudeFlags_wfRel {lv rv : WF.Valuation}
+    {lowL lowR : Vector (LC ℤ) 16} {p16L p16R : LC ℤ}
+    (hlow : WF.VectorRel (fun lv rv left right =>
+      WF.LCEq lv.int rv.int left right) lv rv lowL lowR)
+    (hp16 : WF.LCEq lv.int rv.int p16L p16R) :
+    WF.VectorRel (fun lv rv left right =>
+      WF.LCEq lv.int rv.int left right) lv rv
+      (radix32MagnitudeValues lowL p16L)
+      (radix32MagnitudeValues lowR p16R) := by
+  intro i
+  simp only [radix32MagnitudeValues, Vector.getElem_ofFn, Fin.getElem_fin]
+  split
+  · exact hlow ⟨i.val, by omega⟩
+  · exact hp16
+
+def SignedMagnitudeLookupInput.WFRel :
+    WF.Post (SignedDigit × Vector AffineSlope.Rep 17) :=
+  fun lv rv left right =>
+    SignedDigit.WFRel lv rv left.1 right.1 ∧
+    WF.VectorRel Modular.Lazy.Rep.WFRel lv rv left.2 right.2
+
+theorem lookupSignedMagnitudeRep_wf_aux :
+    WF.GadgetSpec SignedMagnitudeLookupInput.WFRel
+      (fun input => lookupSignedMagnitudeRep input.1 input.2)
+      Modular.Lazy.Rep.WFRel := by
+  unfold WF.GadgetSpec
+  intro left right
+  unfold lookupSignedMagnitudeRep
+  have hargs : ∀ lv rv,
+      SignedMagnitudeLookupInput.WFRel lv rv left right →
+      WF.ArgsEq lv rv
+        (signedMagnitudeLookupArgs left.1.magnitude
+          (left.2.map (·.intVal)))
+        (signedMagnitudeLookupArgs right.1.magnitude
+          (right.2.map (·.intVal))) := by
+    intro lv rv h
+    have hm := signedDigit_magnitude_wfRel h.1
+    unfold WF.LCEq at hm
+    have hv (i : Fin 17) := (h.2 i).2
+    unfold WF.LCEq at hv
+    unfold WF.ArgsEq signedMagnitudeLookupArgs
+    simp only [WF.evalArgs, Vector.getElem_map]
+    simp only [HList.cons.injEq, hm]
+    exact ⟨trivial, hv 0, hv 1, hv 2, hv 3, hv 4, hv 5, hv 6,
+      hv 7, hv 8, hv 9, hv 10, hv 11, hv 12, hv 13, hv 14,
+      hv 15, hv 16, trivial⟩
+  apply WF.Rel.hint
+  · exact hargs
+  · intro lv rv h
+    exact WF.HintRel.of_argsEq signedMagnitudeLookupRepHint (hargs lv rv h)
+  · intro bitsL bitsR
+    let S : WF.Assumption := fun lv rv =>
+      SignedMagnitudeLookupInput.WFRel lv rv left right ∧ ∃ values,
+        WF.HintReturns (signedMagnitudeLookupRepHint
+          (WF.evalArgs lv (signedMagnitudeLookupArgs left.1.magnitude
+            (left.2.map (·.intVal))))) values ∧
+        WF.HintReturns (signedMagnitudeLookupRepHint
+          (WF.evalArgs rv (signedMagnitudeLookupArgs right.1.magnitude
+            (right.2.map (·.intVal))))) values ∧
+        WF.RealizesBools lv.bool bitsL values ∧
+        WF.RealizesBools rv.bool bitsR values
+    have hbits : ∀ lv rv, S lv rv → ∀ i : Fin 256,
+        WF.LCEq lv.bool rv.bool bitsL[i] bitsR[i] := by
+      intro lv rv h i
+      exact Modular.Aux.WF.lceq_of_common_realizes
+        (Modular.Aux.WF.common_realizes_of_hint h) i.val i.isLt
+    have hword := U.fromWord_wf_rel.relHom S
+      ({ bitsLE := bitsL } : Word 256) ({ bitsLE := bitsR } : Word 256)
+      hbits
+    apply hword.bind
+    intro B wordL wordR hwordRel
+    apply WF.Rel.assertR1C
+    · intro lv rv hB
+      exact (hwordRel lv rv hB).1.1.1.2 ⟨16, by omega⟩
+    · intro lv rv hB
+      have h := hwordRel lv rv hB
+      exact WF.eval_sub h.2.1 (h.1.1.2 0).2
+    · intro _ _ _
+      simp [WF.LCEq]
+    have hfold := WF.Rel.foldRange_rule
+      (xs := [:16]) (initL := ()) (initR := ())
+      (stepL := fun i hi _ =>
+        assertR1C (signedNonzeroMagnitudeGate left.1 i hi.2.1)
+          (wordL.intVal -
+            (left.2[i + 1]'(Nat.succ_lt_succ hi.2.1)).intVal) 0)
+      (stepR := fun i hi _ =>
+        assertR1C (signedNonzeroMagnitudeGate right.1 i hi.2.1)
+          (wordR.intVal -
+            (right.2[i + 1]'(Nat.succ_lt_succ hi.2.1)).intVal) 0)
+      (I := fun lv rv (_ _ : Unit) =>
+        SignedMagnitudeLookupInput.WFRel lv rv left right ∧
+        U.WFRel lv rv wordL wordR) (by
+          intro lv rv hB
+          have hw := hwordRel lv rv hB
+          exact ⟨hw.1.1, hw.2⟩) (by
+          intro i hi P _ _ hrel
+          apply WF.Rel.assertR1C_pure
+          · intro lv rv hP
+            exact signedNonzeroMagnitudeGate_wfRel (hrel lv rv hP).1.1
+              i hi.2.1
+          · intro lv rv hP
+            have h := hrel lv rv hP
+            have hi' : i < 16 := hi.2.1
+            exact WF.eval_sub h.2.1 (h.1.2 ⟨i + 1, by omega⟩).2
+          · intro _ _ _
+            simp [WF.LCEq]
+          · intro lv rv hP
+            exact ⟨hP, hrel lv rv hP⟩)
+    apply hfold.bind
+    intro C _ _ hunit
+    apply WF.Rel.pure
+    intro lv rv hC
+    have h := hunit lv rv hC
+    exact ⟨rfl, h.2.1⟩
+
+def SignedMagnitudeFlagLookupInput.WFRel :
+    WF.Post (SignedDigit × Vector (LC ℤ) 17) :=
+  fun lv rv left right =>
+    SignedDigit.WFRel lv rv left.1 right.1 ∧
+    WF.VectorRel (fun lv rv l r => WF.LCEq lv.int rv.int l r)
+      lv rv left.2 right.2
+
+theorem lookupSignedMagnitudeFlag_wf_aux :
+    WF.GadgetSpec SignedMagnitudeFlagLookupInput.WFRel
+      (fun input => lookupSignedMagnitudeFlag input.1 input.2)
+      (fun lv rv left right => WF.LCEq lv.int rv.int left right) := by
+  unfold WF.GadgetSpec
+  intro left right
+  unfold lookupSignedMagnitudeFlag
+  have hargs : ∀ lv rv,
+      SignedMagnitudeFlagLookupInput.WFRel lv rv left right →
+      WF.ArgsEq lv rv
+        (signedMagnitudeLookupArgs left.1.magnitude left.2)
+        (signedMagnitudeLookupArgs right.1.magnitude right.2) := by
+    intro lv rv h
+    have hm := signedDigit_magnitude_wfRel h.1
+    unfold WF.LCEq at hm
+    have hv (i : Fin 17) := h.2 i
+    unfold WF.LCEq at hv
+    unfold WF.ArgsEq signedMagnitudeLookupArgs
+    simp only [WF.evalArgs]
+    simp only [HList.cons.injEq, hm]
+    exact ⟨trivial, hv 0, hv 1, hv 2, hv 3, hv 4, hv 5, hv 6,
+      hv 7, hv 8, hv 9, hv 10, hv 11, hv 12, hv 13, hv 14,
+      hv 15, hv 16, trivial⟩
+  apply WF.Rel.hint
+  · exact hargs
+  · intro lv rv h
+    exact WF.HintRel.of_argsEq signedMagnitudeLookupFlagHint
+      (hargs lv rv h)
+  · intro bitsL bitsR
+    let S : WF.Assumption := fun lv rv =>
+      SignedMagnitudeFlagLookupInput.WFRel lv rv left right ∧ ∃ values,
+        WF.HintReturns (signedMagnitudeLookupFlagHint
+          (WF.evalArgs lv
+            (signedMagnitudeLookupArgs left.1.magnitude left.2))) values ∧
+        WF.HintReturns (signedMagnitudeLookupFlagHint
+          (WF.evalArgs rv
+            (signedMagnitudeLookupArgs right.1.magnitude right.2))) values ∧
+        WF.RealizesBools lv.bool bitsL values ∧
+        WF.RealizesBools rv.bool bitsR values
+    have hbit : ∀ lv rv, S lv rv →
+        WF.LCEq lv.bool rv.bool bitsL[0] bitsR[0] := by
+      intro lv rv h
+      exact Modular.Aux.WF.lceq_of_common_realizes
+        (Modular.Aux.WF.common_realizes_of_hint h) 0 (by omega)
+    have hout := WF.Rel.f2z_rel hbit
+    apply hout.bind
+    intro B outL outR houtRel
+    apply WF.Rel.assertR1C
+    · intro lv rv hB
+      exact (houtRel lv rv hB).1.1.1.2 ⟨16, by omega⟩
+    · intro lv rv hB
+      have h := houtRel lv rv hB
+      exact WF.eval_sub h.2 (h.1.1.2 0)
+    · intro _ _ _
+      simp [WF.LCEq]
+    have hfold := WF.Rel.foldRange_rule
+      (xs := [:16]) (initL := ()) (initR := ())
+      (stepL := fun i hi _ =>
+        assertR1C (signedNonzeroMagnitudeGate left.1 i hi.2.1)
+          (outL - left.2[i + 1]'(Nat.succ_lt_succ hi.2.1)) 0)
+      (stepR := fun i hi _ =>
+        assertR1C (signedNonzeroMagnitudeGate right.1 i hi.2.1)
+          (outR - right.2[i + 1]'(Nat.succ_lt_succ hi.2.1)) 0)
+      (I := fun lv rv (_ _ : Unit) =>
+        SignedMagnitudeFlagLookupInput.WFRel lv rv left right ∧
+        WF.LCEq lv.int rv.int outL outR) (by
+          intro lv rv hB
+          have ho := houtRel lv rv hB
+          exact ⟨ho.1.1, ho.2⟩) (by
+          intro i hi P _ _ hrel
+          apply WF.Rel.assertR1C_pure
+          · intro lv rv hP
+            exact signedNonzeroMagnitudeGate_wfRel (hrel lv rv hP).1.1
+              i hi.2.1
+          · intro lv rv hP
+            have h := hrel lv rv hP
+            have hi' : i < 16 := hi.2.1
+            exact WF.eval_sub h.2 (h.1.2 ⟨i + 1, by omega⟩)
+          · intro _ _ _
+            simp [WF.LCEq]
+          · intro lv rv hP
+            exact ⟨hP, hrel lv rv hP⟩)
+    apply hfold.bind
+    intro C _ _ hunit
+    apply WF.Rel.pure
+    intro lv rv hC
+    exact (hunit lv rv hC).2
+
 theorem selectRadix32Magnitude_wf_aux :
     WF.GadgetSpec
       (fun lv rv (left right : SignedDigit × Radix32Table) =>
@@ -138,48 +372,53 @@ theorem selectRadix32Magnitude_wf_aux :
   intro left right
   unfold selectRadix32Magnitude
   apply WF.GadgetSpec.bind_rule
-    (left := (left.1.magnitude - 16 • left.1.isSixteen, left.2.low))
-    (right := (right.1.magnitude - 16 • right.1.isSixteen, right.2.low))
-    lookupPoint_wf_aux
+    (left := (left.1,
+      radix32MagnitudeValues (left.2.low.map (·.X)) left.2.p16.X))
+    (right := (right.1,
+      radix32MagnitudeValues (right.2.low.map (·.X)) right.2.p16.X))
+    lookupSignedMagnitudeRep_wf_aux
   · intro lv rv h
-    exact ⟨WF.eval_sub (signedDigit_magnitude_wfRel h.1)
-      (lceq_nsmul 16 (signedDigit_isSixteen_wfRel h.1)), h.2.1⟩
-  · intro B lowL lowR hlow
+    exact ⟨h.1, radix32MagnitudeValues_wfRel
+      (fun i => by
+        simpa [Vector.getElem_map] using
+          (h.2.1 i).1)
+      h.2.2.1⟩
+  · intro B XL XR hX
     apply WF.GadgetSpec.bind_rule
-      (left := (left.1.isSixteen, left.2.p16.X, lowL.X))
-      (right := (right.1.isSixteen, right.2.p16.X, lowR.X))
-      AffineSlope.selectCanonical_wf_aux
+      (left := (left.1,
+        radix32MagnitudeValues (left.2.low.map (·.Y)) left.2.p16.Y))
+      (right := (right.1,
+        radix32MagnitudeValues (right.2.low.map (·.Y)) right.2.p16.Y))
+      lookupSignedMagnitudeRep_wf_aux
     · intro lv rv hB
-      have h := hlow lv rv hB
-      exact ⟨signedDigit_isSixteen_wfRel h.1.1, h.1.2.2.1, h.2.1⟩
-    · intro C XL XR hX
+      have hx := hX lv rv hB
+      exact ⟨hx.1.1, radix32MagnitudeValues_wfRel
+        (fun i => by
+          simpa [Vector.getElem_map] using
+            (hx.1.2.1 i).2.1)
+        hx.1.2.2.2.1⟩
+    · intro C YL YR hY
       apply WF.GadgetSpec.bind_rule
-        (left := (left.1.isSixteen, left.2.p16.Y, lowL.Y))
-        (right := (right.1.isSixteen, right.2.p16.Y, lowR.Y))
-        AffineSlope.selectCanonical_wf_aux
+        (left := (left.1, radix32MagnitudeValues
+          (left.2.low.map (·.infinity)) left.2.p16.infinity))
+        (right := (right.1, radix32MagnitudeValues
+          (right.2.low.map (·.infinity)) right.2.p16.infinity))
+        lookupSignedMagnitudeFlag_wf_aux
       · intro lv rv hC
-        have hx := hX lv rv hC
-        have hl := hlow lv rv hx.1
-        exact ⟨signedDigit_isSixteen_wfRel hl.1.1,
-          hl.1.2.2.2.1, hl.2.2.1⟩
-      · intro D YL YR hY
-        apply WF.GadgetSpec.bind_rule
-          (left := (left.1.isSixteen, left.2.p16.infinity, lowL.infinity))
-          (right := (right.1.isSixteen, right.2.p16.infinity, lowR.infinity))
-          selectBit_wf_aux
-        · intro lv rv hD
-          have hy := hY lv rv hD
-          have hx := hX lv rv hy.1
-          have hl := hlow lv rv hx.1
-          exact ⟨signedDigit_isSixteen_wfRel hl.1.1,
-            hl.1.2.2.2.2, hl.2.2.2⟩
-        · intro E infinityL infinityR hinfinity
-          apply WF.Rel.pure
-          intro lv rv hE
-          have hi := hinfinity lv rv hE
-          have hy := hY lv rv hi.1
-          have hx := hX lv rv hy.1
-          exact ⟨hx.2, hy.2, hi.2⟩
+        have hy := hY lv rv hC
+        have hx := hX lv rv hy.1
+        exact ⟨hx.1.1, radix32MagnitudeFlags_wfRel
+          (fun i => by
+            simpa [Vector.getElem_map] using
+              (hx.1.2.1 i).2.2)
+          hx.1.2.2.2.2⟩
+      · intro D infinityL infinityR hinfinity
+        apply WF.Rel.pure
+        intro lv rv hD
+        have hi := hinfinity lv rv hD
+        have hy := hY lv rv hi.1
+        have hx := hX lv rv hy.1
+        exact ⟨hx.2, hy.2, hi.2⟩
 
 theorem selectSignedRadix32Point_wf_aux :
     WF.GadgetSpec
@@ -220,7 +459,7 @@ private theorem windowValue_wfRel {lv rv : WF.Valuation}
   unfold WF.LCEq at hb
   exact congrArg (2 ^ j.val • ·) hb
 
-private theorem boothDigit_wfRel {lv rv : WF.Valuation}
+theorem boothDigit_wfRel {lv rv : WF.Valuation}
     {left right : Fn} (h : Modular.Elem.ScalarWFRel lv rv left right)
     (i : Nat) (hi : i < 52) :
     WF.LCEq lv.int rv.int
@@ -393,82 +632,5 @@ theorem signedRadix32JointScalarMul_wf_aux :
             exact ⟨hpost.1, (hacc lv rv hpost.1).1, hpost.2⟩)
         · intro lv rv outL outR hpost
           exact hpost.2
-
-theorem computeVerificationSum_radix32_wf_aux :
-    WF.GadgetSpec PreparedVerification.WFRel computeVerificationSum
-      AffineSlope.Point.WFRel := by
-  unfold WF.GadgetSpec
-  intro left right
-  unfold computeVerificationSum
-  apply WF.GadgetSpec.direct_rule
-    (left := (left.u1, left.u2, left.q))
-    (right := (right.u1, right.u2, right.q))
-    signedRadix32JointScalarMul_wf_aux
-  intro lv rv h
-  exact ⟨h.1, h.2.1, h.2.2.1⟩
-
-theorem finishVerification_radix32_wf_aux :
-    WF.GadgetSpec PreparedVerification.WFRel finishVerification
-      (fun _ _ _ _ => True) := by
-  unfold WF.GadgetSpec
-  intro left right
-  unfold finishVerification
-  apply WF.GadgetSpec.bind_rule_direct
-    (left := left) (right := right) computeVerificationSum_radix32_wf_aux
-  · intro lv rv h
-    exact h
-  · intro sumL sumR
-    apply WF.GadgetSpec.direct_rule
-      (left := (left.r, sumL)) (right := (right.r, sumR))
-      checkVerificationX_wf_aux
-    intro lv rv h
-    exact ⟨h.1.2.2.2, h.2⟩
-
-theorem verifyDigest_radix32_wf_aux :
-    WF.GadgetSpec VerifyInput.WFRel
-      (fun input => verifyDigest input.1 input.2.1 input.2.2.1 input.2.2.2)
-      (fun _ _ _ _ => True) := by
-  unfold WF.GadgetSpec
-  intro left right
-  unfold verifyDigest
-  apply WF.GadgetSpec.bind_rule_direct
-    (left := (left.2.1, left.2.2.1, left.2.2.2))
-    (right := (right.2.1, right.2.2.1, right.2.2.2))
-    canonicalizeInput_wf_aux
-  · intro lv rv h
-    exact h.2
-  · intro inputL inputR
-    apply WF.GadgetSpec.bind_rule_direct
-      (left := (left.1, inputL)) (right := (right.1, inputR))
-      prepareVerification_wf_aux
-    · intro lv rv h
-      exact ⟨h.1.1, h.2⟩
-    · intro preparedL preparedR
-      apply WF.GadgetSpec.direct_rule
-        (left := preparedL) (right := preparedR)
-        finishVerification_radix32_wf_aux
-      intro lv rv h
-      exact h.2
-
-theorem verifyDigestFromBits_radix32_wf_aux :
-    WF.GadgetSpec VerifyDigestBits.WFRel verifyDigestFromBits
-      (fun _ _ _ _ => True) := by
-  unfold WF.GadgetSpec
-  intro left right
-  unfold verifyDigestFromBits
-  apply WF.GadgetSpec.bind_rule_direct
-    (left := verifyDigestInputWords left)
-    (right := verifyDigestInputWords right) mapM_fromWord_wf_full
-  · intro lv rv h
-    exact verifyDigestInputWords_wf h
-  · intro valuesL valuesR
-    apply WF.GadgetSpec.direct_rule
-      (left := (valuesL[0], ⟨valuesL[1], valuesL[2]⟩,
-        ⟨valuesL[3], valuesL[4]⟩, ⟨valuesL[5], valuesL[6]⟩))
-      (right := (valuesR[0], ⟨valuesR[1], valuesR[2]⟩,
-        ⟨valuesR[3], valuesR[4]⟩, ⟨valuesR[5], valuesR[6]⟩))
-      verifyDigest_radix32_wf_aux
-    intro lv rv h
-    exact ⟨h.2 0, h.2 1, h.2 2, h.2 3, h.2 4, h.2 5, h.2 6⟩
 
 end Freigen.F2Z.Examples.EcdsaP256
