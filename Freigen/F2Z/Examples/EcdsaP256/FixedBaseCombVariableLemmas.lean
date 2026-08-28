@@ -1,5 +1,6 @@
 import Freigen.F2Z.Examples.EcdsaP256.FixedBaseCombLemmas
 import Freigen.F2Z.Examples.EcdsaP256.Radix32Lemmas
+import Freigen.F2Z.Examples.P256.CanonicalXLemmas
 import Freigen.F2Z.Examples.P256.XOnlyLemmas
 
 /-! Correctness of the variable-only signed radix-32 branch. -/
@@ -362,6 +363,45 @@ theorem fixedCombVerificationPoint_eq_verificationPoint
     ⦃⇓ out => ⌜out.Valid ρ ∧ Reference.NormalizedXRep ρ out
       (FixedCombVerificationPoint ρ input.u1 input.u2 q)⌝⦄ := by
   mvcgen [fixedCombVerificationX, FixedCombVerificationPoint]
+  case vc8 => intros; exact ‹_ ∧ Reference.NormalizedRep _ _ _› |>.1
+  case vc9 => intro hvalid _; exact hvalid
+  case vc10 => intros; exact ‹_ ∧ Reference.NormalizedRep _ _ _› |>.2
+  case vc11 => intro _ hfixed; exact hfixed
+  case vc12 =>
+    intros
+    apply Reference.Aux.no_two_torsion_of_order
+    rw [SignedRadix32VariableFoldPoint_full q hu2]
+    exact Reference.Aux.order_nsmul horder _
+
+@[spec] theorem fixedCombVerificationCanonicalX_sound
+    {input : PreparedVerification} {q : Reference.Point}
+    (hu1 : input.u1.val.Valid ρ) (hu2 : input.u2.val.Valid ρ)
+    (hQ : Reference.Represents ρ
+      (AffineSlope.ofElems input.q.X input.q.Y) q) :
+    ⦃⌜True⌝⦄ Sound.interp ρ (fixedCombVerificationCanonicalX input)
+    ⦃⇓ out => ⌜out.X.Valid ρ ∧ Reference.CanonicalXRepresents ρ out
+      (FixedCombVerificationPoint ρ input.u1 input.u2 q)⌝⦄ := by
+  mvcgen [fixedCombVerificationCanonicalX, FixedCombVerificationPoint]
+  case vc5 =>
+    intro _
+    rename_i variablePart hvariable fixedPart hfixed
+    exact hvariable.1
+  case vc6 =>
+    intro _
+    rename_i variablePart hvariable fixedPart hfixed
+    exact hfixed.1
+
+@[spec] theorem fixedCombVerificationCanonicalX_complete
+    {input : PreparedVerification} {q : Reference.Point}
+    (hu1 : input.u1.val.Valid ρ) (hu2 : input.u2.val.Valid ρ)
+    (hQvalid : input.q.Valid ρ)
+    (hQ : Reference.Represents ρ
+      (AffineSlope.ofElems input.q.X input.q.Y) q)
+    (hq : q ≠ 0) (horder : scalarModulus • q = 0) :
+    ⦃⌜True⌝⦄ Complete.interp ρ (fixedCombVerificationCanonicalX input)
+    ⦃⇓ out => ⌜out.Valid ρ ∧ Reference.CanonicalXRepresents ρ out
+      (FixedCombVerificationPoint ρ input.u1 input.u2 q)⌝⦄ := by
+  mvcgen [fixedCombVerificationCanonicalX, FixedCombVerificationPoint]
   case vc8 => intros; exact ‹_ ∧ Reference.NormalizedRep _ _ _› |>.1
   case vc9 => intro hvalid _; exact hvalid
   case vc10 => intros; exact ‹_ ∧ Reference.NormalizedRep _ _ _› |>.2

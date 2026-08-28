@@ -1,4 +1,5 @@
 import Freigen.F2Z.Examples.EcdsaP256.Radix32WF
+import Freigen.F2Z.Examples.P256.CanonicalXWF
 import Freigen.F2Z.Examples.P256.XOnlyWF
 
 /-! Quotient well-formedness for the fixed-base comb production verifier. -/
@@ -690,6 +691,31 @@ theorem fixedCombVerificationX_wf_aux :
       have hv := hvariable lv rv hf.1
       exact ⟨hv.2, hf.2⟩
 
+theorem fixedCombVerificationCanonicalX_wf_aux :
+    WF.GadgetSpec PreparedVerification.WFRel fixedCombVerificationCanonicalX
+      AffineSlope.CanonicalXPoint.WFRel := by
+  unfold WF.GadgetSpec
+  intro left right
+  unfold fixedCombVerificationCanonicalX
+  apply WF.GadgetSpec.bind_rule
+    (left := (left.u2, left.q)) (right := (right.u2, right.q))
+    signedRadix32VariableMul_wf_aux
+  · intro lv rv h
+    exact ⟨h.2.1, h.2.2.1⟩
+  · intro B variableL variableR hvariable
+    apply WF.GadgetSpec.bind_rule
+      (left := left.u1) (right := right.u1) fixedBaseCombComplete_wf_aux
+    · intro lv rv hB
+      exact (hvariable lv rv hB).1.1
+    · intro C fixedL fixedR hfixed
+      apply WF.GadgetSpec.direct_rule
+        (left := (variableL, fixedL)) (right := (variableR, fixedR))
+        AffineSlope.addCompleteCollapsedCanonicalX_wf_aux
+      intro lv rv hC
+      have hf := hfixed lv rv hC
+      have hv := hvariable lv rv hf.1
+      exact ⟨hv.2, hf.2⟩
+
 theorem computeVerificationSum_radix32_wf_aux :
     WF.GadgetSpec PreparedVerification.WFRel computeVerificationSum
       AffineSlope.Point.WFRel := by
@@ -702,6 +728,12 @@ theorem computeVerificationX_radix32_wf_aux :
   unfold computeVerificationX
   exact fixedCombVerificationX_wf_aux
 
+theorem computeVerificationCanonicalX_radix32_wf_aux :
+    WF.GadgetSpec PreparedVerification.WFRel computeVerificationCanonicalX
+      AffineSlope.CanonicalXPoint.WFRel := by
+  unfold computeVerificationCanonicalX
+  exact fixedCombVerificationCanonicalX_wf_aux
+
 theorem finishVerification_radix32_wf_aux :
     WF.GadgetSpec PreparedVerification.WFRel finishVerification
       (fun _ _ _ _ => True) := by
@@ -709,16 +741,17 @@ theorem finishVerification_radix32_wf_aux :
   intro left right
   unfold finishVerification
   apply WF.GadgetSpec.bind_rule_direct
-    (left := left) (right := right) computeVerificationX_radix32_wf_aux
+    (left := left) (right := right)
+    computeVerificationCanonicalX_radix32_wf_aux
   · intro lv rv h
     exact h
   · intro sumL sumR
     apply WF.GadgetSpec.direct_rule
-      (left := (left.r, sumL.X, sumL.infinity))
-      (right := (right.r, sumR.X, sumR.infinity))
-      checkVerificationXAndInfinity_wf_aux
+      (left := (left.r, sumL))
+      (right := (right.r, sumR))
+      checkVerificationCanonicalX_wf_aux
     intro lv rv h
-    exact ⟨h.1.2.2.2, h.2.1, h.2.2⟩
+    exact ⟨h.1.2.2.2, h.2⟩
 
 theorem verifyDigest_radix32_wf_aux :
     WF.GadgetSpec VerifyInput.WFRel

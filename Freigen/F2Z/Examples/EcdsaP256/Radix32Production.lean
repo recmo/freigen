@@ -18,9 +18,13 @@ def computeVerificationX (input : PreparedVerification) :
     Circuit AffineSlope.XPoint :=
   fixedCombVerificationX input
 
+def computeVerificationCanonicalX (input : PreparedVerification) :
+    Circuit AffineSlope.CanonicalXPoint :=
+  fixedCombVerificationCanonicalX input
+
 def finishVerification (input : PreparedVerification) : Circuit Unit := do
-  let sum ← computeVerificationX input
-  checkVerificationXAndInfinity input.r sum.X sum.infinity
+  let sum ← computeVerificationCanonicalX input
+  checkVerificationCanonicalX input.r sum
 
 /-- Verify an ECDSA-P256 signature over an already computed SHA-256 digest
 using a mixed-width fixed-base comb and signed radix-32 Booth recoding. -/

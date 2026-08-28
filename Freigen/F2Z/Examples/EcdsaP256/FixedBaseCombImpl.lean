@@ -1,5 +1,5 @@
 import Freigen.F2Z.Examples.EcdsaP256.Radix32Impl
-import Freigen.F2Z.Examples.P256.XOnlyImpl
+import Freigen.F2Z.Examples.P256.CanonicalXImpl
 
 /-!
 # Mixed-width fixed-base comb for ECDSA-P256
@@ -236,5 +236,11 @@ def fixedCombVerificationX (input : PreparedVerification) :
   let variablePart ← signedRadix32VariableMul input.u2 input.q
   let fixedPart ← fixedBaseCombComplete input.u1
   AffineSlope.addCompleteCollapsedX variablePart fixedPart
+
+def fixedCombVerificationCanonicalX (input : PreparedVerification) :
+    Circuit AffineSlope.CanonicalXPoint := do
+  let variablePart ← signedRadix32VariableMul input.u2 input.q
+  let fixedPart ← fixedBaseCombComplete input.u1
+  AffineSlope.addCompleteCollapsedCanonicalX variablePart fixedPart
 
 end Freigen.F2Z.Examples.EcdsaP256

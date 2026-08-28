@@ -2,6 +2,7 @@ import Freigen.F2Z.Examples.EcdsaP256.Impl
 import Freigen.F2Z.Examples.P256.WF
 import Freigen.F2Z.Examples.P256.CollapsedWF
 import Freigen.F2Z.Examples.P256.XOnlyWF
+import Freigen.F2Z.Examples.P256.CanonicalXWF
 
 /-!
 # Auxiliary quotient well-formedness proofs for ECDSA-P256
@@ -1062,6 +1063,77 @@ theorem checkVerificationX_wf_aux :
     checkVerificationXAndInfinity_wf_aux
   intro lv rv h
   exact ⟨h.1, h.2.1, h.2.2.2⟩
+
+def CheckVerificationCanonicalX.WFRel :
+    WF.Post (Fn × AffineSlope.CanonicalXPoint) :=
+  fun lv rv left right =>
+    Modular.Elem.WFRel lv rv left.1 right.1 ∧
+    AffineSlope.CanonicalXPoint.WFRel lv rv left.2 right.2
+
+set_option maxHeartbeats 200000 in
+theorem checkVerificationCanonicalX_wf_aux :
+    WF.GadgetSpec CheckVerificationCanonicalX.WFRel
+      (fun input => checkVerificationCanonicalX input.1 input.2)
+      (fun _ _ _ _ => True) := by
+  unfold WF.GadgetSpec
+  intro left right
+  unfold checkVerificationCanonicalX
+  apply WF.Rel.assertR1C
+  · intro _ _ _
+    rfl
+  · intro _ _ _
+    rfl
+  · intro lv rv h
+    exact h.2.2
+  · have hargs : ∀ lv rv, CheckVerificationCanonicalX.WFRel lv rv left right →
+        WF.ArgsEq lv rv
+          h![left.2.X.val.intVal, left.1.val.intVal]
+          h![right.2.X.val.intVal, right.1.val.intVal] := by
+      intro lv rv h
+      simp_all [WF.ArgsEq, WF.evalArgs,
+        CheckVerificationCanonicalX.WFRel,
+        AffineSlope.CanonicalXPoint.WFRel, Modular.Elem.WFRel,
+        U.WFRel, WF.LCEq]
+    apply WF.Rel.hint
+    · exact hargs
+    · intro lv rv h
+      exact WF.HintRel.of_argsEq terminalScalarQuotientHint
+        (hargs lv rv h)
+    · intro bitsL bitsR
+      let S : WF.Assumption := fun lv rv =>
+        CheckVerificationCanonicalX.WFRel lv rv left right ∧ ∃ values,
+          WF.HintReturns
+            (terminalScalarQuotientHint (WF.evalArgs lv
+              h![left.2.X.val.intVal, left.1.val.intVal])) values ∧
+          WF.HintReturns
+            (terminalScalarQuotientHint (WF.evalArgs rv
+              h![right.2.X.val.intVal, right.1.val.intVal])) values ∧
+          WF.RealizesBools lv.bool bitsL values ∧
+          WF.RealizesBools rv.bool bitsR values
+      have hbits : ∀ lv rv, S lv rv → ∀ i : Fin 1,
+          WF.LCEq lv.bool rv.bool bitsL[i] bitsR[i] := by
+        intro lv rv h i
+        exact Modular.Aux.WF.lceq_of_common_realizes
+          (Modular.Aux.WF.common_realizes_of_hint h) i.val i.isLt
+      have hword := U.fromWord_wf_rel.relHom S
+        ({ bitsLE := bitsL } : Word 1) ({ bitsLE := bitsR } : Word 1)
+        hbits
+      apply hword.bind
+      intro B quotientL quotientR hquotient
+      apply WF.Rel.assertR1C_pure
+      · intro lv rv hB
+        have h := (hquotient lv rv hB).1.1
+        exact WF.eval_sub rfl h.2.2
+      · intro lv rv hB
+        have hq := hquotient lv rv hB
+        have h := hq.1.1
+        exact WF.eval_sub h.2.1.1
+          (WF.eval_add h.1.1
+            (WF.eval_nsmul scalar.modulus hq.2.1))
+      · intro _ _ _
+        rfl
+      · intro _ _ _
+        trivial
 
 theorem finishVerification_wf_aux :
     WF.GadgetSpec PreparedVerification.WFRel finishVerificationLegacy

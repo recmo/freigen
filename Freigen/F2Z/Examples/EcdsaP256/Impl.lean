@@ -1,4 +1,5 @@
 import Freigen.F2Z.Examples.EcdsaP256.Reference
+import Freigen.F2Z.Examples.P256.CanonicalXImpl
 
 /-!
 # ECDSA-P256 verification implementation
@@ -358,6 +359,29 @@ def checkVerificationXAndInfinity (r : Fn) (X : AffineSlope.Rep)
 
 def checkVerificationX (r : Fn) (sum : AffineSlope.Point) : Circuit Unit :=
   checkVerificationXAndInfinity r sum.X sum.infinity
+
+/-- One-bit quotient for `canonicalX = r + q*n`; `canonicalX < p < 2*n`. -/
+def terminalScalarQuotientHint :
+    HList Eff.WitnessSide.denoteF [.z, .z] → Hint (Vector Bool 1)
+  | h![(x : Int), (r : Int)] =>
+      if _ : 0 ≤ x then
+        if _ : 0 ≤ r then
+          let quotient := (x.toNat - r.toNat) / scalar.modulus
+          pure $ Vector.ofFn fun i => quotient.testBit i
+        else fail s!"negative signature r {r}"
+      else fail s!"negative canonical terminal X {x}"
+
+/-- Reject the identity and compare an already base-canonical X coordinate
+directly with canonical signature `r` modulo the P-256 scalar order. -/
+def checkVerificationCanonicalX (r : Fn)
+    (sum : AffineSlope.CanonicalXPoint) : Circuit Unit := do
+  assertR1C 0 0 sum.infinity
+  let quotientBits ←
+    hint h![sum.X.val.intVal, r.val.intVal] terminalScalarQuotientHint
+  let quotient ← U.fromWord { bitsLE := quotientBits }
+  assertR1C (LC.ofConst 1 - sum.infinity)
+    (sum.X.val.intVal -
+      (r.val.intVal + scalar.modulus • quotient.intVal)) 0
 
 def finishVerificationLegacy (input : PreparedVerification) : Circuit Unit := do
   let sum ← computeVerificationSumLegacy input
