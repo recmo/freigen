@@ -17,14 +17,6 @@ private theorem point_ne_zero_of_hasCoordinates {q : Reference.Point}
   · simp [Reference.HasCoordinates, P256.Reference.coordinates] at h
   · simp
 
-def TerminalPointAcceptanceSpec (rho : WF.Valuation) (r : Fn)
-    (p : Reference.Point) : Prop :=
-  match p with
-  | 0 => False
-  | .some x _ _ =>
-      (x.val : ZMod P256.scalar.modulus) =
-        (r.evalNat rho : ZMod P256.scalar.modulus)
-
 theorem terminalPointAcceptance_of_canonical
     {r : Fn} {sum : AffineSlope.CanonicalXPoint}
     {p : Reference.Point}
@@ -103,17 +95,9 @@ theorem terminalPointAcceptance_of_verifies
     ⦃⌜True⌝⦄ Sound.interp ρ (finishVerification input)
     ⦃⇓ _ => ⌜TerminalPointAcceptanceSpec ρ input.r
       (FixedCombVerificationPoint ρ input.u1 input.u2 q)⌝⦄ := by
-  mvcgen -trivial [finishVerification, computeVerificationCanonicalX]
-  case vc1.q => exact q
-  case vc2.hu1 => exact hu1
-  case vc3.hu2 => exact hu2
-  case vc4.hQ => exact hQ
-  case vc5.success.success =>
-    rename_i sum hsum _
-    intro haccept
-    exact terminalPointAcceptance_of_canonical hsum.1 hsum.2 haccept
-  case vc6 => intros; exact hr
-  case vc7 => intro hvalid _; exact hvalid
+  simpa [finishVerification, computeVerificationDirectTerminal] using
+    (fixedCombVerificationDirectTerminal_sound (input := input) (q := q)
+      hu1 hu2 hr hQ)
 
 @[spec] theorem finishVerification_complete
     {input : PreparedVerification} {q : Reference.Point}
@@ -127,20 +111,9 @@ theorem terminalPointAcceptance_of_verifies
     ⦃⌜True⌝⦄ Complete.interp ρ (finishVerification input)
     ⦃⇓ _ => ⌜TerminalPointAcceptanceSpec ρ input.r
       (FixedCombVerificationPoint ρ input.u1 input.u2 q)⌝⦄ := by
-  mvcgen -trivial [finishVerification, computeVerificationCanonicalX]
-  case vc1.q => exact q
-  case vc2.hu1 => exact hu1
-  case vc3.hu2 => exact hu2
-  case vc4.hQvalid => exact hQvalid
-  case vc5.hQ => exact hQ
-  case vc6.hq => exact hq
-  case vc7.horder => exact horder
-  case vc8.success.success => exact fun _ => haccept
-  case vc9 => intros; exact hr
-  case vc10 => intro hvalid _; exact hvalid
-  case vc11 =>
-    intro hvalid hrep
-    exact canonical_acceptance_of_terminalPoint hvalid.1 hrep haccept
+  simpa [finishVerification, computeVerificationDirectTerminal] using
+    (fixedCombVerificationDirectTerminal_complete (input := input) (q := q)
+      hu1 hu2 hr hQvalid hQ hq horder haccept)
 
 theorem verifyDigest_complete_radix32_aux {digest : U 256} {key : PublicKey}
     {sig : Signature} {aux : Aux} {publicKey : Reference.Point}

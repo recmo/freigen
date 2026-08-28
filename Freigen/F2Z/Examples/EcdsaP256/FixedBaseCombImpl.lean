@@ -1,4 +1,5 @@
 import Freigen.F2Z.Examples.EcdsaP256.Radix32Impl
+import Freigen.F2Z.Examples.EcdsaP256.DirectTerminalImpl
 import Freigen.F2Z.Examples.P256.CanonicalXImpl
 
 /-!
@@ -242,5 +243,11 @@ def fixedCombVerificationCanonicalX (input : PreparedVerification) :
   let variablePart ← signedRadix32VariableMul input.u2 input.q
   let fixedPart ← fixedBaseCombComplete input.u1
   AffineSlope.addCompleteCollapsedCanonicalX variablePart fixedPart
+
+def fixedCombVerificationDirectTerminal (input : PreparedVerification) :
+    Circuit Unit := do
+  let variablePart ← signedRadix32VariableMul input.u2 input.q
+  let fixedPart ← fixedBaseCombComplete input.u1
+  addCompleteCollapsedDirectTerminal input.r variablePart fixedPart
 
 end Freigen.F2Z.Examples.EcdsaP256

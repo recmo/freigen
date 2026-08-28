@@ -1,5 +1,6 @@
 import Freigen.F2Z.Examples.EcdsaP256.FixedBaseCombLemmas
 import Freigen.F2Z.Examples.EcdsaP256.Radix32Lemmas
+import Freigen.F2Z.Examples.EcdsaP256.DirectTerminalLemmas
 import Freigen.F2Z.Examples.P256.CanonicalXLemmas
 import Freigen.F2Z.Examples.P256.XOnlyLemmas
 
@@ -411,5 +412,53 @@ theorem fixedCombVerificationPoint_eq_verificationPoint
     apply Reference.Aux.no_two_torsion_of_order
     rw [SignedRadix32VariableFoldPoint_full q hu2]
     exact Reference.Aux.order_nsmul horder _
+
+@[spec] theorem fixedCombVerificationDirectTerminal_sound
+    {input : PreparedVerification} {q : Reference.Point}
+    (hu1 : input.u1.val.Valid ρ) (hu2 : input.u2.val.Valid ρ)
+    (hr : input.r.Valid ρ)
+    (hQ : Reference.Represents ρ
+      (AffineSlope.ofElems input.q.X input.q.Y) q) :
+    ⦃⌜True⌝⦄ Sound.interp ρ (fixedCombVerificationDirectTerminal input)
+    ⦃⇓ _ => ⌜TerminalPointAcceptanceSpec ρ input.r
+      (FixedCombVerificationPoint ρ input.u1 input.u2 q)⌝⦄ := by
+  mvcgen [fixedCombVerificationDirectTerminal, FixedCombVerificationPoint]
+  case vc5 => intro _; exact hr
+  case vc6 => intro _; exact ‹Reference.NormalizedRep _ _ _› |>.1
+  case vc7 => intro hfixed; exact hfixed.1
+
+@[spec] theorem fixedCombVerificationDirectTerminal_complete
+    {input : PreparedVerification} {q : Reference.Point}
+    (hu1 : input.u1.val.Valid ρ) (hu2 : input.u2.val.Valid ρ)
+    (hr : input.r.Valid ρ) (hQvalid : input.q.Valid ρ)
+    (hQ : Reference.Represents ρ
+      (AffineSlope.ofElems input.q.X input.q.Y) q)
+    (hq : q ≠ 0) (horder : scalarModulus • q = 0)
+    (haccept : TerminalPointAcceptanceSpec ρ input.r
+      (FixedCombVerificationPoint ρ input.u1 input.u2 q)) :
+    ⦃⌜True⌝⦄ Complete.interp ρ
+      (fixedCombVerificationDirectTerminal input)
+    ⦃⇓ _ => ⌜TerminalPointAcceptanceSpec ρ input.r
+      (FixedCombVerificationPoint ρ input.u1 input.u2 q)⌝⦄ := by
+  mvcgen -trivial
+    [fixedCombVerificationDirectTerminal, FixedCombVerificationPoint]
+  case vc1 => exact q
+  case vc2.hu2 => exact hu2
+  case vc3.hQvalid => exact hQvalid
+  case vc4.hQ => exact hQ
+  case vc5.hq => exact hq
+  case vc6.horder => exact horder
+  case vc7.hk => exact hu1
+  case vc8 => intros; exact hr
+  case vc9 => intros; exact ‹_ ∧ Reference.NormalizedRep _ _ _› |>.1
+  case vc10 => intro hvalid _; exact hvalid
+  case vc11 => intros; exact ‹_ ∧ Reference.NormalizedRep _ _ _› |>.2
+  case vc12 => intro _ hfixed; exact hfixed
+  case vc13 =>
+    intros
+    apply Reference.Aux.no_two_torsion_of_order
+    rw [SignedRadix32VariableFoldPoint_full q hu2]
+    exact Reference.Aux.order_nsmul horder _
+  case vc14 => intros; exact haccept
 
 end Freigen.F2Z.Examples.EcdsaP256
