@@ -1,6 +1,7 @@
 import Freigen.F2Z.Examples.EcdsaP256.Impl
 import Freigen.F2Z.Examples.P256.WF
 import Freigen.F2Z.Examples.P256.CollapsedWF
+import Freigen.F2Z.Examples.P256.XOnlyWF
 
 /-!
 # Auxiliary quotient well-formedness proofs for ECDSA-P256
@@ -1006,22 +1007,30 @@ def CheckVerificationX.WFRel :
     Modular.Elem.WFRel lv rv left.1 right.1 ∧
     AffineSlope.Point.WFRel lv rv left.2 right.2
 
-theorem checkVerificationX_wf_aux :
-    WF.GadgetSpec CheckVerificationX.WFRel
-      (fun input => checkVerificationX input.1 input.2)
+def CheckVerificationXAndInfinity.WFRel :
+    WF.Post (Fn × AffineSlope.Rep × LC ℤ) :=
+  fun lv rv left right =>
+    Modular.Elem.WFRel lv rv left.1 right.1 ∧
+    Modular.Lazy.Rep.WFRel lv rv left.2.1 right.2.1 ∧
+    WF.LCEq lv.int rv.int left.2.2 right.2.2
+
+theorem checkVerificationXAndInfinity_wf_aux :
+    WF.GadgetSpec CheckVerificationXAndInfinity.WFRel
+      (fun input => checkVerificationXAndInfinity
+        input.1 input.2.1 input.2.2)
       (fun _ _ _ _ => True) := by
   unfold WF.GadgetSpec
   intro left right
-  unfold checkVerificationX
+  unfold checkVerificationXAndInfinity
   apply WF.Rel.assertR1C
   · intro _ _ _
     rfl
   · intro _ _ _
     rfl
   · intro lv rv h
-    exact h.2.2.2
+    exact h.2.2
   · apply WF.GadgetSpec.bind_rule
-      (left := left.2.X) (right := right.2.X)
+      (left := left.2.1) (right := right.2.1)
       (Modular.Lazy.reduce_wf base)
     · intro lv rv h
       exact h.2.1
@@ -1039,6 +1048,20 @@ theorem checkVerificationX_wf_aux :
         have hm := hxMod lv rv hC
         have hc := hx lv rv hm.1
         exact ⟨hm.2, hc.1.1⟩
+
+theorem checkVerificationX_wf_aux :
+    WF.GadgetSpec CheckVerificationX.WFRel
+      (fun input => checkVerificationX input.1 input.2)
+      (fun _ _ _ _ => True) := by
+  unfold WF.GadgetSpec
+  intro left right
+  unfold checkVerificationX
+  apply WF.GadgetSpec.direct_rule
+    (left := (left.1, left.2.X, left.2.infinity))
+    (right := (right.1, right.2.X, right.2.infinity))
+    checkVerificationXAndInfinity_wf_aux
+  intro lv rv h
+  exact ⟨h.1, h.2.1, h.2.2.2⟩
 
 theorem finishVerification_wf_aux :
     WF.GadgetSpec PreparedVerification.WFRel finishVerificationLegacy

@@ -345,15 +345,19 @@ def computeVerificationSumLegacy (input : PreparedVerification) :
     Circuit AffineSlope.Point :=
   jointScalarMul input.u1 input.u2 input.q
 
-def checkVerificationX (r : Fn) (sum : AffineSlope.Point) : Circuit Unit := do
+def checkVerificationXAndInfinity (r : Fn) (X : AffineSlope.Rep)
+    (infinity : LC ℤ) : Circuit Unit := do
   -- ECDSA rejects the identity.  Affine slope arithmetic has already
   -- materialized the final x-coordinate. Canonicalize it in the base field
   -- before changing moduli: reducing an arbitrary `x + k*p` modulo `n` would
   -- be unsound because the P-256 base prime and group order differ.
-  assertR1C 0 0 sum.infinity
-  let xCanonical ← Modular.Lazy.reduce base sum.X
+  assertR1C 0 0 infinity
+  let xCanonical ← Modular.Lazy.reduce base X
   let xModN ← Modular.Relaxed.reduceSmall scalar xCanonical.val.intVal
   assertEq scalar xModN r
+
+def checkVerificationX (r : Fn) (sum : AffineSlope.Point) : Circuit Unit :=
+  checkVerificationXAndInfinity r sum.X sum.infinity
 
 def finishVerificationLegacy (input : PreparedVerification) : Circuit Unit := do
   let sum ← computeVerificationSumLegacy input

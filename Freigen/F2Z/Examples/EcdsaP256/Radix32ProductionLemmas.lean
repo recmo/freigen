@@ -46,7 +46,7 @@ theorem verifyDigest_complete_radix32_aux {digest : U 256} {key : PublicKey}
     canonicalizeSignature, canonicalizeAux, prepareVerification,
     validateCanonicalInput, deriveScalars, deriveRelaxedScalars,
     multiplyScalars, canonicalizeScalars, finishVerification,
-    computeVerificationSum, checkVerificationX]
+    computeVerificationX, checkVerificationXAndInfinity]
   case vc15.hcurve =>
     rename_i qx hqx qy hqy r hr' s hs' rInv hrInv' sInv hsInv'
     apply onCurveZModSpec_of_hasCoordinates (publicKey := publicKey)
@@ -79,11 +79,11 @@ theorem verifyDigest_complete_radix32_aux {digest : U 256} {key : PublicKey}
   case vc29.hx => exact Modular.Lazy.ofElem_valid P256.scalar (by aesop)
   case vc30.hbound =>
     norm_num [Modular.Lazy.ofElem, Modular.Lazy.quotientExtraBits]
+  case vc31.q => exact publicKey
   case vc32.hu1 => simp_all [Modular.Elem.Valid]
   case vc33.hu2 => simp_all [Modular.Elem.Valid]
   case vc34.hQvalid =>
     exact ⟨(by aesop), (by aesop), baseOne_valid⟩
-  case vc31.q => exact publicKey
   case vc35.hQ =>
     rename_i qx hqx qy hqy r hr' s hs' rInv hrInv' sInv hsInv'
       _ _ _ _ _ _ z hz u1Relaxed hu1Relaxed u2Relaxed hu2Relaxed
@@ -94,6 +94,7 @@ theorem verifyDigest_complete_radix32_aux {digest : U 256} {key : PublicKey}
     rw [hxEval, hyEval]
     exact hcoords
   case vc36.hq => exact point_ne_zero_of_hasCoordinates hcoords
+  case vc37.horder => exact horder
   case vc38.success.success.success.success =>
     rename_i qx hqx qy hqy r hr' s hs' rInv hrInv' sInv hsInv'
       _ hcurve _ hrMul _ hsMul z hz u1Relaxed hu1Relaxed
@@ -128,7 +129,7 @@ theorem verifyDigest_complete_radix32_aux {digest : U 256} {key : PublicKey}
           (sig.r.eval ρ).toNat (sig.s.eval ρ).toNat publicKey with
         _ | ⟨pointX, pointY, hpointCurve⟩
       · exact (hverificationNonzero hpoint).elim
-      · exact (P256.Reference.Aux.represents_some
+      · exact (P256.Reference.XRepresents.some
           (hpoint ▸ hsum.2.1)).1
     constructor
     · simp [hsumInfinity]
@@ -154,11 +155,11 @@ theorem verifyDigest_complete_radix32_aux {digest : U 256} {key : PublicKey}
             (sig.r.eval ρ).toNat (sig.s.eval ρ).toNat publicKey with
           _ | ⟨pointX, pointY, hpointCurve⟩
         · exact (hverificationNonzero hpoint).elim
-        · have hsumSome := P256.Reference.Aux.represents_some
+        · have hsumSome := P256.Reference.XRepresents.some
               (hpoint ▸ hsum.2.1)
           have hxPoint : Modular.Lazy.evalElemZMod P256.base
               xCanonical ρ = pointX :=
-            hxCanonical.2.trans hsumSome.2.1
+            hxCanonical.2.trans hsumSome.2
           have hxCanonicalNat : xCanonical.evalNat ρ = pointX.val := by
             have hxPoint' : (xCanonical.evalNat ρ : P256.Reference.Field) =
                 pointX := by
@@ -234,13 +235,11 @@ theorem verifyDigest_sound_radix32_aux {digest : U 256} {key : PublicKey}
     canonicalizeSignature, canonicalizeAux, prepareVerification,
     validateCanonicalInput, deriveScalars, deriveRelaxedScalars,
     multiplyScalars, canonicalizeScalars, finishVerification,
-    computeVerificationSum, checkVerificationX]
+    computeVerificationX, checkVerificationXAndInfinity]
   case vc7.q =>
     exact P256.Reference.pointOfCircuit ρ _ _ (by assumption)
-  case vc8.hu1 =>
-    simp_all [Modular.Elem.Valid]
-  case vc9.hu2 =>
-    simp_all [Modular.Elem.Valid]
+  case vc8.hu1 => simp_all [Modular.Elem.Valid]
+  case vc9.hu2 => simp_all [Modular.Elem.Valid]
   case vc10.hQ =>
     exact P256.Reference.Aux.ofElems_represents_pointOfCircuit (by assumption)
   case vc11.success.success.success.success.success.success.success =>
@@ -288,15 +287,15 @@ theorem verifyDigest_sound_radix32_aux {digest : U 256} {key : PublicKey}
         (digest.eval ρ).toNat (sig.r.eval ρ).toNat
           (sig.s.eval ρ).toNat publicKey ≠ 0 := by
       intro hzero
-      have hinfinity := P256.Reference.Aux.represents_zero (hzero ▸ hsum.1)
+      have hinfinity := P256.Reference.XRepresents.zero (hzero ▸ hsum.1)
       omega
     rcases hpoint : Reference.verificationPoint (digest.eval ρ).toNat
         (sig.r.eval ρ).toNat (sig.s.eval ρ).toNat publicKey with
       _ | ⟨pointX, pointY, hpointCurve⟩
     · exact (hverificationNonzero hpoint).elim
-    · have hsumSome := P256.Reference.Aux.represents_some (hpoint ▸ hsum.1)
+    · have hsumSome := P256.Reference.XRepresents.some (hpoint ▸ hsum.1)
       have hxPoint : Modular.Lazy.evalElemZMod P256.base xCanonical ρ =
-          pointX := hxCanonical.2.trans hsumSome.2.1
+          pointX := hxCanonical.2.trans hsumSome.2
       have hxCanonicalNat : xCanonical.evalNat ρ = pointX.val := by
         have hxPoint' : (xCanonical.evalNat ρ : P256.Reference.Field) =
             pointX := by

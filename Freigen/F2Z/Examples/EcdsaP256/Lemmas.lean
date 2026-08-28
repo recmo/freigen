@@ -2093,7 +2093,8 @@ theorem verifyDigest_complete_aux {digest : U 256} {key : PublicKey}
     canonicalizeSignature, canonicalizeAux, prepareVerification,
     validateCanonicalInput, deriveScalars, deriveRelaxedScalars,
     multiplyScalars, canonicalizeScalars, finishVerificationLegacy,
-    computeVerificationSumLegacy, checkVerificationX]
+    computeVerificationSumLegacy, checkVerificationX,
+    checkVerificationXAndInfinity]
   case vc15.hcurve =>
     rename_i qx hqx qy hqy r hr' s hs' rInv hrInv' sInv hsInv'
     apply onCurveZModSpec_of_hasCoordinates (publicKey := publicKey)
@@ -2280,7 +2281,8 @@ theorem verifyDigest_sound_aux {digest : U 256} {key : PublicKey}
     canonicalizeSignature, canonicalizeAux, prepareVerification,
     validateCanonicalInput, deriveScalars, deriveRelaxedScalars,
     multiplyScalars, canonicalizeScalars, finishVerificationLegacy,
-    computeVerificationSumLegacy, checkVerificationX]
+    computeVerificationSumLegacy, checkVerificationX,
+    checkVerificationXAndInfinity]
   case vc7.q =>
     exact P256.Reference.pointOfCircuit ρ _ _ (by assumption)
   case vc8.hu1 =>
