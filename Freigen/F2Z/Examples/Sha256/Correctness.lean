@@ -54,7 +54,7 @@ example : perm
     ] := by native_decide
 
 /--
-info: { mRows := 20457, mCols := 7145, r1csRows := 184, cost := 150344 }
+info: { mRows := 20457, mCols := 7145, r1csRows := 184, cost := 286293 }
 -/
 #guard_msgs in
 #eval sha256CS.2.stats

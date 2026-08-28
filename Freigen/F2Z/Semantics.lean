@@ -239,6 +239,6 @@ def CS.stats (cs : CS) : Stats :=
   { mRows,
     mCols,
     r1csRows := cs.r1cs.size,
-    cost := 7 * mRows + mCols }
+    cost := 9 * mRows + 4 * mCols + 400 * cs.r1cs.size }
 
 end Freigen.F2Z.Semantics

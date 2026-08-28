@@ -220,7 +220,7 @@ private theorem windowValue_wfRel {lv rv : WF.Valuation}
   unfold WF.LCEq at hb
   exact congrArg (2 ^ j.val • ·) hb
 
-theorem boothDigit_wfRel {lv rv : WF.Valuation}
+private theorem boothDigit_wfRel {lv rv : WF.Valuation}
     {left right : Fn} (h : Modular.Elem.ScalarWFRel lv rv left right)
     (i : Nat) (hi : i < 52) :
     WF.LCEq lv.int rv.int
@@ -394,17 +394,81 @@ theorem signedRadix32JointScalarMul_wf_aux :
         · intro lv rv outL outR hpost
           exact hpost.2
 
-theorem signedRadix32JointScalarMul_prepared_wf_aux :
-    WF.GadgetSpec PreparedVerification.WFRel
-      (fun input => signedRadix32JointScalarMul input.u1 input.u2 input.q)
+theorem computeVerificationSum_radix32_wf_aux :
+    WF.GadgetSpec PreparedVerification.WFRel computeVerificationSum
       AffineSlope.Point.WFRel := by
   unfold WF.GadgetSpec
   intro left right
+  unfold computeVerificationSum
   apply WF.GadgetSpec.direct_rule
     (left := (left.u1, left.u2, left.q))
     (right := (right.u1, right.u2, right.q))
     signedRadix32JointScalarMul_wf_aux
   intro lv rv h
   exact ⟨h.1, h.2.1, h.2.2.1⟩
+
+theorem finishVerification_radix32_wf_aux :
+    WF.GadgetSpec PreparedVerification.WFRel finishVerification
+      (fun _ _ _ _ => True) := by
+  unfold WF.GadgetSpec
+  intro left right
+  unfold finishVerification
+  apply WF.GadgetSpec.bind_rule_direct
+    (left := left) (right := right) computeVerificationSum_radix32_wf_aux
+  · intro lv rv h
+    exact h
+  · intro sumL sumR
+    apply WF.GadgetSpec.direct_rule
+      (left := (left.r, sumL)) (right := (right.r, sumR))
+      checkVerificationX_wf_aux
+    intro lv rv h
+    exact ⟨h.1.2.2.2, h.2⟩
+
+theorem verifyDigest_radix32_wf_aux :
+    WF.GadgetSpec VerifyInput.WFRel
+      (fun input => verifyDigest input.1 input.2.1 input.2.2.1 input.2.2.2)
+      (fun _ _ _ _ => True) := by
+  unfold WF.GadgetSpec
+  intro left right
+  unfold verifyDigest
+  apply WF.GadgetSpec.bind_rule_direct
+    (left := (left.2.1, left.2.2.1, left.2.2.2))
+    (right := (right.2.1, right.2.2.1, right.2.2.2))
+    canonicalizeInput_wf_aux
+  · intro lv rv h
+    exact h.2
+  · intro inputL inputR
+    apply WF.GadgetSpec.bind_rule_direct
+      (left := (left.1, inputL)) (right := (right.1, inputR))
+      prepareVerification_wf_aux
+    · intro lv rv h
+      exact ⟨h.1.1, h.2⟩
+    · intro preparedL preparedR
+      apply WF.GadgetSpec.direct_rule
+        (left := preparedL) (right := preparedR)
+        finishVerification_radix32_wf_aux
+      intro lv rv h
+      exact h.2
+
+theorem verifyDigestFromBits_radix32_wf_aux :
+    WF.GadgetSpec VerifyDigestBits.WFRel verifyDigestFromBits
+      (fun _ _ _ _ => True) := by
+  unfold WF.GadgetSpec
+  intro left right
+  unfold verifyDigestFromBits
+  apply WF.GadgetSpec.bind_rule_direct
+    (left := verifyDigestInputWords left)
+    (right := verifyDigestInputWords right) mapM_fromWord_wf_full
+  · intro lv rv h
+    exact verifyDigestInputWords_wf h
+  · intro valuesL valuesR
+    apply WF.GadgetSpec.direct_rule
+      (left := (valuesL[0], ⟨valuesL[1], valuesL[2]⟩,
+        ⟨valuesL[3], valuesL[4]⟩, ⟨valuesL[5], valuesL[6]⟩))
+      (right := (valuesR[0], ⟨valuesR[1], valuesR[2]⟩,
+        ⟨valuesR[3], valuesR[4]⟩, ⟨valuesR[5], valuesR[6]⟩))
+      verifyDigest_radix32_wf_aux
+    intro lv rv h
+    exact ⟨h.2 0, h.2 1, h.2 2, h.2 3, h.2 4, h.2 5, h.2 6⟩
 
 end Freigen.F2Z.Examples.EcdsaP256
