@@ -20,15 +20,16 @@ structure XPoint where
 
 def finishAddCandidateX (P Q : Point) (operands : SlopeOperands) :
     Circuit Rep := do
-  let slope ← Modular.Lazy.divide base operands.denominator operands.numerator
+  let slope ← Modular.Lazy.divide base
+    operands.denominator operands.numerator
   let candidateX ←
     Modular.Lazy.mulSubToElem base slope slope (add P.X Q.X)
   pure (ofElem candidateX)
 
 def addCandidateCollapsedX (P Q : Point) (control : AddControl) :
     Circuit Rep := do
-  let operands ← selectSlopeOperandsCollapsed P Q control
-  finishAddCandidateX P Q operands
+  let operands ← selectSlopeOperandsCollapsedTight P Q control
+  finishAddCandidateCollapsedX P Q operands
 
 def selectAddOutputCollapsedX (P Q : Point) (control : AddControl)
     (candidateX : Rep) : Circuit XPoint := do

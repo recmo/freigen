@@ -912,13 +912,237 @@ theorem zeroTestBound4_wf_aux :
         have hp := hprepared lv rv hc.1
         exact hp.2.1
 
+private def CanonicalSumInverseInputWFRel (lv rv : WF.Valuation)
+    (left right : Rep × LC ℤ × U 256) : Prop :=
+  left.1.WFRel lv rv right.1 ∧
+  WF.LCEq lv.int rv.int left.2.1 right.2.1 ∧
+  U.WFRel lv rv left.2.2 right.2.2
+
+theorem zeroTestCanonicalSumInverseQHint_wf_aux :
+    WF.GadgetSpec CanonicalSumInverseInputWFRel
+      (fun input => zeroTestCanonicalSumInverseQHint
+        input.1 input.2.1 input.2.2)
+      (DoubleBitsWFRel 257) := by
+  unfold WF.GadgetSpec
+  intro left right
+  unfold zeroTestCanonicalSumInverseQHint
+  apply WF.Rel.hint_pure
+  · intro lv rv h
+    unfold WF.ArgsEq
+    simp only [WF.evalArgs]
+    congr 1
+    · exact h.1.2
+    · congr 1
+      · exact h.2.2.1
+      · congr 1
+        exact h.2.1
+  · intro lv rv h
+    have heq :
+        WF.evalArgs lv h![left.1.intVal, left.2.2.intVal, left.2.1] =
+        WF.evalArgs rv h![right.1.intVal, right.2.2.intVal,
+          right.2.1] := by
+      simp only [WF.evalArgs]
+      congr 1
+      · exact h.1.2
+      · congr 1
+        · exact h.2.2.1
+        · congr 1
+          exact h.2.1
+    rw [heq]
+    exact WF.HintRel.refl _
+  · intro bitsL bitsR lv rv h i
+    exact Modular.Aux.WF.lceq_of_common_realizes
+      (Modular.Aux.WF.common_realizes_of_hint h) i.val i.isLt
+
+theorem zeroTestCanonicalSumInverseQDecode_wf_aux :
+    WF.GadgetSpec (DoubleBitsWFRel 257)
+      zeroTestCanonicalSumInverseQDecode U.WFRel := by
+  unfold zeroTestCanonicalSumInverseQDecode
+  simpa using doubleDecodeSlice_wf_aux 257 0 257 (by omega)
+
+theorem zeroTestCanonicalSumInverseCheck_wf_aux :
+    WF.GadgetSpec
+      (fun lv rv (left right : Rep × LC ℤ × U 256 × U 257) =>
+        left.1.WFRel lv rv right.1 ∧
+        WF.LCEq lv.int rv.int left.2.1 right.2.1 ∧
+        U.WFRel lv rv left.2.2.1 right.2.2.1 ∧
+        U.WFRel lv rv left.2.2.2 right.2.2.2)
+      (fun input => zeroTestCanonicalSumInverseCheck input.1 input.2.1
+        input.2.2.1 input.2.2.2)
+      (fun _ _ _ _ => True) := by
+  unfold WF.GadgetSpec
+  intro left right
+  unfold zeroTestCanonicalSumInverseCheck
+  apply WF.Rel.assertR1C_pure
+  · intro lv rv h
+    exact h.1.2
+  · intro lv rv h
+    exact h.2.2.1.1
+  · intro lv rv h
+    unfold WF.LCEq
+    simp only [LC.eval_sub, LC.eval_add, LC.eval_nsmul, LC.eval_ofConst]
+    rw [h.2.1, h.2.2.2.1]
+  · intro _ _ _
+    trivial
+
+theorem zeroTestCanonicalSumInverse_wf_aux :
+    WF.GadgetSpec CanonicalSumInverseInputWFRel
+      (fun input => zeroTestCanonicalSumInverse input.1
+        input.2.1 input.2.2)
+      (fun _ _ _ _ => True) := by
+  unfold WF.GadgetSpec
+  intro left right
+  unfold zeroTestCanonicalSumInverse
+  apply WF.GadgetSpec.bind_rule_direct
+    (left := left) (right := right)
+    zeroTestCanonicalSumInverseQHint_wf_aux
+  · intro lv rv h
+    exact h
+  · intro bitsL bitsR
+    apply WF.GadgetSpec.bind_rule_direct
+      (left := bitsL) (right := bitsR)
+      zeroTestCanonicalSumInverseQDecode_wf_aux
+    · intro lv rv h
+      exact h.2
+    · intro qL qR
+      apply WF.GadgetSpec.direct_rule
+        (left := (left.1, left.2.1, left.2.2, qL))
+        (right := (right.1, right.2.1, right.2.2, qR))
+        zeroTestCanonicalSumInverseCheck_wf_aux
+      intro lv rv h
+      exact ⟨h.1.1.1, h.1.1.2.1, h.1.1.2.2, h.2⟩
+
+private def CanonicalSumZeroInputWFRel (lv rv : WF.Valuation)
+    (left right : Rep × LC ℤ) : Prop :=
+  left.1.WFRel lv rv right.1 ∧
+  WF.LCEq lv.int rv.int left.2 right.2
+
+theorem zeroTestCanonicalSumZeroQHint_wf_aux :
+    WF.GadgetSpec CanonicalSumZeroInputWFRel
+      (fun input => zeroTestCanonicalSumZeroQHint input.1 input.2)
+      (DoubleBitsWFRel 1) := by
+  unfold WF.GadgetSpec
+  intro left right
+  unfold zeroTestCanonicalSumZeroQHint
+  apply WF.Rel.hint_pure
+  · intro lv rv h
+    unfold WF.ArgsEq
+    simp only [WF.evalArgs]
+    congr 1
+    · exact h.2
+    · congr 1
+      exact h.1.2
+  · intro lv rv h
+    have heq : WF.evalArgs lv h![left.2, left.1.intVal] =
+        WF.evalArgs rv h![right.2, right.1.intVal] := by
+      simp only [WF.evalArgs]
+      congr 1
+      · exact h.2
+      · congr 1
+        exact h.1.2
+    rw [heq]
+    exact WF.HintRel.refl _
+  · intro bitsL bitsR lv rv h i
+    exact Modular.Aux.WF.lceq_of_common_realizes
+      (Modular.Aux.WF.common_realizes_of_hint h) i.val i.isLt
+
+theorem zeroTestCanonicalSumZeroQDecode_wf_aux :
+    WF.GadgetSpec (DoubleBitsWFRel 1)
+      zeroTestCanonicalSumZeroQDecode U.WFRel := by
+  unfold WF.GadgetSpec
+  intro left right
+  unfold zeroTestCanonicalSumZeroQDecode
+  apply WF.GadgetSpec.direct_rule
+    (left := ({ bitsLE := left } : Word 1))
+    (right := ({ bitsLE := right } : Word 1))
+    U.fromWord_wf_rel
+  intro lv rv h i
+  exact h i
+
+theorem zeroTestCanonicalSumZeroCheck_wf_aux :
+    WF.GadgetSpec
+      (fun lv rv (left right : Rep × LC ℤ × U 1) =>
+        left.1.WFRel lv rv right.1 ∧
+        WF.LCEq lv.int rv.int left.2.1 right.2.1 ∧
+        U.WFRel lv rv left.2.2 right.2.2)
+      (fun input => zeroTestCanonicalSumZeroCheck input.1
+        input.2.1 input.2.2)
+      (fun _ _ _ _ => True) := by
+  unfold WF.GadgetSpec
+  intro left right
+  unfold zeroTestCanonicalSumZeroCheck
+  apply WF.Rel.assertR1C_pure
+  · intro lv rv h
+    exact h.2.1
+  · intro lv rv h
+    exact h.1.2
+  · intro lv rv h
+    exact WF.eval_nsmul base.modulus h.2.2.1
+  · intro _ _ _
+    trivial
+
+theorem zeroTestCanonicalSumZero_wf_aux :
+    WF.GadgetSpec CanonicalSumZeroInputWFRel
+      (fun input => zeroTestCanonicalSumZero input.1 input.2)
+      (fun _ _ _ _ => True) := by
+  unfold WF.GadgetSpec
+  intro left right
+  unfold zeroTestCanonicalSumZero
+  apply WF.GadgetSpec.bind_rule_direct
+    (left := left) (right := right) zeroTestCanonicalSumZeroQHint_wf_aux
+  · intro lv rv h
+    exact h
+  · intro bitsL bitsR
+    apply WF.GadgetSpec.bind_rule_direct
+      (left := bitsL) (right := bitsR)
+      zeroTestCanonicalSumZeroQDecode_wf_aux
+    · intro lv rv h
+      exact h.2
+    · intro qL qR
+      apply WF.GadgetSpec.direct_rule
+        (left := (left.1, left.2, qL))
+        (right := (right.1, right.2, qR))
+        zeroTestCanonicalSumZeroCheck_wf_aux
+      intro lv rv h
+      exact ⟨h.1.1.1, h.1.1.2, h.2⟩
+
+theorem zeroTestCanonicalSum_wf_aux :
+    WF.GadgetSpec Modular.Lazy.Rep.WFRel zeroTestCanonicalSum
+      (fun lv rv left right => WF.LCEq lv.int rv.int left right) := by
+  unfold WF.GadgetSpec
+  intro left right
+  unfold zeroTestCanonicalSum
+  apply WF.GadgetSpec.bind_rule_direct
+    (left := left) (right := right) zeroTestBound4Prepare_wf_aux
+  · intro lv rv h
+    exact h
+  · intro preparedL preparedR
+    apply WF.GadgetSpec.bind_rule_direct
+      (left := (left, preparedL.1, preparedL.2))
+      (right := (right, preparedR.1, preparedR.2))
+      zeroTestCanonicalSumInverse_wf_aux
+    · intro lv rv h
+      exact ⟨h.1, h.2.1, h.2.2⟩
+    · intro _ _
+      apply WF.GadgetSpec.bind_rule_direct
+        (left := (left, preparedL.1))
+        (right := (right, preparedR.1))
+        zeroTestCanonicalSumZero_wf_aux
+      · intro lv rv h
+        exact ⟨h.1.1, h.1.2.1⟩
+      · intro _ _
+        apply WF.Rel.pure
+        intro lv rv h
+        exact h.1.1.2.1
+
 theorem classifyAdd_wf_aux :
     WF.GadgetSpec
       (fun lv rv (left right : Point × Point) =>
         left.1.WFRel lv rv right.1 ∧ left.2.WFRel lv rv right.2)
       (fun input => classifyAdd input.1 input.2)
       AddControl.WFRel := by
-  wfgen' using [zeroTestBound4_wf_aux, andBit_wf_aux]
+  wfgen' using [zeroTestBound4_wf_aux, zeroTestCanonicalSum_wf_aux,
+    andBit_wf_aux]
     unfold [classifyAdd, Point.WFRel, AddControl.WFRel,
       sub, add, Modular.Lazy.sub, Modular.Lazy.add,
       Modular.Lazy.Rep.WFRel]

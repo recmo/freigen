@@ -45,14 +45,14 @@ theorem addCandidateCollapsedX_wf_aux :
         left.2.2.WFRel lv rv right.2.2)
       (fun input => addCandidateCollapsedX input.1 input.2.1 input.2.2)
       Modular.Lazy.Rep.WFRel := by
-  wfgen' using [selectSlopeOperandsCollapsed_wf_aux,
-    finishAddCandidateX_wf_aux] unfold [addCandidateCollapsedX]
+  wfgen' using [selectSlopeOperandsCollapsedTight_wf_aux,
+    finishAddCandidateCollapsedX_wf_aux] unfold [addCandidateCollapsedX]
   case vc1 =>
     rename_i hrel
     apply WF.GadgetSpec.direct_rule
       (left := (left.1, left.2.1, outL))
       (right := (right.1, right.2.1, outR))
-      finishAddCandidateX_wf_aux
+      finishAddCandidateCollapsedX_wf_aux
     intro lv rv hB
     have hh := hrel lv rv hB
     exact ⟨hh.1.1, hh.1.2.1, hh.2⟩

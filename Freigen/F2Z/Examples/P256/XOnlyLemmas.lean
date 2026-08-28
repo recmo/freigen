@@ -297,6 +297,98 @@ theorem SelectAddXOutputSpec.infinity_bit
       have hslopeEq := hslope.2.1
       rw [hdenEq, hnumEq] at hslopeEq
       exact ⟨slope, by simpa [hd1] using hslopeEq, hcandidateXEq⟩
+
+@[spec] theorem finishAddCandidateCollapsedX_sound {P Q : AffineSlope.Point}
+    {control : AffineSlope.AddControl}
+    {operands : AffineSlope.SlopeOperands}
+    (hoperands : SlopeOperandsSpec ρ P Q control operands)
+    (hdoubleBit : control.doubleCase.eval ρ.int = 0 ∨
+      control.doubleCase.eval ρ.int = 1) :
+    ⦃⌜True⌝⦄ Sound.interp ρ
+      (AffineSlope.finishAddCandidateCollapsedX P Q operands)
+    ⦃⇓ candidateX => ⌜AddCandidateXSpec ρ P Q control candidateX⌝⦄ := by
+  mvcgen [AffineSlope.finishAddCandidateCollapsedX]
+  rename_i slope hslope candidateX hcandidateX
+  unfold AddCandidateXSpec
+  intro hactive
+  rcases hoperands.1 hactive with ⟨hdouble, hgeneric⟩
+  by_cases hd : control.doubleCase.eval ρ.int = 1
+  · rcases hdouble hd with ⟨hnum, hden⟩
+    refine ⟨slope, ?_⟩
+    simp_all [Modular.Lazy.DivideZModSpec,
+      Modular.Lazy.MulSubToElemZModSpec,
+      AffineSlope.collapsedCandidateXTarget, AffineSlope.add,
+      AffineSlope.ofElem]
+  · have hd0 : control.doubleCase.eval ρ.int = 0 := by
+      rcases hdoubleBit with h | h
+      · exact h
+      · contradiction
+    rcases hgeneric hd0 with ⟨hnum, hden⟩
+    refine ⟨slope, ?_⟩
+    simp_all [Modular.Lazy.DivideZModSpec,
+      Modular.Lazy.MulSubToElemZModSpec,
+      AffineSlope.collapsedCandidateXTarget, AffineSlope.add,
+      AffineSlope.ofElem]
+
+@[spec] theorem finishAddCandidateCollapsedX_complete {P Q : AffineSlope.Point}
+    {control : AffineSlope.AddControl}
+    {operands : AffineSlope.SlopeOperands}
+    (hP : P.Valid ρ) (hQ : Q.Valid ρ)
+    (hoperands : CollapsedSlopeOperandsValid ρ operands)
+    (hoperandsSpec : SlopeOperandsSpec ρ P Q control operands)
+    (hden : Modular.Lazy.evalZMod base operands.denominator ρ ≠ 0)
+    (hdoubleBit : control.doubleCase.eval ρ.int = 0 ∨
+      control.doubleCase.eval ρ.int = 1) :
+    ⦃⌜True⌝⦄ Complete.interp ρ
+      (AffineSlope.finishAddCandidateCollapsedX P Q operands)
+    ⦃⇓ candidateX => ⌜candidateX.Valid ρ ∧
+      candidateX.bound = 2 ∧
+      candidateX.intVal.eval ρ.int < base.modulus ∧
+      AddCandidateXSpec ρ P Q control candidateX⌝⦄ := by
+  rcases hP with ⟨hPXbound, hPX, _, _, _, _, _⟩
+  rcases hQ with ⟨hQXbound, hQX, _, _, _, _, _⟩
+  rcases hoperands with ⟨hnum, hnumBound, hdenValid, hdenBound⟩
+  mvcgen [AffineSlope.finishAddCandidateCollapsedX]
+  all_goals first
+    | exact hdenValid
+    | exact hnum
+    | exact hden
+    | exact hPX
+    | exact Modular.Lazy.add_valid base hPX hQX
+    | simp [AffineSlope.add, Modular.Lazy.add,
+        Modular.Lazy.quotientExtraBits, hPXbound, hQXbound,
+        hnumBound, hdenBound]
+    | skip
+  case vc8.hslope =>
+    rename_i slope hslope
+    exact hslope.1
+  case vc9.hslopeBound =>
+    rename_i slope hslope
+    exact hslope.2.1
+  case vc10.hslopeCanonical =>
+    rename_i slope hslope
+    exact hslope.2.2.1
+  case vc11.success.success =>
+    rename_i slope hslope candidateX hcandidateX
+    refine ⟨Modular.Lazy.ofElem_valid base hcandidateX.1,
+      rfl, hcandidateX.1.2, ?_⟩
+    unfold AddCandidateXSpec
+    unfold Modular.Lazy.DivideZModSpec at hslope
+    unfold Modular.Lazy.MulSubToElemZModSpec at hcandidateX
+    intro hactive
+    rcases hoperandsSpec.1 hactive with ⟨hdouble, hgeneric⟩
+    have hcandidateXEq := hcandidateX.2
+    simp only [AffineSlope.collapsedCandidateXTarget, AffineSlope.add,
+      Modular.Lazy.evalZMod_add] at hcandidateXEq
+    rcases hdoubleBit with hd0 | hd1
+    · rcases hgeneric hd0 with ⟨hnumEq, hdenEq⟩
+      have hslopeEq := hslope.2.2.2
+      rw [hdenEq, hnumEq] at hslopeEq
+      exact ⟨slope, by simpa [hd0] using hslopeEq, hcandidateXEq⟩
+    · rcases hdouble hd1 with ⟨hnumEq, hdenEq⟩
+      have hslopeEq := hslope.2.2.2
+      rw [hdenEq, hnumEq] at hslopeEq
+      exact ⟨slope, by simpa [hd1] using hslopeEq, hcandidateXEq⟩
 @[spec] theorem addCandidateCollapsedX_sound {P Q : AffineSlope.Point}
     {control : AffineSlope.AddControl}
     (hcontrol : AddControlSpec ρ P Q control) :

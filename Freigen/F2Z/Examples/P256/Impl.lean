@@ -484,11 +484,65 @@ def zeroTestBound4 (x : Rep) : Circuit (LC ℤ) := do
   zeroTestBound4ZeroCheck x z
   pure z
 
+/-- P-256 zero-test checks specialized to a sum of two canonical
+representatives.  The sum is below `2*p`, so the inverse quotient needs 257
+bits and the zero-branch quotient is a single bit. -/
+def zeroTestCanonicalSumInverseQHint (x : Rep) (z : LC ℤ)
+    (inverse : U 256) : Circuit (Vector (LC Bool) 257) :=
+  hint h![x.intVal, inverse.intVal, z]
+    fun h![(a : Int), (b : Int), (zv : Int)] =>
+      let shifted := a * b + base.modulus - (1 - zv)
+      if hs : 0 ≤ shifted then
+        let q := shifted.toNat / base.modulus
+        pure $ Vector.ofFn (n := 257) fun i => q.testBit i
+      else fail s!"negative canonical-sum inverse quotient {shifted}"
+
+def zeroTestCanonicalSumInverseQDecode
+    (bits : Vector (LC Bool) 257) : Circuit (U 257) :=
+  U.fromWord { bitsLE := bits }
+
+def zeroTestCanonicalSumInverseCheck (x : Rep) (z : LC ℤ)
+    (inverse : U 256) (q : U 257) : Circuit Unit :=
+  assertR1C x.intVal inverse.intVal
+    ((LC.ofConst 1 - z) + base.modulus • q.intVal -
+      LC.ofConst (base.modulus : Int))
+
+def zeroTestCanonicalSumInverse (x : Rep) (z : LC ℤ)
+    (inverse : U 256) : Circuit Unit := do
+  let bits ← zeroTestCanonicalSumInverseQHint x z inverse
+  let q ← zeroTestCanonicalSumInverseQDecode bits
+  zeroTestCanonicalSumInverseCheck x z inverse q
+
+def zeroTestCanonicalSumZeroQHint (x : Rep) (z : LC ℤ) :
+    Circuit (Vector (LC Bool) 1) :=
+  hint h![z, x.intVal] fun h![(b : Int), (a : Int)] =>
+    let q := (b * a).toNat / base.modulus
+    pure $ Vector.ofFn (n := 1) fun i => q.testBit i
+
+def zeroTestCanonicalSumZeroQDecode
+    (bits : Vector (LC Bool) 1) : Circuit (U 1) :=
+  U.fromWord { bitsLE := bits }
+
+def zeroTestCanonicalSumZeroCheck (x : Rep) (z : LC ℤ)
+    (q : U 1) : Circuit Unit :=
+  assertR1C z x.intVal (base.modulus • q.intVal)
+
+def zeroTestCanonicalSumZero (x : Rep) (z : LC ℤ) : Circuit Unit := do
+  let bits ← zeroTestCanonicalSumZeroQHint x z
+  let q ← zeroTestCanonicalSumZeroQDecode bits
+  zeroTestCanonicalSumZeroCheck x z q
+
+def zeroTestCanonicalSum (x : Rep) : Circuit (LC ℤ) := do
+  let (z, inverse) ← zeroTestBound4Prepare x
+  zeroTestCanonicalSumInverse x z inverse
+  zeroTestCanonicalSumZero x z
+  pure z
+
 def classifyAdd (P Q : Point) : Circuit AddControl := do
   let dx := sub Q.X P.X
   let ysum := add P.Y Q.Y
   let sameX ← zeroTestBound4 dx
-  let oppositeY ← zeroTestBound4 ysum
+  let oppositeY ← zeroTestCanonicalSum ysum
   let finite ← andBit (LC.ofConst 1 - P.infinity)
     (LC.ofConst 1 - Q.infinity)
   let doubleKind ← andBit sameX (LC.ofConst 1 - oppositeY)
@@ -614,6 +668,35 @@ def selectGated4Rep (width outBound : Nat) (description : String)
   assertR1C gate4 (out.intVal - value4.intVal) 0
   pure out
 
+def selectCollapsedNumeratorTight (P Q : Point)
+    (control : AddControl) (x2 : Rep) : Circuit Rep :=
+  selectGated3Rep 259 5 "collapsed numerator"
+    control.doubleCase (control.active - control.doubleCase)
+      (LC.ofConst 1 - control.active)
+    (sub (scale 3 x2) (ofElem three)) (sub Q.Y P.Y) (ofElem zero)
+
+def selectCollapsedDenominatorTight (P Q : Point)
+    (control : AddControl) : Circuit Rep :=
+  selectGated3Rep 258 3 "collapsed denominator"
+    control.doubleCase (control.active - control.doubleCase)
+      (LC.ofConst 1 - control.active)
+    (scale 2 P.Y) (sub Q.X P.X) (ofElem one)
+
+def finishSelectSlopeOperandsCollapsedTight (P Q : Point)
+    (control : AddControl) (x2 : Rep) : Circuit SlopeOperands := do
+  let numerator ← selectCollapsedNumeratorTight P Q control x2
+  let denominator ← selectCollapsedDenominatorTight P Q control
+  pure ⟨numerator, denominator⟩
+
+def selectSlopeOperandsCollapsedTight (P Q : Point)
+    (control : AddControl) : Circuit SlopeOperands := do
+  let x2 ← doubleSquare P
+  finishSelectSlopeOperandsCollapsedTight P Q control x2
+
+/-! Legacy open-once slope selector API.  Keep its original 66-bound
+representatives for downstream callers; production uses the tight variant
+above. -/
+
 def selectCollapsedNumerator (P Q : Point)
     (control : AddControl) (x2 : Rep) : Circuit Rep :=
   selectGated3Rep 262 66 "collapsed numerator"
@@ -639,10 +722,160 @@ def selectSlopeOperandsCollapsed (P Q : Point)
   let x2 ← Modular.Lazy.mul base P.X P.X
   finishSelectSlopeOperandsCollapsed P Q control x2
 
+def collapsedSlopeHint (operands : SlopeOperands) :
+    Circuit (Vector (LC Bool) 514) :=
+  let bias := operands.numerator.bound * base.modulus
+  hint h![operands.denominator.intVal, operands.numerator.intVal]
+    fun h![(a : Int), (b : Int)] =>
+      if ha : 0 ≤ a then
+        if hb : 0 ≤ b then
+          let d := a.toNat % base.modulus
+          if hd : d = 0 then
+            fail "zero denominator in P-256 collapsed addition"
+          else if hg : Nat.gcd d base.modulus = 1 then
+            let inverse :=
+              ((Nat.gcdA d base.modulus) % (base.modulus : Int)).toNat
+            let value := (inverse * (b.toNat % base.modulus)) % base.modulus
+            let shifted := (value : Int) * a + bias - b
+            if hs : 0 ≤ shifted then
+              let q := shifted.toNat / base.modulus
+              pure $ Vector.ofFn (n := 514) fun i =>
+                if hi : i.val < 256 then value.testBit i.val
+                else q.testBit (i.val - 256)
+            else fail s!"negative P-256 collapsed slope dividend {shifted}"
+          else fail "noninvertible denominator in P-256 collapsed addition"
+        else fail s!"negative P-256 collapsed numerator {b}"
+      else fail s!"negative P-256 collapsed denominator {a}"
+
+def collapsedSlopeDecodeValue
+    (bits : Vector (LC Bool) 514) : Circuit (U 256) :=
+  U.fromWord {
+    bitsLE := Vector.ofFn (n := 256) fun i => bits[i.val]'(by omega) }
+
+def collapsedSlopeDecodeQ
+    (bits : Vector (LC Bool) 514) : Circuit (U 258) :=
+  U.fromWord {
+    bitsLE := Vector.ofFn (n := 258) fun i =>
+      bits[256 + i.val]'(by omega) }
+
+def collapsedSlopeCheck (operands : SlopeOperands)
+    (value : U 256) (q : U 258) : Circuit Unit :=
+  let bias := operands.numerator.bound * base.modulus
+  assertR1C value.intVal operands.denominator.intVal
+    (operands.numerator.intVal + base.modulus • q.intVal -
+      LC.ofConst (bias : Int))
+
+def collapsedSlope (operands : SlopeOperands) : Circuit Rep := do
+  let bits ← collapsedSlopeHint operands
+  let value ← collapsedSlopeDecodeValue bits
+  let q ← collapsedSlopeDecodeQ bits
+  collapsedSlopeCheck operands value q
+  pure ⟨value.intVal, 2⟩
+
+def collapsedCandidateXTarget (P Q : Point) : Rep := add P.X Q.X
+
+def collapsedCandidateXHint (slope target : Rep) :
+    Circuit (Vector (LC Bool) 512) :=
+  let bias := target.bound * base.modulus
+  hint h![slope.intVal, target.intVal]
+    fun h![(a : Int), (c : Int)] =>
+      let shifted := a * a + bias - c
+      if hs : 0 ≤ shifted then
+        let value := shifted.toNat
+        let r := value % base.modulus
+        let q := value / base.modulus
+        pure $ Vector.ofFn (n := 512) fun i =>
+          if hi : i.val < 256 then r.testBit i.val
+          else q.testBit (i.val - 256)
+      else fail s!"negative P-256 collapsed X dividend {shifted}"
+
+def collapsedCandidateXDecodeR
+    (bits : Vector (LC Bool) 512) : Circuit (U 256) :=
+  U.fromWord {
+    bitsLE := Vector.ofFn (n := 256) fun i => bits[i.val]'(by omega) }
+
+def collapsedCandidateXDecodeQ
+    (bits : Vector (LC Bool) 512) : Circuit (U 256) :=
+  U.fromWord {
+    bitsLE := Vector.ofFn (n := 256) fun i =>
+      bits[256 + i.val]'(by omega) }
+
+def collapsedCandidateXCheck (slope target : Rep)
+    (r q : U 256) : Circuit Unit :=
+  let bias := target.bound * base.modulus
+  assertR1C slope.intVal slope.intVal
+    (r.intVal + target.intVal + base.modulus • q.intVal -
+      LC.ofConst (bias : Int))
+
+def collapsedCandidateX (P Q : Point) (slope : Rep) : Circuit Fp := do
+  let target := collapsedCandidateXTarget P Q
+  let bits ← collapsedCandidateXHint slope target
+  let r ← collapsedCandidateXDecodeR bits
+  let q ← collapsedCandidateXDecodeQ bits
+  collapsedCandidateXCheck slope target r q
+  pure ⟨r⟩
+
+def collapsedCandidateYFactor (P : Point) (x3 : Fp) : Rep :=
+  sub P.X (ofElem x3)
+
+def collapsedCandidateYHint (slope factor target : Rep) :
+    Circuit (Vector (LC Bool) 514) :=
+  let bias := target.bound * base.modulus
+  hint h![slope.intVal, factor.intVal, target.intVal]
+    fun h![(a : Int), (b : Int), (c : Int)] =>
+      let shifted := a * b + bias - c
+      if hs : 0 ≤ shifted then
+        let value := shifted.toNat
+        let r := value % base.modulus
+        let q := value / base.modulus
+        pure $ Vector.ofFn (n := 514) fun i =>
+          if hi : i.val < 256 then r.testBit i.val
+          else q.testBit (i.val - 256)
+      else fail s!"negative P-256 collapsed Y dividend {shifted}"
+
+def collapsedCandidateYDecodeR
+    (bits : Vector (LC Bool) 514) : Circuit (U 256) :=
+  U.fromWord {
+    bitsLE := Vector.ofFn (n := 256) fun i => bits[i.val]'(by omega) }
+
+def collapsedCandidateYDecodeQ
+    (bits : Vector (LC Bool) 514) : Circuit (U 258) :=
+  U.fromWord {
+    bitsLE := Vector.ofFn (n := 258) fun i =>
+      bits[256 + i.val]'(by omega) }
+
+def collapsedCandidateYCheck (slope factor target : Rep)
+    (r : U 256) (q : U 258) : Circuit Unit :=
+  let bias := target.bound * base.modulus
+  assertR1C slope.intVal factor.intVal
+    (r.intVal + target.intVal + base.modulus • q.intVal -
+      LC.ofConst (bias : Int))
+
+def collapsedCandidateY (P : Point) (slope : Rep) (x3 : Fp) : Circuit Fp := do
+  let factor := collapsedCandidateYFactor P x3
+  let bits ← collapsedCandidateYHint slope factor P.Y
+  let r ← collapsedCandidateYDecodeR bits
+  let q ← collapsedCandidateYDecodeQ bits
+  collapsedCandidateYCheck slope factor P.Y r q
+  pure ⟨r⟩
+
+def finishAddCandidateCollapsedX (P Q : Point)
+    (operands : SlopeOperands) : Circuit Rep := do
+  let slope ← collapsedSlope operands
+  let candidateX ← collapsedCandidateX P Q slope
+  pure (ofElem candidateX)
+
+def finishAddCandidateCollapsed (P Q : Point)
+    (operands : SlopeOperands) : Circuit (Rep × Rep) := do
+  let slope ← collapsedSlope operands
+  let candidateX ← collapsedCandidateX P Q slope
+  let candidateY ← collapsedCandidateY P slope candidateX
+  pure (ofElem candidateX, ofElem candidateY)
+
 def addCandidateCollapsed (P Q : Point)
     (control : AddControl) : Circuit (Rep × Rep) := do
-  let operands ← selectSlopeOperandsCollapsed P Q control
-  finishAddCandidate P Q operands
+  let operands ← selectSlopeOperandsCollapsedTight P Q control
+  finishAddCandidateCollapsed P Q operands
 
 def selectAddCoordinateCollapsed (Pcoord Qcoord candidate : Rep)
     (P Q : Point) (control : AddControl) (bothInfinity : LC ℤ) :
