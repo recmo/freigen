@@ -238,13 +238,195 @@ theorem and3Bit_wf_aux :
     have h' := hrel lv rv h
     exact ⟨h'.1.2.2, h'.2⟩
 
+private def ZeroTestBitsWFRel (lv rv : WF.Valuation)
+    (left right : Vector (LC Bool) 257) : Prop :=
+  ∀ i : Fin 257, WF.LCEq lv.bool rv.bool left[i] right[i]
+
+theorem zeroTestBound4Hint_wf_aux :
+    WF.GadgetSpec Modular.Lazy.Rep.WFRel zeroTestBound4Hint
+      ZeroTestBitsWFRel := by
+  unfold WF.GadgetSpec
+  intro left right
+  unfold zeroTestBound4Hint
+  apply WF.Rel.hint_pure
+  · intro lv rv h
+    unfold WF.ArgsEq
+    simp only [WF.evalArgs]
+    exact congrArg (fun x => h![x]) h.2
+  · intro lv rv h
+    have heq : WF.evalArgs lv h![left.intVal] =
+        WF.evalArgs rv h![right.intVal] := by
+      simp only [WF.evalArgs]
+      exact congrArg (fun x => h![x]) h.2
+    rw [heq]
+    exact WF.HintRel.refl _
+  · intro bitsL bitsR lv rv h i
+    exact Modular.Aux.WF.lceq_of_common_realizes
+      (Modular.Aux.WF.common_realizes_of_hint h) i.val i.isLt
+
+private theorem zeroTestBound4DecodeSlice_wf_aux
+    (start width : Nat) (hfit : start + width ≤ 257) :
+    WF.GadgetSpec ZeroTestBitsWFRel
+      (fun bits => U.fromWord {
+        bitsLE := Vector.ofFn (n := width) fun i =>
+          bits[start + i.val]'(by omega) }) U.WFRel := by
+  unfold WF.GadgetSpec
+  intro left right
+  apply WF.GadgetSpec.direct_rule
+    (left := ({ bitsLE := Vector.ofFn (n := width) fun i =>
+      left[start + i.val]'(by omega) } : Word width))
+    (right := ({ bitsLE := Vector.ofFn (n := width) fun i =>
+      right[start + i.val]'(by omega) } : Word width))
+    U.fromWord_wf_rel
+  intro lv rv h i
+  simpa only [instGetElemWordFinLCBoolTrue, Vector.getElem_ofFn,
+    Fin.getElem_fin] using
+    h ⟨start + i.val, by omega⟩
+
+theorem zeroTestBound4DecodeZero_wf_aux :
+    WF.GadgetSpec ZeroTestBitsWFRel zeroTestBound4DecodeZero
+      U.WFRel := by
+  unfold WF.GadgetSpec
+  intro left right
+  unfold zeroTestBound4DecodeZero
+  apply WF.GadgetSpec.direct_rule
+    (left := ({ bitsLE := Vector.ofFn fun _ => left[0] } : Word 1))
+    (right := ({ bitsLE := Vector.ofFn fun _ => right[0] } : Word 1))
+    U.fromWord_wf_rel
+  intro lv rv h i
+  simpa [instGetElemWordFinLCBoolTrue, WF.LCEq] using h (0 : Fin 257)
+
+theorem zeroTestBound4DecodeInverse_wf_aux :
+    WF.GadgetSpec ZeroTestBitsWFRel zeroTestBound4DecodeInverse
+      U.WFRel := by
+  unfold zeroTestBound4DecodeInverse
+  simpa only [Nat.add_comm] using
+    zeroTestBound4DecodeSlice_wf_aux 1 256 (by omega)
+
+theorem zeroTestBound4Prepare_wf_aux :
+    WF.GadgetSpec Modular.Lazy.Rep.WFRel zeroTestBound4Prepare
+      (fun lv rv (left right : LC ℤ × U 256) =>
+        WF.LCEq lv.int rv.int left.1 right.1 ∧
+        U.WFRel lv rv left.2 right.2) := by
+  unfold WF.GadgetSpec
+  intro left right
+  unfold zeroTestBound4Prepare
+  apply WF.GadgetSpec.bind_rule_direct
+    (left := left) (right := right) zeroTestBound4Hint_wf_aux
+  · intro lv rv h
+    exact h
+  · intro bitsL bitsR
+    apply WF.GadgetSpec.bind_rule_direct
+      (left := bitsL) (right := bitsR) zeroTestBound4DecodeZero_wf_aux
+    · intro lv rv h
+      exact h.2
+    · intro zWordL zWordR
+      apply WF.GadgetSpec.bind_rule_direct
+        (left := bitsL) (right := bitsR)
+        zeroTestBound4DecodeInverse_wf_aux
+      · intro lv rv h
+        exact h.1.2
+      · intro inverseL inverseR
+        apply WF.Rel.pure
+        intro lv rv h
+        constructor
+        · simpa [U.intVal] using h.1.2.1
+        · exact h.2
+
+theorem zeroTestBound4InverseCheck_wf_aux :
+    WF.GadgetSpec
+      (fun lv rv (left right : Rep × LC ℤ × U 256) =>
+        left.1.WFRel lv rv right.1 ∧
+        WF.LCEq lv.int rv.int left.2.1 right.2.1 ∧
+        U.WFRel lv rv left.2.2 right.2.2)
+      (fun input => zeroTestBound4InverseCheck
+        input.1 input.2.1 input.2.2)
+      (fun _ _ _ _ => True) := by
+  wfgen' using [U.fromWord_wf_rel]
+    unfold [zeroTestBound4InverseCheck, Modular.Lazy.Rep.WFRel]
+  case vc1 =>
+    rename_i hrel
+    apply WF.Rel.assertR1C_pure
+    all_goals intro lv rv hB
+    all_goals have h := hrel lv rv hB
+    all_goals simp_all [WF.LCEq, U.WFRel, WF.evalArgs,
+      LC.eval_add, LC.eval_sub, LC.eval_nsmul, LC.eval_ofConst]
+  case vc2 =>
+    rename_i h
+    exact Modular.Aux.WF.lceq_of_common_realizes
+      (Modular.Aux.WF.common_realizes_of_hint h) i.val i.isLt
+  case vc3 =>
+    simp_all [WF.LCEq, WF.evalArgs, U.WFRel]
+  case vc4 =>
+    simp_all [WF.LCEq, WF.ArgsEq, WF.evalArgs, U.WFRel]
+
+theorem zeroTestBound4ZeroCheck_wf_aux :
+    WF.GadgetSpec
+      (fun lv rv (left right : Rep × LC ℤ) =>
+        left.1.WFRel lv rv right.1 ∧
+        WF.LCEq lv.int rv.int left.2 right.2)
+      (fun input => zeroTestBound4ZeroCheck input.1 input.2)
+      (fun _ _ _ _ => True) := by
+  wfgen' using [U.fromWord_wf_rel]
+    unfold [zeroTestBound4ZeroCheck, Modular.Lazy.Rep.WFRel]
+  case vc1 =>
+    rename_i hrel
+    apply WF.Rel.assertR1C_pure
+    all_goals intro lv rv hB
+    all_goals have h := hrel lv rv hB
+    all_goals simp_all [WF.LCEq, U.WFRel, WF.evalArgs,
+      LC.eval_nsmul]
+  case vc2 =>
+    rename_i h
+    exact Modular.Aux.WF.lceq_of_common_realizes
+      (Modular.Aux.WF.common_realizes_of_hint h) i.val i.isLt
+  case vc3 =>
+    simp_all [WF.LCEq, WF.evalArgs]
+  case vc4 =>
+    simp_all [WF.LCEq, WF.ArgsEq, WF.evalArgs]
+
+theorem zeroTestBound4_wf_aux :
+    WF.GadgetSpec Modular.Lazy.Rep.WFRel zeroTestBound4
+      (fun lv rv left right => WF.LCEq lv.int rv.int left right) := by
+  unfold WF.GadgetSpec
+  intro left right
+  unfold zeroTestBound4
+  apply WF.GadgetSpec.bind_rule
+    (left := left) (right := right) zeroTestBound4Prepare_wf_aux
+  · intro lv rv h
+    exact h
+  · intro B preparedL preparedR hprepared
+    apply WF.GadgetSpec.bind_rule
+      (left := (left, preparedL.1, preparedL.2))
+      (right := (right, preparedR.1, preparedR.2))
+      zeroTestBound4InverseCheck_wf_aux
+    · intro lv rv hB
+      have hp := hprepared lv rv hB
+      exact ⟨hp.1, hp.2.1, hp.2.2⟩
+    · intro C _ _ hcheck
+      apply WF.GadgetSpec.bind_rule
+        (left := (left, preparedL.1))
+        (right := (right, preparedR.1))
+        zeroTestBound4ZeroCheck_wf_aux
+      · intro lv rv hC
+        have hc := hcheck lv rv hC
+        have hp := hprepared lv rv hc.1
+        exact ⟨hp.1, hp.2.1⟩
+      · intro D _ _ hzero
+        apply WF.Rel.pure
+        intro lv rv hD
+        have hz := hzero lv rv hD
+        have hc := hcheck lv rv hz.1
+        have hp := hprepared lv rv hc.1
+        exact hp.2.1
+
 theorem classifyAdd_wf_aux :
     WF.GadgetSpec
       (fun lv rv (left right : Point × Point) =>
         left.1.WFRel lv rv right.1 ∧ left.2.WFRel lv rv right.2)
       (fun input => classifyAdd input.1 input.2)
       AddControl.WFRel := by
-  wfgen' using [Modular.Lazy.zeroTest_wf, andBit_wf_aux]
+  wfgen' using [zeroTestBound4_wf_aux, andBit_wf_aux]
     unfold [classifyAdd, Point.WFRel, AddControl.WFRel,
       sub, add, Modular.Lazy.sub, Modular.Lazy.add,
       Modular.Lazy.Rep.WFRel]

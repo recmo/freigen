@@ -256,11 +256,74 @@ def AddControl.WFRel (lv rv : WF.Valuation)
     WF.LCEq lv.int rv.int left.doubleCase right.doubleCase ∧
     WF.LCEq lv.int rv.int left.active right.active
 
+/-- P-256 zero test specialized to representatives below `4 * p`.
+
+The affine classifier's `Q.X - P.X` and `P.Y + Q.Y` operands both have this
+bound.  An honest canonical inverse makes the first quotient fit in 258 bits,
+while the quotient in the zero branch is below four and fits in two bits.
+The two integer equations are identical to `Modular.Lazy.zeroTest`; only the
+quotient decompositions are narrower. -/
+def zeroTestBound4Hint (x : Rep) : Circuit (Vector (LC Bool) 257) :=
+  hint h![x.intVal] fun h![(a : Int)] =>
+    if ha : 0 ≤ a then
+      let value := a.toNat % base.modulus
+      let isZero := value = 0
+      let inverse := (Nat.gcdA value base.modulus) % (base.modulus : Int)
+      pure $ Vector.ofFn (n := 257) fun i =>
+        if hi : i.val = 0 then isZero
+        else inverse.toNat.testBit (i.val - 1)
+    else fail s!"negative bound-4 zero-test operand {a}"
+
+def zeroTestBound4DecodeZero (bits : Vector (LC Bool) 257) :
+    Circuit (U 1) :=
+  U.fromWord {
+    bitsLE := Vector.ofFn (n := 1) fun _ => bits[0] }
+
+def zeroTestBound4DecodeInverse (bits : Vector (LC Bool) 257) :
+    Circuit (U 256) :=
+  U.fromWord {
+    bitsLE := Vector.ofFn (n := 256) fun i =>
+      bits[i.val + 1]'(by omega) }
+
+def zeroTestBound4Prepare (x : Rep) : Circuit (LC ℤ × U 256) := do
+  let bits ← zeroTestBound4Hint x
+  let zWord ← zeroTestBound4DecodeZero bits
+  let inverse ← zeroTestBound4DecodeInverse bits
+  let z := zWord.intBits[0]
+  pure (z, inverse)
+
+def zeroTestBound4InverseCheck (x : Rep) (z : LC ℤ)
+    (inverse : U 256) : Circuit Unit := do
+  let inverseQBits ← hint h![x.intVal, inverse.intVal, z]
+    fun h![(a : Int), (b : Int), (zv : Int)] =>
+      let shifted := a * b + base.modulus - (1 - zv)
+      if hs : 0 ≤ shifted then
+        let q := shifted.toNat / base.modulus
+        pure $ Vector.ofFn (n := 258) fun i => q.testBit i
+      else fail s!"negative bound-4 inverse quotient {shifted}"
+  let inverseQ ← U.fromWord { bitsLE := inverseQBits }
+  assertR1C x.intVal inverse.intVal
+    ((LC.ofConst 1 - z) + base.modulus • inverseQ.intVal -
+      LC.ofConst (base.modulus : Int))
+
+def zeroTestBound4ZeroCheck (x : Rep) (z : LC ℤ) : Circuit Unit := do
+  let zeroQBits ← hint h![z, x.intVal] fun h![(b : Int), (a : Int)] =>
+    let q := (b * a).toNat / base.modulus
+    pure $ Vector.ofFn (n := 2) fun i => q.testBit i
+  let zeroQ ← U.fromWord { bitsLE := zeroQBits }
+  assertR1C z x.intVal (base.modulus • zeroQ.intVal)
+
+def zeroTestBound4 (x : Rep) : Circuit (LC ℤ) := do
+  let (z, inverse) ← zeroTestBound4Prepare x
+  zeroTestBound4InverseCheck x z inverse
+  zeroTestBound4ZeroCheck x z
+  pure z
+
 def classifyAdd (P Q : Point) : Circuit AddControl := do
   let dx := sub Q.X P.X
   let ysum := add P.Y Q.Y
-  let sameX ← Modular.Lazy.zeroTest base dx
-  let oppositeY ← Modular.Lazy.zeroTest base ysum
+  let sameX ← zeroTestBound4 dx
+  let oppositeY ← zeroTestBound4 ysum
   let finite ← andBit (LC.ofConst 1 - P.infinity)
     (LC.ofConst 1 - Q.infinity)
   let doubleKind ← andBit sameX (LC.ofConst 1 - oppositeY)
